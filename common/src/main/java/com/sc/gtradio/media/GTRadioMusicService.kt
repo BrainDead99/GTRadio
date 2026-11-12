@@ -232,6 +232,7 @@ import java.util.ArrayList
                 nextStationIndex = 0
             }
             activeStation?.stop()
+            activeStation?.stop()
             activeStation = getRadioStation(group, group.stationList[nextStationIndex].mediaId!!)
 
             if (activeStation == null) {
@@ -270,6 +271,7 @@ import java.util.ArrayList
                 //Loop back to end
                 prevStationIndex = group.stationList.lastIndex
             }
+            activeStation?.stop()
             activeStation?.stop()
             activeStation = getRadioStation(group, group.stationList[prevStationIndex].mediaId!!)
 
