@@ -60,6 +60,7 @@ class NowPlayingFragment : Fragment() {
         }
 
         binding.stationTitle.text = getString(R.string.nothing_playing)
+        binding.stationAlbum.visibility = View.GONE
         applyPlayerTheme(GtaThemeHelper.activeSeries)
     }
 
@@ -92,7 +93,10 @@ class NowPlayingFragment : Fragment() {
 
         if (mediaMetadata.description.mediaId?.isNotBlank() == true) {
             binding.stationTitle.text = mediaMetadata.description.title
-            binding.stationAlbum.text = mediaMetadata.description.subtitle
+            val sub = mediaMetadata.description.subtitle?.toString() ?: ""
+            binding.stationAlbum.text = sub
+            binding.stationAlbum.visibility = if (sub.isBlank()) View.GONE else View.VISIBLE
+
             val bmp = mediaMetadata.description.iconBitmap
             if (bmp != null) {
                 binding.albumArt.setImageBitmap(bmp)
@@ -102,6 +106,7 @@ class NowPlayingFragment : Fragment() {
         } else {
             binding.stationTitle.text = getString(R.string.nothing_playing)
             binding.stationAlbum.text = ""
+            binding.stationAlbum.visibility = View.GONE
             binding.albumArt.setImageResource(R.drawable.outline_radio_24)
         }
 

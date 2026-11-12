@@ -47,10 +47,11 @@ import java.util.*
     private val stationTitle: String = (mediaItem.description.title ?: "").toString()
     private val groupTitle: String = (mediaItem.description.subtitle ?: "").toString()
     private val stationLogo: Bitmap? = mediaItem.description.iconBitmap
+    private val isWctr: Boolean = stationTitle.uppercase().contains("WCTR")
 
     private var _currentMetadata: MediaMetadataCompat = buildStationMetadata(
         trackTitle = stationTitle,
-        trackArtist = groupTitle,
+        trackSubtitle = "",
         art = stationLogo
     )
 
@@ -82,7 +83,10 @@ import java.util.*
     private var songsSinceLastBreak = 0
     private var activeListener: Player.Listener? = null
     private val rng = Random()
+
     private val suffixRegex = Regex("\\s*\\((?:Mid|Intro(?:\\s*DJ\\s*#?\\d+)?|Outro(?:\\s*DJ\\s*#?\\d+)?)\\)\\s*$", RegexOption.IGNORE_CASE)
+    private val episodeRegex = Regex("\\s*(?:-\\s*)?(?:Episode|Teaser)\\s*#?\\d+.*$", RegexOption.IGNORE_CASE)
+    private val stationSuffixRegex = Regex("\\s*\\([^)]*\\)\\s*$")
 
     init {
         stationName = baseStationFolderDoc.name ?: ""
@@ -98,13 +102,13 @@ import java.util.*
         randomizeAll()
     }
 
-    private fun buildStationMetadata(trackTitle: String, trackArtist: String, art: Bitmap?): MediaMetadataCompat {
+    private fun buildStationMetadata(trackTitle: String, trackSubtitle: String, art: Bitmap?): MediaMetadataCompat {
         return MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, trackTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, trackTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, trackArtist)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, trackArtist)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, trackSubtitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, trackSubtitle)
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, stationTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, "$stationTitle • $groupTitle")
@@ -114,32 +118,93 @@ import java.util.*
             .build()
     }
 
-    private fun updateMetadataFromUri(uri: Uri, fallbackTitle: String, isAd: Boolean = false) {
-        var title = fallbackTitle
-        var artist = if (isAd) "Advertisement • $stationTitle" else stationTitle
-        var art: Bitmap? = if (isAd) null else stationLogo
+    private fun setStationOnlyMetadata() {
+        _currentMetadata = buildStationMetadata(
+            trackTitle = stationTitle,
+            trackSubtitle = "",
+            art = stationLogo
+        )
+        onMetadataChanged?.invoke(_currentMetadata)
+    }
+
+    private fun resolveWctrHost(cleanShowTitle: String, rawTitle: String, rawArtist: String?): String {
+        val upper = cleanShowTitle.uppercase()
+        return when {
+            upper.contains("AREA 53") -> "Marvin Trill"
+            upper.contains("ENTERTAINING AMERICA") -> {
+                if (rawTitle.uppercase().contains("EPISODE #1") || rawTitle.uppercase().contains("EPISODE 1")) {
+                    "Billy Dexter"
+                } else {
+                    "Lazlow"
+                }
+            }
+            upper.contains("GARDENING WITH MAURICE") -> "Maurice"
+            upper.contains("I SAY") -> "Peyton Phillips & Mary Phillips"
+            upper.contains("LONELY HEARTS") -> "Christy MacDonald"
+            upper.contains("TIGHT END ZONE") -> "Derrick Thackery"
+            upper.contains("WILD TRAVELER") -> "James Pedeaston"
+            else -> {
+                val cleaned = stationSuffixRegex.replace(rawArtist ?: "", "").trim()
+                if (cleaned.isNotBlank() && !cleaned.equals("WCTR Talk Radio", ignoreCase = true)) cleaned else ""
+            }
+        }
+    }
+
+    private fun updateSongMetadataFromUri(uri: Uri, fallbackTitle: String) {
+        var rawTitle = fallbackTitle
+        var rawArtist: String? = null
+        var art: Bitmap? = stationLogo
 
         val retriever = MediaMetadataRetriever()
         try {
             retriever.setDataSource(context, uri)
-            val rawTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
-            val rawArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
-            if (!rawTitle.isNullOrBlank()) {
-                title = suffixRegex.replace(rawTitle, "").trim()
+            val extractedTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+            val extractedArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            if (!extractedTitle.isNullOrBlank()) {
+                rawTitle = extractedTitle
             }
-            if (!rawArtist.isNullOrBlank()) {
-                artist = "$rawArtist • $stationTitle"
+            if (!extractedArtist.isNullOrBlank()) {
+                rawArtist = extractedArtist
             }
-            val picBytes = retriever.embeddedPicture
-            if (picBytes != null && picBytes.isNotEmpty()) {
-                art = BitmapFactory.decodeByteArray(picBytes, 0, picBytes.size) ?: art
+            if (!isWctr) {
+                val picBytes = retriever.embeddedPicture
+                if (picBytes != null && picBytes.isNotEmpty()) {
+                    art = BitmapFactory.decodeByteArray(picBytes, 0, picBytes.size) ?: stationLogo
+                }
             }
         } catch (_: Exception) {
         } finally {
             try { retriever.release() } catch (_: Exception) {}
         }
 
-        _currentMetadata = buildStationMetadata(title, artist, art)
+        if (isWctr) {
+            val noSeg = suffixRegex.replace(rawTitle, "").trim()
+            val cleanShow = episodeRegex.replace(noSeg, "").trim().ifBlank { noSeg }
+            if (cleanShow.uppercase().startsWith("NEWS")) {
+                // WCTR News: Title = "News", Artist line = "WCTR" (blank album part), Art = WCTR logo
+                _currentMetadata = buildStationMetadata(
+                    trackTitle = "News",
+                    trackSubtitle = stationTitle,
+                    art = stationLogo
+                )
+            } else {
+                val host = resolveWctrHost(cleanShow, rawTitle, rawArtist)
+                val subtitle = if (host.isNotBlank()) "$host • $stationTitle" else stationTitle
+                _currentMetadata = buildStationMetadata(
+                    trackTitle = cleanShow,
+                    trackSubtitle = subtitle,
+                    art = stationLogo
+                )
+            }
+        } else {
+            val cleanTitle = suffixRegex.replace(rawTitle, "").trim()
+            val subtitle = if (!rawArtist.isNullOrBlank()) "$rawArtist • $stationTitle" else stationTitle
+            _currentMetadata = buildStationMetadata(
+                trackTitle = cleanTitle,
+                trackSubtitle = subtitle,
+                art = art
+            )
+        }
         onMetadataChanged?.invoke(_currentMetadata)
     }
 
@@ -266,10 +331,21 @@ import java.util.*
                     playNext()
                 }
                 RadioSegmentType.Commercial -> {
-                    if (rng.nextInt(11) < 6 || announcerFiles.isEmpty()) playNextSong(true) else playNextAnnouncerSpot()
+                    // 85% chance to play Station ID after ads, 15% rare chance to jump straight into a song
+                    val roll = rng.nextInt(20)
+                    if (announcerFiles.isNotEmpty() && roll < 17) {
+                        playNextAnnouncerSpot()
+                    } else {
+                        playNextSong(true)
+                    }
                 }
                 RadioSegmentType.Announcer -> {
-                    if (rng.nextInt(11) < 3 || currentDJFiles.isEmpty()) playNextSong(true) else playNextDjChatter()
+                    // After a Station ID, 70% chance to start a song, 30% chance for DJ chatter
+                    if (rng.nextInt(10) < 7 || currentDJFiles.isEmpty()) {
+                        playNextSong(true)
+                    } else {
+                        playNextDjChatter()
+                    }
                 }
                 RadioSegmentType.DJChatter -> {
                     if (songsSinceLastBreak == 0) {
@@ -307,7 +383,7 @@ import java.util.*
         lastSegment = RadioSegmentType.Announcer
         if (announcerFiles.isNotEmpty()) {
             val nextAnn = getNextAnnouncerFile()
-            updateMetadataFromUri(nextAnn, "$stationTitle (Station ID)")
+            setStationOnlyMetadata()
             playFile(nextAnn)
         } else {
             playNext()
@@ -318,7 +394,7 @@ import java.util.*
         lastSegment = RadioSegmentType.DJChatter
         if (currentDJFiles.isNotEmpty()) {
             val nextDj = getNextDjFile()
-            updateMetadataFromUri(nextDj, "$stationTitle (DJ Chatter)")
+            setStationOnlyMetadata()
             playFile(nextDj)
         } else {
             playNext()
@@ -330,7 +406,7 @@ import java.util.*
         songsSinceLastBreak = 0
         if (adsEnabled && advertFiles.isNotEmpty()) {
             val nextAd = getNextAdvertFile()
-            updateMetadataFromUri(nextAd, "Commercial Break", isAd = true)
+            setStationOnlyMetadata()
             playFile(nextAd)
         } else {
             playNext()
@@ -354,7 +430,7 @@ import java.util.*
             return
         }
 
-        updateMetadataFromUri(song.mainSongUri, song.folderName)
+        updateSongMetadataFromUri(song.mainSongUri, song.folderName)
 
         val introToUse = if (requireDjIntro && song.djIntroUris.isNotEmpty()) {
             song.djIntroUris[rng.nextInt(song.djIntroUris.size)]
