@@ -44,6 +44,7 @@ import kotlin.math.abs
             .putLong(MediaMetadataCompat.METADATA_KEY_DISC_NUMBER, 1)
             .build()
 
+    override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
     override var stationName: String = ""
 
     //These fields are irrelevant to these stations

@@ -12,21 +12,25 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import com.sc.gtradio.utils.InjectorUtils
-import com.sc.gtradio.databinding.FragmentStationitemBinding
+import com.google.android.material.card.MaterialCardView
 import com.sc.gtradio.databinding.FragmentRadiolistBinding
+import com.sc.gtradio.databinding.FragmentStationitemBinding
 import com.sc.gtradio.media.*
+import com.sc.gtradio.utils.InjectorUtils
 
 class RadioList : Fragment() {
     var stationGroupId: String = ""
-
     private var _binding: FragmentRadiolistBinding? = null
-
     private var musicServiceConnection: MusicServiceConnection? = null
 
     private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
         override fun onChildrenLoaded(parentId: String, children: List<MediaBrowserCompat.MediaItem>) {
             if (parentId == stationGroupId) {
+                val groupName = children.firstOrNull()?.description?.subtitle?.toString() ?: ""
+                if (groupName.isNotBlank()) {
+                    GtaThemeHelper.activeSeries = groupName
+                    (activity as? MainActivity)?.refreshTheme(groupName)
+                }
                 listAdapter.submitList(children)
             }
         }
@@ -38,25 +42,14 @@ class RadioList : Fragment() {
 
         if (clickedItem.mediaId == nowPlaying?.description?.mediaId) {
             musicServiceConnection!!.playbackState.value?.let { playbackState ->
-                when {
-                    playbackState.isPlaying ->
-                        transportControls?.stop()
-                    playbackState.isPlayEnabled ->
-                        transportControls?.play()
-                    else -> {
-                        transportControls?.play()
-                    }
-                }
+                if (playbackState.isPlaying) transportControls?.stop() else transportControls?.play()
             }
         } else {
             transportControls?.playFromMediaId(clickedItem.mediaId, null)
         }
     }
 
-    // This property is only valid between onCreateView and onDestroyView.
     private val binding get() = _binding!!
-
-
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         stationGroupId = arguments?.getString("stationGroupId") ?: ""
@@ -65,16 +58,15 @@ class RadioList : Fragment() {
                 it.subscribe(stationGroupId, subscriptionCallback)
             }
         }
-
         _binding = FragmentRadiolistBinding.inflate(inflater, container, false)
         return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-
         binding.stationList.layoutManager = LinearLayoutManager(context)
         binding.stationList.adapter = listAdapter
+        (activity as? MainActivity)?.refreshTheme(GtaThemeHelper.activeSeries)
     }
 
     override fun onDestroyView() {
@@ -82,7 +74,6 @@ class RadioList : Fragment() {
         _binding = null
     }
 }
-
 
 class MediaItemListAdapter(
     private val itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
@@ -94,21 +85,14 @@ class MediaItemListAdapter(
         return MediaViewHolder(binding, itemClickedListener)
     }
 
-    override fun onBindViewHolder(
-        holder: MediaViewHolder,
-        position: Int,
-        payloads: MutableList<Any>
-    ) {
+    override fun onBindViewHolder(holder: MediaViewHolder, position: Int, payloads: MutableList<Any>) {
         val mediaItem = getItem(position)
-        val fullRefresh = payloads.isEmpty()
-
-        // Normally we only fully refresh the list item if it's being initially bound, but
-        // we might also do it if there was a payload that wasn't understood, just to ensure
-        // there isn't a stale item.
-        if (fullRefresh) {
+        if (payloads.isEmpty()) {
             holder.item = mediaItem
             holder.titleView.text = mediaItem.description.title
             holder.albumArt.setImageBitmap(mediaItem.description.iconBitmap)
+            val series = mediaItem.description.subtitle?.toString() ?: GtaThemeHelper.activeSeries
+            GtaThemeHelper.styleCard(holder.cardView, holder.titleView, series)
         }
     }
 
@@ -122,28 +106,22 @@ class MediaViewHolder(
     itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
 ) : RecyclerView.ViewHolder(binding.root) {
 
+    val cardView: MaterialCardView = binding.root
     val titleView: TextView = binding.title
     val albumArt: ImageView = binding.albumArt
-
     var item: MediaBrowserCompat.MediaItem? = null
 
     init {
-        binding.root.setOnClickListener {
-            item?.let { itemClickedListener(it) }
-        }
+        binding.root.setOnClickListener { item?.let { itemClickedListener(it) } }
     }
 }
 
-val MediaItemDiffCallback =  object : DiffUtil.ItemCallback<MediaBrowserCompat.MediaItem>() {
-    override fun areItemsTheSame(
-        oldItem: MediaBrowserCompat.MediaItem,
-        newItem: MediaBrowserCompat.MediaItem
-    ): Boolean =
+val MediaItemDiffCallback = object : DiffUtil.ItemCallback<MediaBrowserCompat.MediaItem>() {
+    override fun areItemsTheSame(oldItem: MediaBrowserCompat.MediaItem, newItem: MediaBrowserCompat.MediaItem): Boolean =
         oldItem.mediaId == newItem.mediaId
 
     override fun areContentsTheSame(oldItem: MediaBrowserCompat.MediaItem, newItem: MediaBrowserCompat.MediaItem) =
         oldItem.mediaId == newItem.mediaId
 
-    override fun getChangePayload(oldItem: MediaBrowserCompat.MediaItem, newItem: MediaBrowserCompat.MediaItem): Nothing? =
-        null
+    override fun getChangePayload(oldItem: MediaBrowserCompat.MediaItem, newItem: MediaBrowserCompat.MediaItem): Nothing? = null
 }

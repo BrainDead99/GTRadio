@@ -1,43 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  ~ Copyright 2019 Google Inc. All rights reserved.
-  ~
-  ~ Licensed under the Apache License, Version 2.0 (the "License");
-  ~ you may not use this file except in compliance with the License.
-  ~ You may obtain a copy of the License at
-  ~
-  ~     http://www.apache.org/licenses/LICENSE-2.0
-  ~
-  ~ Unless required by applicable law or agreed to in writing, software
-  ~ distributed under the License is distributed on an "AS IS" BASIS,
-  ~ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-  ~ See the License for the specific language governing permissions and
-  ~ limitations under the License.
-  -->
 <androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/nowPlayingRoot"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:layout_margin="2dp"
+    android:paddingBottom="4dp"
     app:layout_constraintBottom_toBottomOf="parent"
     app:layout_constraintStart_toStartOf="parent"
     tools:context=".NowPlayingFragment">
 
-
     <View
+        android:id="@+id/topDivider"
         android:layout_width="match_parent"
-        android:layout_height="1dp"
+        android:layout_height="2dp"
         android:background="?android:attr/listDivider"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent"/>
 
     <ImageView
         android:id="@+id/albumArt"
-        android:layout_width="75dp"
-        android:layout_height="75dp"
+        android:layout_width="72dp"
+        android:layout_height="72dp"
         android:layout_marginStart="8dp"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="6dp"
         android:layout_marginBottom="4dp"
         android:scaleType="centerCrop"
         app:layout_constraintBottom_toBottomOf="parent"
@@ -50,53 +36,46 @@
         android:id="@+id/stationTitle"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
-        android:ellipsize="end"
-        android:maxLines="2"
-        android:textAppearance="@style/TextAppearance.Material3.TitleSmall"
+        android:layout_marginStart="10dp"
+        android:layout_marginEnd="4dp"
+        android:ellipsize="marquee"
+        android:marqueeRepeatLimit="marquee_forever"
+        android:singleLine="true"
+        android:scrollHorizontally="true"
+        android:focusable="true"
+        android:focusableInTouchMode="true"
+        android:textAppearance="@style/TextAppearance.Material3.TitleMedium"
+        android:textStyle="bold"
         app:layout_constraintBottom_toTopOf="@id/stationAlbum"
         app:layout_constraintEnd_toStartOf="@id/previousButton"
         app:layout_constraintStart_toEndOf="@+id/albumArt"
         app:layout_constraintTop_toTopOf="parent"
         app:layout_constraintVertical_chainStyle="packed"
-        tools:text="Station Title" />
+        tools:text="Song Title" />
 
     <TextView
         android:id="@+id/stationAlbum"
         android:layout_width="0dp"
         android:layout_height="wrap_content"
-        android:layout_marginStart="8dp"
+        android:layout_marginStart="10dp"
+        android:layout_marginEnd="4dp"
+        android:layout_marginTop="2dp"
         android:ellipsize="end"
-        android:maxLines="1"
+        android:maxLines="2"
         android:textAppearance="@style/TextAppearance.Material3.BodySmall"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toStartOf="@id/previousButton"
         app:layout_constraintStart_toEndOf="@+id/albumArt"
         app:layout_constraintTop_toBottomOf="@+id/stationTitle"
-        tools:text="Station Album" />
-
-    <ImageButton
-        android:id="@+id/playStopButton"
-        android:layout_width="75dp"
-        android:layout_height="75dp"
-        android:adjustViewBounds="true"
-        android:background="?attr/selectableItemBackgroundBorderless"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
-        android:scaleType="fitCenter"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toStartOf="@+id/nextButton"
-        app:layout_constraintTop_toTopOf="parent"
-        app:srcCompat="@drawable/play_arrow_24px" />
+        tools:text="Artist • Station" />
 
     <ImageButton
         android:id="@+id/previousButton"
-        android:layout_width="75dp"
-        android:layout_height="75dp"
+        android:layout_width="48dp"
+        android:layout_height="64dp"
         android:adjustViewBounds="true"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:padding="8dp"
         android:scaleType="fitCenter"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toStartOf="@+id/playStopButton"
@@ -104,14 +83,27 @@
         app:srcCompat="@drawable/skip_previous_24px" />
 
     <ImageButton
-        android:id="@+id/nextButton"
-        android:layout_width="75dp"
-        android:layout_height="75dp"
+        android:id="@+id/playStopButton"
+        android:layout_width="52dp"
+        android:layout_height="64dp"
         android:adjustViewBounds="true"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:paddingTop="4dp"
-        android:paddingBottom="4dp"
+        android:padding="6dp"
         android:scaleType="fitCenter"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/nextButton"
+        app:layout_constraintTop_toTopOf="parent"
+        app:srcCompat="@drawable/play_arrow_24px" />
+
+    <ImageButton
+        android:id="@+id/nextButton"
+        android:layout_width="48dp"
+        android:layout_height="64dp"
+        android:adjustViewBounds="true"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:padding="8dp"
+        android:scaleType="fitCenter"
+        android:layout_marginEnd="4dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintTop_toTopOf="parent"

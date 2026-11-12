@@ -1,6 +1,10 @@
 package com.sc.gtradio.media.stations
 
+import GTRadioPlayer
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
@@ -8,13 +12,12 @@ import android.support.v4.media.session.PlaybackStateCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
-import androidx.media3.common.util.Util
-import com.sc.gtradio.common.FileUtils.listSimpleFiles
-import GTRadioPlayer
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import java.util.*
 
 @UnstableApi class Gen2RadioStation(
@@ -26,45 +29,40 @@ import java.util.*
     private val player: GTRadioPlayer,
     private val context: Context,
     override var adsEnabled: Boolean,
-    private var _weatherChatterEnabled: Boolean) : RadioStation {
+    private var _weatherChatterEnabled: Boolean
+) : RadioStation {
 
-    //News reports are not a feature of Gen2, so mark them disabled
     override var newsReportsEnabled: Boolean = false
+    override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
 
     override var weatherChatterEnabled: Boolean
         get() = _weatherChatterEnabled
         set(enabled) {
             if (enabled != _weatherChatterEnabled) {
                 _weatherChatterEnabled = enabled
-                //Reset DJ files when the weather chatter is enabled/disabled
                 randomizeDJFiles()
             }
         }
 
-    override val metadata: MediaMetadataCompat =
-        MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, mediaItem.description.title as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, mediaItem.description.title as String?)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, mediaItem.description.iconBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, mediaItem.description.description as String?)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, mediaItem.description.iconBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, mediaItem.description.subtitle as String?)
-            .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, 1)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, 1)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DISC_NUMBER, 1)
-            .build()
+    private val stationTitle: String = (mediaItem.description.title ?: "").toString()
+    private val groupTitle: String = (mediaItem.description.subtitle ?: "").toString()
+    private val stationLogo: Bitmap? = mediaItem.description.iconBitmap
+
+    private var _currentMetadata: MediaMetadataCompat = buildStationMetadata(
+        trackTitle = stationTitle,
+        trackArtist = groupTitle,
+        art = stationLogo
+    )
+
+    override val metadata: MediaMetadataCompat
+        get() = _currentMetadata
 
     override var stationName: String = ""
 
     private var advertFiles: Array<Uri> = emptyArray()
-    private var announcerFiles:  Array<Uri> = emptyArray()
-    private var djMorningFiles:  Array<Uri> = emptyArray()
-    private var djEveningFiles:  Array<Uri> = emptyArray()
+    private var announcerFiles: Array<Uri> = emptyArray()
+    private var djMorningFiles: Array<Uri> = emptyArray()
+    private var djEveningFiles: Array<Uri> = emptyArray()
     private var djNightFiles: Array<Uri> = emptyArray()
     private var djOtherFiles: Array<Uri> = emptyArray()
     private var djWeatherFogFiles: Array<Uri> = emptyArray()
@@ -84,24 +82,65 @@ import java.util.*
     private var songsSinceLastBreak = 0
     private var activeListener: Player.Listener? = null
     private val rng = Random()
+    private val suffixRegex = Regex("\\s*\\((?:Mid|Intro(?:\\s*DJ\\s*#?\\d+)?|Outro(?:\\s*DJ\\s*#?\\d+)?)\\)\\s*$", RegexOption.IGNORE_CASE)
 
     init {
-        stationName = getStationName(baseStationFolderDoc)
+        stationName = baseStationFolderDoc.name ?: ""
         val subDirs = baseStationFolderDoc.listFiles().filter { x -> x.isDirectory }
         for (subDir in subDirs) {
-            when(subDir.name?.uppercase()) {
-                "ANNOUNCER" -> { setupAnnouncerFiles(subDir) }
-                "DJ CHATTER" -> { setupDJFiles(subDir) }
-                "SONGS" -> { setupSongs(subDir) }
+            when (subDir.name?.uppercase()) {
+                "ANNOUNCER", "IDS" -> setupAnnouncerFiles(subDir)
+                "DJ CHATTER" -> setupDJFiles(subDir)
+                "SONGS" -> setupSongs(subDir)
             }
         }
-
         setupAdvertFiles(advertsFolderDoc)
         randomizeAll()
     }
 
-    private fun getStationName(stationDoc: DocumentFile): String {
-        return stationDoc.name ?: ""
+    private fun buildStationMetadata(trackTitle: String, trackArtist: String, art: Bitmap?): MediaMetadataCompat {
+        return MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, trackTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, trackTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, trackArtist)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, trackArtist)
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, stationTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, "$stationTitle • $groupTitle")
+            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
+            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
+            .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, art)
+            .build()
+    }
+
+    private fun updateMetadataFromUri(uri: Uri, fallbackTitle: String, isAd: Boolean = false) {
+        var title = fallbackTitle
+        var artist = if (isAd) "Advertisement • $stationTitle" else stationTitle
+        var art: Bitmap? = if (isAd) null else stationLogo
+
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            val rawTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+            val rawArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            if (!rawTitle.isNullOrBlank()) {
+                title = suffixRegex.replace(rawTitle, "").trim()
+            }
+            if (!rawArtist.isNullOrBlank()) {
+                artist = "$rawArtist • $stationTitle"
+            }
+            val picBytes = retriever.embeddedPicture
+            if (picBytes != null && picBytes.isNotEmpty()) {
+                art = BitmapFactory.decodeByteArray(picBytes, 0, picBytes.size) ?: art
+            }
+        } catch (_: Exception) {
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+
+        _currentMetadata = buildStationMetadata(title, artist, art)
+        onMetadataChanged?.invoke(_currentMetadata)
     }
 
     private fun setupAnnouncerFiles(folder: DocumentFile) {
@@ -119,7 +158,7 @@ import java.util.*
         djNightFiles = (djFolders.firstOrNull { x -> x.name?.uppercase() == "NIGHT" }?.listFiles() ?: emptyArray()).map { x -> x.uri }.toTypedArray()
         djOtherFiles = (djFolders.firstOrNull { x -> x.name?.uppercase() == "OTHER" }?.listFiles() ?: emptyArray()).map { x -> x.uri }.toTypedArray()
 
-        val weatherFolder =  folder.listFiles().firstOrNull { x -> x.name?.uppercase() == "WEATHER" }
+        val weatherFolder = folder.listFiles().firstOrNull { x -> x.name?.uppercase() == "WEATHER" }
         val weatherFolders = weatherFolder?.listFiles()
         if (weatherFolder != null && weatherFolders?.isNotEmpty() == true) {
             djWeatherFogFiles = (weatherFolders.firstOrNull { x -> x.name?.uppercase() == "FOG" }?.listFiles() ?: emptyArray()).map { x -> x.uri }.toTypedArray()
@@ -127,11 +166,10 @@ import java.util.*
             djWeatherSunFiles = (weatherFolders.firstOrNull { x -> x.name?.uppercase() == "SUN" }?.listFiles() ?: emptyArray()).map { x -> x.uri }.toTypedArray()
             djWeatherStormFiles = (weatherFolders.firstOrNull { x -> x.name?.uppercase() == "STORM" }?.listFiles() ?: emptyArray()).map { x -> x.uri }.toTypedArray()
         }
-
     }
 
     private fun setupSongs(folder: DocumentFile) {
-            songs = folder.listFiles().map { x -> Song(x) }.toTypedArray()
+        songs = folder.listFiles().map { x -> Song(x) }.toTypedArray()
     }
 
     private fun randomizeAll() {
@@ -152,21 +190,16 @@ import java.util.*
     }
 
     private fun randomizeDJFiles() {
-        //Include the relevant time-of-day DJ chatter based on current time
-        //Note: There is no afternoon slot currently based on the anticipated user dataset
         val now = Calendar.getInstance()
         val currentHour = now.get(Calendar.HOUR_OF_DAY)
         var arrToConcat: Array<Uri> = emptyArray()
         if (currentHour in 3..11) {
-            //Morning (3am-noon) (03:00 to 12:00)
             djMorningFiles.shuffle()
             arrToConcat = djMorningFiles
-        } else if(currentHour in 17..22) {
-            //Evening (5pm-11pm) (17:00-23:00)
+        } else if (currentHour in 17..22) {
             djEveningFiles.shuffle()
             arrToConcat = djEveningFiles
-        } else if(currentHour < 3 || currentHour >= 23) {
-            //Night (11pm-3am) (23:00-03:00)
+        } else if (currentHour < 3 || currentHour >= 23) {
             djNightFiles.shuffle()
             arrToConcat = djNightFiles
         }
@@ -174,14 +207,12 @@ import java.util.*
         currentDJFiles = djOtherFiles.plus(arrToConcat)
 
         if (weatherChatterEnabled) {
-            //Include the DJ weather chatter
             djWeatherFogFiles.shuffle()
             djWeatherRainFiles.shuffle()
             djWeatherStormFiles.shuffle()
             djWeatherSunFiles.shuffle()
             currentDJFiles = currentDJFiles.plus(djWeatherFogFiles).plus(djWeatherStormFiles).plus(djWeatherRainFiles).plus(djWeatherSunFiles)
         }
-
         currentDJFiles.shuffle()
         djIterator = currentDJFiles.iterator()
     }
@@ -192,30 +223,22 @@ import java.util.*
     }
 
     private fun getNextAdvertFile(): Uri {
-        if (!advertIterator!!.hasNext()) {
-            randomizeAdvertFiles()
-        }
+        if (!advertIterator!!.hasNext()) randomizeAdvertFiles()
         return advertIterator!!.next()
     }
 
     private fun getNextAnnouncerFile(): Uri {
-        if (!announcerIterator!!.hasNext()) {
-            randomizeAnnouncerFiles()
-        }
+        if (!announcerIterator!!.hasNext()) randomizeAnnouncerFiles()
         return announcerIterator!!.next()
     }
 
     private fun getNextDjFile(): Uri {
-        if (!djIterator!!.hasNext()) {
-            randomizeDJFiles()
-        }
+        if (!djIterator!!.hasNext()) randomizeDJFiles()
         return djIterator!!.next()
     }
 
     private fun getNextSongFolder(): Song {
-        if (!songIterator!!.hasNext()) {
-            randomizeSongFolders()
-        }
+        if (!songIterator!!.hasNext()) randomizeSongFolders()
         return songIterator!!.next()
     }
 
@@ -234,97 +257,46 @@ import java.util.*
 
     private fun playNext() {
         if (activeListener != null) {
-            //Remove/clear any active exoplayer listeners to prevent incidental or repeated callbacks
             player.removeListener(activeListener!!)
         }
-
         if (_playing) {
             when (lastSegment) {
                 RadioSegmentType.None -> {
-                    //We can do anything here
-                    val nextThing = rng.nextInt(5)
-                    lastSegment = RadioSegmentType.fromInt(nextThing)
+                    lastSegment = RadioSegmentType.fromInt(rng.nextInt(5))
                     playNext()
                 }
                 RadioSegmentType.Commercial -> {
-                    val songOrAnnouncer = rng.nextInt(11)
-                    if (songOrAnnouncer < 6 || announcerFiles.isEmpty()) {
-                        //Song
-                        playNextSong(true)
-                    } else {
-                        playNextAnnouncerSpot()
-                    }
+                    if (rng.nextInt(11) < 6 || announcerFiles.isEmpty()) playNextSong(true) else playNextAnnouncerSpot()
                 }
                 RadioSegmentType.Announcer -> {
-                    //Song with/without intro, or DJ chatter
-                    val songOrDj = rng.nextInt(11)
-                    if (songOrDj < 3 || currentDJFiles.isEmpty()) {
-                        //Song
-                        playNextSong(true)
-                    } else {
-                        playNextDjChatter()
-                    }
+                    if (rng.nextInt(11) < 3 || currentDJFiles.isEmpty()) playNextSong(true) else playNextDjChatter()
                 }
                 RadioSegmentType.DJChatter -> {
-                    //Commercial or song with/without intro
                     if (songsSinceLastBreak == 0) {
-                        //Need to play a song here
                         playNextSong()
                     } else {
-                        //We can either do a song or a commercial
-                        val numberOfSongsBeforeBreak =
-                            rng.nextInt(3) + 3 //gives us a number from 3-6
-                        if (adsEnabled && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
-                            //Time for a commercial
-                            playNextAdvert()
-                        } else {
-                            //Play another song
-                            playNextSong()
-                        }
+                        val numberOfSongsBeforeBreak = rng.nextInt(3) + 3
+                        if (adsEnabled && numberOfSongsBeforeBreak <= songsSinceLastBreak) playNextAdvert() else playNextSong()
                     }
-
                 }
                 RadioSegmentType.Song -> {
-                    //Song, commercial, dj chatter, or announcer
-                    val numberOfSongsBeforeBreak =
-                        rng.nextInt(3) + 3 //gives us a number from 3-6
+                    val numberOfSongsBeforeBreak = rng.nextInt(3) + 3
                     if (adsEnabled && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
-                        //Time for a commercial
                         playNextAdvert()
                     } else {
-                        val nextThing = if (currentDJFiles.isEmpty() && announcerFiles.isEmpty()) {
-                            //No DJ Files or Announcer files, so set our next item to a song
-                            0
-                        } else if (currentDJFiles.isEmpty()) {
-                            //No DJ files so we have to pick between announcer and song
-                            rng.nextInt(2)
-                        } else if (announcerFiles.isEmpty()) {
-                            //No announcer files so we have to pick between DJ and song
-                            if (rng.nextInt(2) == 0) 0 else 2
-                        } else {
-                            //We can choose a song, dj chatter, or announcer
-                            rng.nextInt(3)
-                        }
+                        val nextThing = if (currentDJFiles.isEmpty() && announcerFiles.isEmpty()) 0
+                        else if (currentDJFiles.isEmpty()) rng.nextInt(2)
+                        else if (announcerFiles.isEmpty()) (if (rng.nextInt(2) == 0) 0 else 2)
+                        else rng.nextInt(3)
                         when (nextThing) {
-                            0 -> {
-                                //Song again
-                                playNextSong()
-                            }
-                            1 -> {
-                                //Announcer
-                                playNextAnnouncerSpot()
-                            }
-                            else -> {
-                                //DJ
-                                playNextDjChatter()
-                            }
+                            0 -> playNextSong()
+                            1 -> playNextAnnouncerSpot()
+                            else -> playNextDjChatter()
                         }
                     }
                 }
                 else -> {
-                    //Bad state, try something new
-                    val nextThing = rng.nextInt(5)
-                    lastSegment = RadioSegmentType.fromInt(nextThing + 1)
+                    lastSegment = RadioSegmentType.fromInt(rng.nextInt(5) + 1)
                     playNext()
                 }
             }
@@ -335,6 +307,7 @@ import java.util.*
         lastSegment = RadioSegmentType.Announcer
         if (announcerFiles.isNotEmpty()) {
             val nextAnn = getNextAnnouncerFile()
+            updateMetadataFromUri(nextAnn, "$stationTitle (Station ID)")
             playFile(nextAnn)
         } else {
             playNext()
@@ -345,6 +318,7 @@ import java.util.*
         lastSegment = RadioSegmentType.DJChatter
         if (currentDJFiles.isNotEmpty()) {
             val nextDj = getNextDjFile()
+            updateMetadataFromUri(nextDj, "$stationTitle (DJ Chatter)")
             playFile(nextDj)
         } else {
             playNext()
@@ -356,6 +330,7 @@ import java.util.*
         songsSinceLastBreak = 0
         if (adsEnabled && advertFiles.isNotEmpty()) {
             val nextAd = getNextAdvertFile()
+            updateMetadataFromUri(nextAd, "Commercial Break", isAd = true)
             playFile(nextAd)
         } else {
             playNext()
@@ -373,51 +348,36 @@ import java.util.*
         }
     }
 
-    private fun playSong(song: Song, requireDjIntro: Boolean, requireDjOutro: Boolean)
-    {
-        if (song.mainIntroUri == null || song.mainSongUri == null || song.mainOutroUri == null) {
+    private fun playSong(song: Song, requireDjIntro: Boolean, requireDjOutro: Boolean) {
+        if (song.mainSongUri == null) {
+            playNext()
             return
         }
 
+        updateMetadataFromUri(song.mainSongUri, song.folderName)
+
         val introToUse = if (requireDjIntro && song.djIntroUris.isNotEmpty()) {
-            //Use a random dj intro
-            val introIndex = rng.nextInt(song.djIntroUris.size)
-            song.djIntroUris[introIndex]
+            song.djIntroUris[rng.nextInt(song.djIntroUris.size)]
+        } else if (rng.nextInt(11) < 6 && song.djIntroUris.isNotEmpty()) {
+            song.djIntroUris[rng.nextInt(song.djIntroUris.size)]
         } else {
-            val djOrStandard = rng.nextInt(11)
-            if (djOrStandard < 6 && song.djIntroUris.isNotEmpty()) {
-                //Use a DJ intro
-                val introIndex = rng.nextInt(song.djIntroUris.size)
-                song.djIntroUris[introIndex]
-            } else {
-                song.mainIntroUri
-            }
+            song.mainIntroUri
         }
 
         val outroToUse = if (requireDjOutro && song.djOutroUris.isNotEmpty()) {
-            //Use a random dj outro
-            val outroIndex = rng.nextInt(song.djOutroUris.size)
-            song.djOutroUris[outroIndex]
+            song.djOutroUris[rng.nextInt(song.djOutroUris.size)]
+        } else if (rng.nextInt(11) < 6 && song.djOutroUris.isNotEmpty()) {
+            song.djOutroUris[rng.nextInt(song.djOutroUris.size)]
         } else {
-            val djOrStandard = rng.nextInt(11)
-            if (djOrStandard < 6 && song.djOutroUris.isNotEmpty()) {
-                //Use a DJ outro
-                val outroIndex = rng.nextInt(song.djOutroUris.size)
-                song.djOutroUris[outroIndex]
-            } else {
-                song.mainOutroUri
-            }
+            song.mainOutroUri
         }
 
-        val introSrc = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(MediaItem.fromUri(introToUse))
-
-        val mainSrc = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(MediaItem.fromUri(song.mainSongUri))
-
-        val outroSrc = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(MediaItem.fromUri(outroToUse))
-
-        // Prepare the player.
+        val factory = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName)))
         val concatSource = ConcatenatingMediaSource(true)
-        concatSource.addMediaSources(listOf(introSrc, mainSrc, outroSrc))
+        if (introToUse != null) concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(introToUse)))
+        concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(song.mainSongUri)))
+        if (outroToUse != null) concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(outroToUse)))
+
         player.setMediaSource(concatSource)
 
         activeListener = object : Player.Listener {
@@ -435,11 +395,8 @@ import java.util.*
         player.play()
     }
 
-    private fun playFile(file: Uri)
-    {
-        // Set the media item to be played.
+    private fun playFile(file: Uri) {
         val src = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(MediaItem.fromUri(file))
-        // Prepare the player.
         player.setMediaSource(src)
 
         activeListener = object : Player.Listener {
@@ -452,13 +409,13 @@ import java.util.*
                 }
             }
         }
-
         player.addListener(activeListener!!)
         player.prepare()
         player.play()
     }
 
     private inner class Song(songFolderDoc: DocumentFile?) {
+        val folderName: String = songFolderDoc?.name ?: stationTitle
         val songFiles = songFolderDoc?.listSimpleFiles(context.applicationContext)
 
         val mainSongUri: Uri? = (songFiles ?: emptyArray()).find { x -> !x.name.uppercase().contains("(INTRO") && !x.name.uppercase().contains("(OUTRO") }?.uri

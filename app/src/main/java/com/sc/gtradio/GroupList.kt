@@ -17,6 +17,7 @@ import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.card.MaterialCardView
 import com.sc.gtradio.databinding.FragmentGrouplistBinding
 import com.sc.gtradio.databinding.FragmentStationgroupitemBinding
 import com.sc.gtradio.media.MusicServiceConnection
@@ -24,7 +25,6 @@ import com.sc.gtradio.utils.InjectorUtils
 
 class GroupList : Fragment() {
     private var _binding: FragmentGrouplistBinding? = null
-
     private var musicServiceConnection: MusicServiceConnection? = null
 
     private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
@@ -34,7 +34,6 @@ class GroupList : Fragment() {
                 val radioUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "")
 
                 if (children.isEmpty() && activity?.contentResolver?.persistedUriPermissions?.any { x -> x.uri == Uri.parse(radioUri) && x.isReadPermission } == true) {
-                    //No stations listed and we have already selected a library, so show our nothing-found message
                     binding.textviewNogroups.visibility = View.VISIBLE
                     binding.sadFaceIcon.visibility = View.VISIBLE
                 } else {
@@ -47,12 +46,15 @@ class GroupList : Fragment() {
     }
 
     private val listAdapter = StationGroupMediaItemListAdapter { clickedItem ->
-        musicServiceConnection?.sendCommand("setActiveStationGroupId", Bundle().apply { this.putString("stationGroupId", clickedItem.mediaId) })
-        //This is real ugly
+        GtaThemeHelper.activeSeries = clickedItem.description.title?.toString() ?: ""
+        (activity as? MainActivity)?.refreshTheme(GtaThemeHelper.activeSeries)
+        musicServiceConnection?.sendCommand(
+            "setActiveStationGroupId",
+            Bundle().apply { putString("stationGroupId", clickedItem.mediaId) }
+        )
         (activity as MainActivity).navigateToRadioList(clickedItem.mediaId)
     }
 
-    // This property is only valid between onCreateView and onDestroyView.
     private val binding get() = _binding!!
 
     private val contract = object : ActivityResultContracts.OpenDocumentTree() {
@@ -65,45 +67,29 @@ class GroupList : Fragment() {
         }
     }
 
-    private val permissionResultLauncher = registerForActivityResult(contract)
-    { result: Uri? ->
-        if (result == null) {
-            return@registerForActivityResult
-        }
+    private val permissionResultLauncher = registerForActivityResult(contract) { result: Uri? ->
+        if (result == null) return@registerForActivityResult
         activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val sharedPref = activity?.applicationContext?.let {
-            PreferenceManager.getDefaultSharedPreferences(
-                it
-            )
-        }
-        with (sharedPref?.edit()) {
+        val sharedPref = activity?.applicationContext?.let { PreferenceManager.getDefaultSharedPreferences(it) }
+        with(sharedPref?.edit()) {
             this?.putString(getString(R.string.radio_folders_uri_key), result.toString())
             this?.apply()
         }
-
     }
 
-    //Setup a listener for settings changes
     private val sharedPrefListener = GroupListOnSharedPrefChange()
     private inner class GroupListOnSharedPrefChange : SharedPreferences.OnSharedPreferenceChangeListener {
         override fun onSharedPreferenceChanged(prefs: SharedPreferences?, key: String?) {
-            if (prefs != null) {
-                when(key) {
-                    resources.getString(R.string.radio_folders_uri_key) -> {
-                        //Update stations list
-                        updateLibrarySelectedComponents()
-                        if (musicServiceConnection != null) {
-                            musicServiceConnection!!.unsubscribe("root", subscriptionCallback)
-                            musicServiceConnection!!.subscribe("root", subscriptionCallback)
-                        }
-                    }
-                }
+            if (prefs != null && key == resources.getString(R.string.radio_folders_uri_key)) {
+                updateLibrarySelectedComponents()
+                musicServiceConnection?.unsubscribe("root", subscriptionCallback)
+                musicServiceConnection?.subscribe("root", subscriptionCallback)
             }
         }
     }
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
-        val sharedPref = PreferenceManager.getDefaultSharedPreferences(this.requireActivity().applicationContext)
+        val sharedPref = PreferenceManager.getDefaultSharedPreferences(requireActivity().applicationContext)
         sharedPref.registerOnSharedPreferenceChangeListener(sharedPrefListener)
 
         if (musicServiceConnection == null) {
@@ -118,13 +104,8 @@ class GroupList : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-
-        binding.buttonSelect.setOnClickListener {
-            permissionResultLauncher.launch(null)
-        }
-
+        binding.buttonSelect.setOnClickListener { permissionResultLauncher.launch(null) }
         updateLibrarySelectedComponents()
-
         binding.stationList.layoutManager = LinearLayoutManager(context)
         binding.stationList.adapter = listAdapter
     }
@@ -132,15 +113,15 @@ class GroupList : Fragment() {
     override fun onResume() {
         super.onResume()
         updateLibrarySelectedComponents()
+        (activity as? MainActivity)?.refreshTheme("")
     }
 
     private fun updateLibrarySelectedComponents() {
-        val sharedPref = PreferenceManager.getDefaultSharedPreferences(this.requireActivity().applicationContext)
+        val sharedPref = PreferenceManager.getDefaultSharedPreferences(requireActivity().applicationContext)
         val radioUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "")
         if (radioUri.isNullOrEmpty() || activity?.contentResolver?.persistedUriPermissions?.any { x -> x.uri == Uri.parse(radioUri) && x.isReadPermission } != true) {
-            //User has no library selected, allow them to select something and possibly reset our pref value
             if (!radioUri.isNullOrEmpty()) {
-                with (sharedPref?.edit()) {
+                with(sharedPref?.edit()) {
                     this?.putString(getString(R.string.radio_folders_uri_key), "")
                     this?.apply()
                 }
@@ -157,12 +138,11 @@ class GroupList : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
-        val sharedPref = PreferenceManager.getDefaultSharedPreferences(this.requireActivity().applicationContext)
+        val sharedPref = PreferenceManager.getDefaultSharedPreferences(requireActivity().applicationContext)
         sharedPref.unregisterOnSharedPreferenceChangeListener(sharedPrefListener)
         _binding = null
     }
 }
-
 
 class StationGroupMediaItemListAdapter(
     private val itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
@@ -174,21 +154,14 @@ class StationGroupMediaItemListAdapter(
         return StationGroupViewHolder(binding, itemClickedListener)
     }
 
-    override fun onBindViewHolder(
-        holder: StationGroupViewHolder,
-        position: Int,
-        payloads: MutableList<Any>
-    ) {
+    override fun onBindViewHolder(holder: StationGroupViewHolder, position: Int, payloads: MutableList<Any>) {
         val mediaItem = getItem(position)
-        val fullRefresh = payloads.isEmpty()
-
-        // Normally we only fully refresh the list item if it's being initially bound, but
-        // we might also do it if there was a payload that wasn't understood, just to ensure
-        // there isn't a stale item.
-        if (fullRefresh) {
+        if (payloads.isEmpty()) {
             holder.item = mediaItem
-            holder.titleView.text = mediaItem.description.title
+            val seriesTitle = mediaItem.description.title?.toString() ?: ""
+            holder.titleView.text = seriesTitle
             holder.groupArt.setImageBitmap(mediaItem.description.iconBitmap)
+            GtaThemeHelper.styleCard(holder.cardView, holder.titleView, seriesTitle)
         }
     }
 
@@ -202,15 +175,12 @@ class StationGroupViewHolder(
     itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
 ) : RecyclerView.ViewHolder(binding.root) {
 
+    val cardView: MaterialCardView = binding.root
     val titleView: TextView = binding.groupTitle
     val groupArt: ImageView = binding.groupArt
-
     var item: MediaBrowserCompat.MediaItem? = null
 
     init {
-        binding.root.setOnClickListener {
-            item?.let { itemClickedListener(it) }
-        }
+        binding.root.setOnClickListener { item?.let { itemClickedListener(it) } }
     }
 }
-

@@ -14,10 +14,9 @@ import com.sc.gtradio.utils.InjectorUtils
 
 class NowPlayingFragment : Fragment() {
     private var _binding: FragmentNowplayingBinding? = null
-
     private var musicServiceConnection: MusicServiceConnection? = null
-
     private var playbackState: PlaybackStateCompat = EMPTY_PLAYBACK_STATE
+
     private val playbackStateObserver = Observer<PlaybackStateCompat> {
         playbackState = it ?: EMPTY_PLAYBACK_STATE
         val metadata = musicServiceConnection?.nowPlaying?.value ?: NOTHING_PLAYING
@@ -28,7 +27,6 @@ class NowPlayingFragment : Fragment() {
         updateState(playbackState, it)
     }
 
-    // This property is only valid between onCreateView and onDestroyView.
     private val binding get() = _binding!!
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
@@ -38,13 +36,14 @@ class NowPlayingFragment : Fragment() {
                 it.nowPlaying.observe(viewLifecycleOwner, mediaMetadataObserver)
             }
         }
-
         _binding = FragmentNowplayingBinding.inflate(inflater, container, false)
         return binding.root
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        binding.stationTitle.isSelected = true
 
         binding.playStopButton.setOnClickListener {
             if (playbackState.isPlaying) {
@@ -61,6 +60,19 @@ class NowPlayingFragment : Fragment() {
         }
 
         binding.stationTitle.text = getString(R.string.nothing_playing)
+        applyPlayerTheme(GtaThemeHelper.activeSeries)
+    }
+
+    private fun applyPlayerTheme(series: String) {
+        if (_binding == null) return
+        GtaThemeHelper.stylePlayerBar(
+            binding.nowPlayingRoot,
+            binding.topDivider,
+            binding.stationTitle,
+            binding.stationAlbum,
+            listOf(binding.previousButton, binding.playStopButton, binding.nextButton),
+            series
+        )
     }
 
     override fun onDestroyView() {
@@ -69,17 +81,30 @@ class NowPlayingFragment : Fragment() {
     }
 
     private fun updateState(playbackState: PlaybackStateCompat, mediaMetadata: MediaMetadataCompat) {
+        if (_binding == null) return
 
-        // Only update media if the item exists
+        val playingSeries = mediaMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM) ?: ""
+        if (playingSeries.isNotBlank() && playingSeries != GtaThemeHelper.activeSeries) {
+            GtaThemeHelper.activeSeries = playingSeries
+            (activity as? MainActivity)?.refreshTheme(playingSeries)
+        }
+        applyPlayerTheme(GtaThemeHelper.activeSeries)
+
         if (mediaMetadata.description.mediaId?.isNotBlank() == true) {
             binding.stationTitle.text = mediaMetadata.description.title
             binding.stationAlbum.text = mediaMetadata.description.subtitle
-            binding.albumArt.setImageBitmap(mediaMetadata.description.iconBitmap)
+            val bmp = mediaMetadata.description.iconBitmap
+            if (bmp != null) {
+                binding.albumArt.setImageBitmap(bmp)
+            } else {
+                binding.albumArt.setImageResource(R.drawable.outline_radio_24)
+            }
         } else {
             binding.stationTitle.text = getString(R.string.nothing_playing)
+            binding.stationAlbum.text = ""
+            binding.albumArt.setImageResource(R.drawable.outline_radio_24)
         }
 
-        //Update the play buttons
         if (playbackState.isPlaying) {
             binding.playStopButton.setImageResource(R.drawable.stop_24px)
         } else {
@@ -89,5 +114,4 @@ class NowPlayingFragment : Fragment() {
         binding.previousButton.visibility = if (playbackState.isSkipToPreviousEnabled) View.VISIBLE else View.INVISIBLE
         binding.nextButton.visibility = if (playbackState.isSkipToNextEnabled) View.VISIBLE else View.INVISIBLE
     }
-
 }

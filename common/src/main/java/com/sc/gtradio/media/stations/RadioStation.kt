@@ -9,6 +9,7 @@ interface RadioStation {
     val stationGroupId: String
 
     val metadata: MediaMetadataCompat
+    var onMetadataChanged: ((MediaMetadataCompat) -> Unit)?
 
     var stationName: String
     var adsEnabled: Boolean

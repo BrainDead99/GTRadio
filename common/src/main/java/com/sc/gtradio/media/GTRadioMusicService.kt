@@ -425,6 +425,12 @@ import java.util.ArrayList
         //Didn't have the station cached yet, so lets build it and cache it
         val station = buildRadioStation(group, mediaId)
         if (station != null) {
+            station.onMetadataChanged = { updatedMeta ->
+                if (activeStation?.mediaId == station.mediaId) {
+                    session.setMetadata(updatedMeta)
+                    notificationManager.showNotificationForPlayer(radioPlayer)
+                }
+            }
             stationCache[station.mediaItem.mediaId!!] = station
         }
         return station
