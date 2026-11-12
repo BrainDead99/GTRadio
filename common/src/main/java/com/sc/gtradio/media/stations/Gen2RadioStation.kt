@@ -15,6 +15,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSourceFactory
+import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import java.util.*
@@ -347,7 +348,7 @@ import java.util.*
     override fun stop() {
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
-            stoppedWindowIndex = player.currentWindowIndex.coerceAtLeast(0)
+            stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
             stoppedPositionMs = player.getCurrentTrackPosition().coerceAtLeast(0L)
         }
         _playing = false
@@ -546,8 +547,14 @@ import java.util.*
         val factory = ProgressiveMediaSource.Factory(
             DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))
         )
-        val sources = uris.map { u -> factory.createMediaSource(MediaItem.fromUri(u)) }.toMutableList()
-        player.setMediaSources(sources, startWindowIndex, startPositionMs)
+        val concatSource = ConcatenatingMediaSource(true)
+        for (u in uris) {
+            concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(u)))
+        }
+        player.setMediaSource(concatSource)
+        if (startWindowIndex > 0 || startPositionMs > 0L) {
+            player.seekTo(startWindowIndex, startPositionMs)
+        }
 
         activeListener = object : Player.Listener {
             private var alreadyHandled = false
