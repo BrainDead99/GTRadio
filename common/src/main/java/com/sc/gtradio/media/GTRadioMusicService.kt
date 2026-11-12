@@ -149,6 +149,7 @@ import java.util.ArrayList
             }
 
             val group = getStationGroupContainingMedia(mediaId) ?: return
+            if (activeStation?.mediaId != mediaId) { activeStation?.stop() }
             activeStation = getRadioStation(group, mediaId)
             if (activeStation == null) {
                 //Unable to find the station to play
@@ -230,6 +231,7 @@ import java.util.ArrayList
                 //Loop back to start
                 nextStationIndex = 0
             }
+            activeStation?.stop()
             activeStation = getRadioStation(group, group.stationList[nextStationIndex].mediaId!!)
 
             if (activeStation == null) {
@@ -268,6 +270,7 @@ import java.util.ArrayList
                 //Loop back to end
                 prevStationIndex = group.stationList.lastIndex
             }
+            activeStation?.stop()
             activeStation = getRadioStation(group, group.stationList[prevStationIndex].mediaId!!)
 
             if (activeStation == null) {

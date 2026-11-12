@@ -15,7 +15,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSourceFactory
-import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import java.util.*
@@ -84,6 +83,15 @@ import java.util.*
     private var activeListener: Player.Listener? = null
     private val rng = Random()
 
+    // Real-time radio state tracking
+    private var currentSegmentUris: List<Uri> = emptyList()
+    private var currentSongMainUri: Uri? = null
+    private var currentSongFolderName: String = ""
+    private var lastStoppedTimeMs: Long = 0L
+    private var stoppedWindowIndex: Int = 0
+    private var stoppedPositionMs: Long = 0L
+    private val durationCache = HashMap<Uri, Long>()
+
     private val suffixRegex = Regex("\\s*\\((?:Mid|Intro(?:\\s*DJ\\s*#?\\d+)?|Outro(?:\\s*DJ\\s*#?\\d+)?)\\)\\s*$", RegexOption.IGNORE_CASE)
     private val episodeRegex = Regex("\\s*(?:-\\s*)?(?:Episode|Teaser)\\s*#?\\d+.*$", RegexOption.IGNORE_CASE)
     private val stationSuffixRegex = Regex("\\s*\\([^)]*\\)\\s*$")
@@ -100,6 +108,25 @@ import java.util.*
         }
         setupAdvertFiles(advertsFolderDoc)
         randomizeAll()
+    }
+
+    private fun getFileDurationMs(uri: Uri): Long {
+        durationCache[uri]?.let { return it }
+        var dur = 30_000L
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(context, uri)
+            val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            val parsed = durStr?.toLongOrNull()
+            if (parsed != null && parsed > 0L) {
+                dur = parsed
+            }
+        } catch (_: Exception) {
+        } finally {
+            try { retriever.release() } catch (_: Exception) {}
+        }
+        durationCache[uri] = dur
+        return dur
     }
 
     private fun buildStationMetadata(trackTitle: String, trackSubtitle: String, art: Bitmap?): MediaMetadataCompat {
@@ -160,6 +187,9 @@ import java.util.*
             retriever.setDataSource(context, uri)
             val extractedTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
             val extractedArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            durStr?.toLongOrNull()?.let { if (it > 0L) durationCache[uri] = it }
+
             if (!extractedTitle.isNullOrBlank()) {
                 rawTitle = extractedTitle
             }
@@ -181,7 +211,6 @@ import java.util.*
             val noSeg = suffixRegex.replace(rawTitle, "").trim()
             val cleanShow = episodeRegex.replace(noSeg, "").trim().ifBlank { noSeg }
             if (cleanShow.uppercase().startsWith("NEWS")) {
-                // WCTR News: Title = "News", Artist line = "WCTR" (blank album part), Art = WCTR logo
                 _currentMetadata = buildStationMetadata(
                     trackTitle = "News",
                     trackSubtitle = stationTitle,
@@ -206,6 +235,14 @@ import java.util.*
             )
         }
         onMetadataChanged?.invoke(_currentMetadata)
+    }
+
+    private fun refreshCurrentSegmentMetadata() {
+        if (lastSegment == RadioSegmentType.Song && currentSongMainUri != null) {
+            updateSongMetadataFromUri(currentSongMainUri!!, currentSongFolderName)
+        } else {
+            setStationOnlyMetadata()
+        }
     }
 
     private fun setupAnnouncerFiles(folder: DocumentFile) {
@@ -308,7 +345,16 @@ import java.util.*
     }
 
     override fun stop() {
+        if (_playing) {
+            lastStoppedTimeMs = System.currentTimeMillis()
+            stoppedWindowIndex = player.currentWindowIndex.coerceAtLeast(0)
+            stoppedPositionMs = player.getCurrentTrackPosition().coerceAtLeast(0L)
+        }
         _playing = false
+        if (activeListener != null) {
+            player.removeListener(activeListener!!)
+            activeListener = null
+        }
         player.stop()
     }
 
@@ -317,120 +363,152 @@ import java.util.*
         player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
-        playNext()
+
+        if (lastStoppedTimeMs > 0L && currentSegmentUris.isNotEmpty()) {
+            val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+            resumeFromRealTime(elapsedMs)
+        } else {
+            pickNextSegment()
+            stoppedWindowIndex = 0
+            stoppedPositionMs = 0L
+            val initialOffsetMs = rng.nextInt(45_000).toLong()
+            resumeFromRealTime(initialOffsetMs)
+        }
+    }
+
+    private fun resumeFromRealTime(rawElapsedMs: Long) {
+        var remainingMs = if (rawElapsedMs > 600_000L) (rawElapsedMs % 600_000L) else rawElapsedMs
+        var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
+        var posMs = stoppedPositionMs.coerceAtLeast(0L)
+
+        var safety = 0
+        while (safety < 40 && currentSegmentUris.isNotEmpty()) {
+            safety++
+            for (i in winIdx until currentSegmentUris.size) {
+                val uri = currentSegmentUris[i]
+                val durMs = getFileDurationMs(uri)
+                val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
+
+                if (remainingMs < timeLeftMs) {
+                    val targetPosMs = posMs + remainingMs
+                    refreshCurrentSegmentMetadata()
+                    startPlayback(currentSegmentUris, i, targetPosMs)
+                    return
+                } else {
+                    remainingMs -= timeLeftMs
+                    posMs = 0L
+                }
+            }
+            pickNextSegment()
+            winIdx = 0
+            posMs = 0L
+        }
+
+        if (currentSegmentUris.isNotEmpty()) {
+            refreshCurrentSegmentMetadata()
+            startPlayback(currentSegmentUris, 0, 0L)
+        }
     }
 
     private fun playNext() {
-        if (activeListener != null) {
-            player.removeListener(activeListener!!)
+        if (!_playing) return
+        pickNextSegment()
+        if (currentSegmentUris.isNotEmpty()) {
+            refreshCurrentSegmentMetadata()
+            startPlayback(currentSegmentUris, 0, 0L)
         }
-        if (_playing) {
+    }
+
+    private fun pickNextSegment() {
+        var attempts = 0
+        while (attempts < 15) {
+            attempts++
             when (lastSegment) {
                 RadioSegmentType.None -> {
                     lastSegment = RadioSegmentType.fromInt(rng.nextInt(5))
-                    playNext()
                 }
                 RadioSegmentType.Commercial -> {
-                    // 85% chance to play Station ID after ads, 15% rare chance to jump straight into a song
                     val roll = rng.nextInt(20)
                     if (announcerFiles.isNotEmpty() && roll < 17) {
-                        playNextAnnouncerSpot()
+                        if (prepareAnnouncerSegment()) return
                     } else {
-                        playNextSong(true)
+                        if (prepareSongSegment(requireDjIntro = true)) return
                     }
                 }
                 RadioSegmentType.Announcer -> {
-                    // After a Station ID, 70% chance to start a song, 30% chance for DJ chatter
                     if (rng.nextInt(10) < 7 || currentDJFiles.isEmpty()) {
-                        playNextSong(true)
+                        if (prepareSongSegment(requireDjIntro = true)) return
                     } else {
-                        playNextDjChatter()
+                        if (prepareDjSegment()) return
                     }
                 }
                 RadioSegmentType.DJChatter -> {
                     if (songsSinceLastBreak == 0) {
-                        playNextSong()
+                        if (prepareSongSegment()) return
                     } else {
                         val numberOfSongsBeforeBreak = rng.nextInt(3) + 3
-                        if (adsEnabled && numberOfSongsBeforeBreak <= songsSinceLastBreak) playNextAdvert() else playNextSong()
+                        if (adsEnabled && advertFiles.isNotEmpty() && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
+                            if (prepareAdvertSegment()) return
+                        } else {
+                            if (prepareSongSegment()) return
+                        }
                     }
                 }
                 RadioSegmentType.Song -> {
                     val numberOfSongsBeforeBreak = rng.nextInt(3) + 3
-                    if (adsEnabled && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
-                        playNextAdvert()
+                    if (adsEnabled && advertFiles.isNotEmpty() && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
+                        if (prepareAdvertSegment()) return
                     } else {
                         val nextThing = if (currentDJFiles.isEmpty() && announcerFiles.isEmpty()) 0
                         else if (currentDJFiles.isEmpty()) rng.nextInt(2)
                         else if (announcerFiles.isEmpty()) (if (rng.nextInt(2) == 0) 0 else 2)
                         else rng.nextInt(3)
                         when (nextThing) {
-                            0 -> playNextSong()
-                            1 -> playNextAnnouncerSpot()
-                            else -> playNextDjChatter()
+                            0 -> if (prepareSongSegment()) return
+                            1 -> if (prepareAnnouncerSegment()) return
+                            else -> if (prepareDjSegment()) return
                         }
                     }
                 }
                 else -> {
                     lastSegment = RadioSegmentType.fromInt(rng.nextInt(5) + 1)
-                    playNext()
                 }
             }
         }
     }
 
-    private fun playNextAnnouncerSpot() {
+    private fun prepareAnnouncerSegment(): Boolean {
         lastSegment = RadioSegmentType.Announcer
-        if (announcerFiles.isNotEmpty()) {
-            val nextAnn = getNextAnnouncerFile()
-            setStationOnlyMetadata()
-            playFile(nextAnn)
-        } else {
-            playNext()
-        }
+        if (announcerFiles.isEmpty()) return false
+        currentSongMainUri = null
+        currentSegmentUris = listOf(getNextAnnouncerFile())
+        return true
     }
 
-    private fun playNextDjChatter() {
+    private fun prepareDjSegment(): Boolean {
         lastSegment = RadioSegmentType.DJChatter
-        if (currentDJFiles.isNotEmpty()) {
-            val nextDj = getNextDjFile()
-            setStationOnlyMetadata()
-            playFile(nextDj)
-        } else {
-            playNext()
-        }
+        if (currentDJFiles.isEmpty()) return false
+        currentSongMainUri = null
+        currentSegmentUris = listOf(getNextDjFile())
+        return true
     }
 
-    private fun playNextAdvert() {
+    private fun prepareAdvertSegment(): Boolean {
         lastSegment = RadioSegmentType.Commercial
         songsSinceLastBreak = 0
-        if (adsEnabled && advertFiles.isNotEmpty()) {
-            val nextAd = getNextAdvertFile()
-            setStationOnlyMetadata()
-            playFile(nextAd)
-        } else {
-            playNext()
-        }
+        if (!adsEnabled || advertFiles.isEmpty()) return false
+        currentSongMainUri = null
+        currentSegmentUris = listOf(getNextAdvertFile())
+        return true
     }
 
-    private fun playNextSong(requireDjIntro: Boolean = false, requireDjOutro: Boolean = false) {
+    private fun prepareSongSegment(requireDjIntro: Boolean = false, requireDjOutro: Boolean = false): Boolean {
         songsSinceLastBreak += 1
         lastSegment = RadioSegmentType.Song
-        if (songs.isNotEmpty()) {
-            val nextSong = getNextSongFolder()
-            playSong(nextSong, requireDjIntro, requireDjOutro)
-        } else {
-            playNext()
-        }
-    }
+        if (songs.isEmpty()) return false
 
-    private fun playSong(song: Song, requireDjIntro: Boolean, requireDjOutro: Boolean) {
-        if (song.mainSongUri == null) {
-            playNext()
-            return
-        }
-
-        updateSongMetadataFromUri(song.mainSongUri, song.folderName)
+        val song = getNextSongFolder()
+        val mainUri = song.mainSongUri ?: return false
 
         val introToUse = if (requireDjIntro && song.djIntroUris.isNotEmpty()) {
             song.djIntroUris[rng.nextInt(song.djIntroUris.size)]
@@ -448,39 +526,35 @@ import java.util.*
             song.mainOutroUri
         }
 
-        val factory = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName)))
-        val concatSource = ConcatenatingMediaSource(true)
-        if (introToUse != null) concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(introToUse)))
-        concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(song.mainSongUri)))
-        if (outroToUse != null) concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(outroToUse)))
+        val list = ArrayList<Uri>(3)
+        if (introToUse != null) list.add(introToUse)
+        list.add(mainUri)
+        if (outroToUse != null) list.add(outroToUse)
 
-        player.setMediaSource(concatSource)
-
-        activeListener = object : Player.Listener {
-            private var alreadyHandled = false
-            override fun onPlaybackStateChanged(state: Int) {
-                if (!alreadyHandled && state == Player.STATE_ENDED) {
-                    alreadyHandled = true
-                    player.removeListener(activeListener!!)
-                    playNext()
-                }
-            }
-        }
-        player.addListener(activeListener!!)
-        player.prepare()
-        player.play()
+        currentSongMainUri = mainUri
+        currentSongFolderName = song.folderName
+        currentSegmentUris = list
+        return true
     }
 
-    private fun playFile(file: Uri) {
-        val src = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(MediaItem.fromUri(file))
-        player.setMediaSource(src)
+    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long) {
+        if (activeListener != null) {
+            player.removeListener(activeListener!!)
+            activeListener = null
+        }
+
+        val factory = ProgressiveMediaSource.Factory(
+            DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))
+        )
+        val sources = uris.map { u -> factory.createMediaSource(MediaItem.fromUri(u)) }.toMutableList()
+        player.setMediaSources(sources, startWindowIndex, startPositionMs)
 
         activeListener = object : Player.Listener {
             private var alreadyHandled = false
             override fun onPlaybackStateChanged(state: Int) {
                 if (!alreadyHandled && state == Player.STATE_ENDED) {
                     alreadyHandled = true
-                    player.removeListener(activeListener!!)
+                    player.removeListener(this)
                     playNext()
                 }
             }
