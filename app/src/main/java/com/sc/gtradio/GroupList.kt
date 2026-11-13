@@ -17,7 +17,6 @@ import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.card.MaterialCardView
 import com.sc.gtradio.databinding.FragmentGrouplistBinding
 import com.sc.gtradio.databinding.FragmentStationgroupitemBinding
 import com.sc.gtradio.media.MusicServiceConnection
@@ -46,8 +45,6 @@ class GroupList : Fragment() {
     }
 
     private val listAdapter = StationGroupMediaItemListAdapter { clickedItem ->
-        GtaThemeHelper.activeSeries = clickedItem.description.title?.toString() ?: ""
-        (activity as? MainActivity)?.refreshTheme(GtaThemeHelper.activeSeries)
         musicServiceConnection?.sendCommand(
             "setActiveStationGroupId",
             Bundle().apply { putString("stationGroupId", clickedItem.mediaId) }
@@ -113,7 +110,6 @@ class GroupList : Fragment() {
     override fun onResume() {
         super.onResume()
         updateLibrarySelectedComponents()
-        (activity as? MainActivity)?.refreshTheme("")
     }
 
     private fun updateLibrarySelectedComponents() {
@@ -158,10 +154,13 @@ class StationGroupMediaItemListAdapter(
         val mediaItem = getItem(position)
         if (payloads.isEmpty()) {
             holder.item = mediaItem
-            val seriesTitle = mediaItem.description.title?.toString() ?: ""
-            holder.titleView.text = seriesTitle
-            holder.groupArt.setImageBitmap(mediaItem.description.iconBitmap)
-            GtaThemeHelper.styleCard(holder.cardView, holder.titleView, seriesTitle)
+            holder.titleView.text = mediaItem.description.title
+            val bmp = mediaItem.description.iconBitmap
+            if (bmp != null) {
+                holder.groupArt.setImageBitmap(bmp)
+            } else {
+                holder.groupArt.setImageResource(R.drawable.outline_radio_24)
+            }
         }
     }
 
@@ -175,7 +174,6 @@ class StationGroupViewHolder(
     itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
 ) : RecyclerView.ViewHolder(binding.root) {
 
-    val cardView: MaterialCardView = binding.root
     val titleView: TextView = binding.groupTitle
     val groupArt: ImageView = binding.groupArt
     var item: MediaBrowserCompat.MediaItem? = null

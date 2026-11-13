@@ -12,7 +12,6 @@ import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.card.MaterialCardView
 import com.sc.gtradio.databinding.FragmentRadiolistBinding
 import com.sc.gtradio.databinding.FragmentStationitemBinding
 import com.sc.gtradio.media.*
@@ -26,11 +25,6 @@ class RadioList : Fragment() {
     private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
         override fun onChildrenLoaded(parentId: String, children: List<MediaBrowserCompat.MediaItem>) {
             if (parentId == stationGroupId) {
-                val groupName = children.firstOrNull()?.description?.subtitle?.toString() ?: ""
-                if (groupName.isNotBlank()) {
-                    GtaThemeHelper.activeSeries = groupName
-                    (activity as? MainActivity)?.refreshTheme(groupName)
-                }
                 listAdapter.submitList(children)
             }
         }
@@ -66,7 +60,6 @@ class RadioList : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         binding.stationList.layoutManager = LinearLayoutManager(context)
         binding.stationList.adapter = listAdapter
-        (activity as? MainActivity)?.refreshTheme(GtaThemeHelper.activeSeries)
     }
 
     override fun onDestroyView() {
@@ -90,9 +83,12 @@ class MediaItemListAdapter(
         if (payloads.isEmpty()) {
             holder.item = mediaItem
             holder.titleView.text = mediaItem.description.title
-            holder.albumArt.setImageBitmap(mediaItem.description.iconBitmap)
-            val series = mediaItem.description.subtitle?.toString() ?: GtaThemeHelper.activeSeries
-            GtaThemeHelper.styleCard(holder.cardView, holder.titleView, series)
+            val bmp = mediaItem.description.iconBitmap
+            if (bmp != null) {
+                holder.albumArt.setImageBitmap(bmp)
+            } else {
+                holder.albumArt.setImageResource(R.drawable.outline_radio_24)
+            }
         }
     }
 
@@ -106,7 +102,6 @@ class MediaViewHolder(
     itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
 ) : RecyclerView.ViewHolder(binding.root) {
 
-    val cardView: MaterialCardView = binding.root
     val titleView: TextView = binding.title
     val albumArt: ImageView = binding.albumArt
     var item: MediaBrowserCompat.MediaItem? = null

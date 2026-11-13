@@ -2,15 +2,14 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <PreferenceCategory app:title="@string/library_header">
-
         <Preference
             android:clickable="true"
             app:key="@string/radio_folders_uri_key"
             app:title="@string/music_path_title"
             app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
-    <PreferenceCategory android:title="@string/playback_header">
 
+    <PreferenceCategory android:title="@string/playback_header">
         <SwitchPreference
             android:defaultValue="true"
             android:key="@string/ads_enabled_preference_key"
@@ -28,6 +27,26 @@
             android:key="@string/news_reports_preference_key"
             android:summary="@string/news_reports_summary"
             android:title="@string/news_reports_enabled_title" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/metadata_header">
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="@string/show_song_metadata_key"
+            android:summary="@string/show_song_metadata_summary"
+            android:title="@string/show_song_metadata_title" />
+
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="@string/download_album_art_key"
+            android:summary="@string/download_album_art_summary"
+            android:title="@string/download_album_art_title" />
+
+        <Preference
+            android:clickable="true"
+            app:key="@string/scan_album_art_key"
+            app:title="@string/scan_album_art_title"
+            app:summary="@string/scan_album_art_summary" />
     </PreferenceCategory>
 
 </PreferenceScreen>

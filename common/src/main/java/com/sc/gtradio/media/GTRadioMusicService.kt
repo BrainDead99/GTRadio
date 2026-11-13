@@ -359,18 +359,8 @@ import java.util.ArrayList
         val radioPath = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "") ?: return ArrayList()
         if (radioPath.isBlank()) { return ArrayList() }
         val dir = DocumentFile.fromTreeUri(applicationContext, Uri.parse(radioPath))
-
-        val list = ArrayList<StationGroup>()
-        val subDirs = (dir?.listFiles() ?: emptyArray()).filter { x -> x.isDirectory }
-        for (subDir in subDirs) {
-            val group = StationGroup(subDir, applicationContext)
-            if (group.generation in 1..3) {
-                //Valid group.
-                list.add(group)
-            }
-        }
-        list.sortBy { x -> x.groupName }
-        return list
+        stationCache.clear()
+        return StationGroup.scanRootDirectory(dir, applicationContext)
     }
 
     private fun getFullStationList(): ArrayList<MediaItem> {
@@ -445,7 +435,25 @@ import java.util.ArrayList
         val weatherChatterEnabled = sharedPref?.getBoolean(getString(R.string.weather_chatter_enabled_preference_key), false) ?: false
         val newsReportsEnabled  = sharedPref?.getBoolean(getString(R.string.news_reports_preference_key), false) ?: false
 
-        val stationMedia = group.stationList.find { x -> x.mediaId == mediaId }!!
+        val stationMedia = group.stationList.find { x -> x.mediaId == mediaId } ?: return null
+        if (group.isRawSaGroup && mediaId.contains("#SA_RAW#")) {
+            val code = mediaId.substringAfter("#SA_RAW#")
+            val stationArch = group.getOrCreateArchive(code) ?: return null
+            val advertsArch = group.getOrCreateArchive("ADVERTS")
+            val stMeta = SaMetadataRepository.getByStreamCode(applicationContext, code) ?: return null
+            return SaRawRadioStation(
+                group.mediaItem.mediaId!!,
+                stationMedia.mediaId!!,
+                stationMedia,
+                stationArch,
+                advertsArch,
+                stMeta,
+                radioPlayer,
+                applicationContext,
+                adsEnabled,
+                weatherChatterEnabled
+            )
+        }
         val folderContents = group.folderDoc.listFiles()
         val stationDoc = folderContents.find { x -> x.isDirectory && x.uri.toString() == stationMedia.mediaId } ?: return null
 

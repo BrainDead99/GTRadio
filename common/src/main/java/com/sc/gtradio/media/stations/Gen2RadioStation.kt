@@ -2,6 +2,7 @@ package com.sc.gtradio.media.stations
 
 import GTRadioPlayer
 import android.content.Context
+import androidx.preference.PreferenceManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -179,6 +180,12 @@ import java.util.*
     }
 
     private fun updateSongMetadataFromUri(uri: Uri, fallbackTitle: String) {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        if (!prefs.getBoolean("show_song_metadata_enabled", true)) {
+            setStationOnlyMetadata()
+            return
+        }
+        val allowAlbumArt = prefs.getBoolean("download_album_art_enabled", true)
         var rawTitle = fallbackTitle
         var rawArtist: String? = null
         var art: Bitmap? = stationLogo
@@ -197,7 +204,7 @@ import java.util.*
             if (!extractedArtist.isNullOrBlank()) {
                 rawArtist = extractedArtist
             }
-            if (!isWctr) {
+            if (!isWctr && allowAlbumArt) {
                 val picBytes = retriever.embeddedPicture
                 if (picBytes != null && picBytes.isNotEmpty()) {
                     art = BitmapFactory.decodeByteArray(picBytes, 0, picBytes.size) ?: stationLogo

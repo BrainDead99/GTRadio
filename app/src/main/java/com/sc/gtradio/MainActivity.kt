@@ -45,25 +45,6 @@ class MainActivity : AppCompatActivity() {
         val navController = findNavController(R.id.nav_host_fragment_content_main)
         appBarConfiguration = AppBarConfiguration(navController.graph)
         setupActionBarWithNavController(navController, appBarConfiguration)
-
-        navController.addOnDestinationChangedListener { _, destination, _ ->
-            if (destination.id == R.id.FirstFragment) {
-                refreshTheme("")
-            } else {
-                refreshTheme(GtaThemeHelper.activeSeries)
-                if (GtaThemeHelper.activeSeries.isNotBlank()) {
-                    binding.toolbar.title = GtaThemeHelper.activeSeries
-                }
-            }
-        }
-        refreshTheme("")
-    }
-
-    fun refreshTheme(seriesName: String = GtaThemeHelper.activeSeries) {
-        if (!::binding.isInitialized) return
-        binding.toolbar.post {
-            GtaThemeHelper.applyToolbarAndScreen(this, binding.toolbar, binding.root, seriesName)
-        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {

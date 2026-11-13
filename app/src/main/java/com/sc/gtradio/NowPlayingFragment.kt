@@ -61,19 +61,6 @@ class NowPlayingFragment : Fragment() {
 
         binding.stationTitle.text = getString(R.string.nothing_playing)
         binding.stationAlbum.visibility = View.GONE
-        applyPlayerTheme(GtaThemeHelper.activeSeries)
-    }
-
-    private fun applyPlayerTheme(series: String) {
-        if (_binding == null) return
-        GtaThemeHelper.stylePlayerBar(
-            binding.nowPlayingRoot,
-            binding.topDivider,
-            binding.stationTitle,
-            binding.stationAlbum,
-            listOf(binding.previousButton, binding.playStopButton, binding.nextButton),
-            series
-        )
     }
 
     override fun onDestroyView() {
@@ -83,13 +70,6 @@ class NowPlayingFragment : Fragment() {
 
     private fun updateState(playbackState: PlaybackStateCompat, mediaMetadata: MediaMetadataCompat) {
         if (_binding == null) return
-
-        val playingSeries = mediaMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM) ?: ""
-        if (playingSeries.isNotBlank() && playingSeries != GtaThemeHelper.activeSeries) {
-            GtaThemeHelper.activeSeries = playingSeries
-            (activity as? MainActivity)?.refreshTheme(playingSeries)
-        }
-        applyPlayerTheme(GtaThemeHelper.activeSeries)
 
         if (mediaMetadata.description.mediaId?.isNotBlank() == true) {
             binding.stationTitle.text = mediaMetadata.description.title
