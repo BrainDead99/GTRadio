@@ -9,7 +9,6 @@ import android.support.v4.media.session.PlaybackStateCompat
 import androidx.documentfile.provider.DocumentFile
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.FileUtils
-import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.common.SimpleFileInfo
