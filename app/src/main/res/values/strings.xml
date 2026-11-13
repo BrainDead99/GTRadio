@@ -14,7 +14,7 @@
 
     <string name="title_activity_settings">Settings</string>
     <string name="library_header">Library</string>
-    <string name="music_path_title">Path to Library (Raw OSW / PC Streams / GTRadio)</string>
+    <string name="music_path_title">Path to Library</string>
     <string name="playback_header">Playback</string>
 
     <string name="ads_enabled_title">Play Ads</string>
@@ -26,7 +26,7 @@
     <string name="news_reports_enabled_title">Play News Reports</string>
     <string name="news_reports_summary">Note: This setting only affects gen 3 stations.</string>
 
-    <string name="metadata_header">Metadata &amp; Era-Accurate Artwork</string>
+    <string name="metadata_header">GTA SA Metadata &amp; Artwork</string>
     <string name="show_song_metadata_key">show_song_metadata_enabled</string>
     <string name="show_song_metadata_title">Show Song Name, Artist &amp; WCTR Hosts</string>
     <string name="show_song_metadata_summary">When off, the player bar only shows the station name and logo like original GTRadio.</string>
@@ -38,6 +38,11 @@
     <string name="scan_album_art_key">scan_download_album_art</string>
     <string name="scan_album_art_title">Scan &amp; Download All GTA SA Album Art</string>
     <string name="scan_album_art_summary">Tap to download original release-era album covers and album titles for offline use.</string>
+
+    <string name="diagnostics_header">Diagnostics</string>
+    <string name="view_logs_key">view_diagnostic_logs</string>
+    <string name="view_logs_title">View / Copy Diagnostic Logs</string>
+    <string name="view_logs_summary">Inspect app logs or copy them for troubleshooting (also saved to gtradio_debug.log).</string>
 
     <string name="nothing_playing">Nothing Playing</string>
     <string name="no_groups_available">No groups available. Double check the selected folder and your folder structure.</string>

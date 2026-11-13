@@ -3,6 +3,7 @@ package com.sc.gtradio.media.stations
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.sc.gtradio.common.GTRadioLogger
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
@@ -57,20 +58,45 @@ object SaMetadataRepository {
     private val remasterBanRegex = Regex("remaster|deluxe|expanded|anniversary|reissue|greatest hits|best of|anthology|edition|live", RegexOption.IGNORE_CASE)
     private val yearRegex = Regex("^(\\d{4})")
 
-    val streamOrder = listOf("Playback FM", "KROSE", "K-DST", "Bounce FM", "SFUR", "Radio Los Santos", "Radio X", "CSR", "K-JAH", "Master Sounds", "WCTR")
+    // Built-in fallback station definitions so raw streams always appear even if ini fails
+    val defaultStations = mapOf(
+        "CH" to Pair("Playback FM", "Forth Right MC"),
+        "CO" to Pair("KROSE", "Mary-Beth Maybell"),
+        "CR" to Pair("K-DST", "Tommy 'The Nightmare' Smith"),
+        "DS" to Pair("Bounce FM", "The Funktipus"),
+        "HC" to Pair("SFUR", "Hans Oberlander"),
+        "MH" to Pair("Radio Los Santos", "Julio G"),
+        "MR" to Pair("Radio X", "Sage"),
+        "NJ" to Pair("CSR", "Philip 'PM' Michaels"),
+        "RE" to Pair("K-JAH", "Marshall Peters & Johnny Lawton"),
+        "RG" to Pair("Master Sounds", "Johnny 'The Love Giant' Parkinson"),
+        "TK" to Pair("WCTR", "WCTR Talk Radio"),
+        "ADVERTS" to Pair("Adverts", "San Andreas Adverts")
+    )
 
     @Synchronized
     fun ensureLoaded(context: Context) {
-        if (loaded) return
+        GTRadioLogger.init(context)
+        if (loaded && byStreamCode.isNotEmpty()) return
         loaded = true
+
+        // 1. Seed default stations first so station list never fails
+        for ((code, info) in defaultStations) {
+            val st = SaStationMeta(code, info.first, info.second, emptyMap())
+            byStreamCode[code] = st
+            byStationName[info.first.uppercase()] = st
+        }
+
+        // 2. Load detailed track metadata from bundled assets/sa_metadata.ini
         try {
             context.assets.open("sa_metadata.ini").use { input ->
                 BufferedReader(InputStreamReader(input)).use { reader ->
                     parseIni(reader)
                 }
             }
+            GTRadioLogger.log("SaMetadataRepository: Loaded sa_metadata.ini (${byStreamCode.size} streams)")
         } catch (e: Exception) {
-            e.printStackTrace()
+            GTRadioLogger.log("SaMetadataRepository: Failed to open assets/sa_metadata.ini", e)
         }
     }
 
@@ -159,7 +185,7 @@ object SaMetadataRepository {
                 u.contains("(MID)") || u.contains("(INTRO") || u.contains("(OUTRO") || isWctr -> {
                     val key = tr.cleanTitle
                     songArtists[key] = tr.artist
-                    val bucket = songBuckets.getOrPut(key) { Triple( mutableListOf(), mutableListOf(), mutableListOf() ) }
+                    val bucket = songBuckets.getOrPut(key) { Triple(mutableListOf(), mutableListOf(), mutableListOf()) }
                     when {
                         u.contains("(INTRO DJ") -> bucket.first.add(num)
                         u.contains("(INTRO)") -> cleanIntros[key] = num
@@ -190,11 +216,6 @@ object SaMetadataRepository {
     fun getByStreamCode(context: Context, code: String): SaStationMeta? {
         ensureLoaded(context)
         return byStreamCode[code.uppercase()]
-    }
-
-    fun getByStationName(context: Context, name: String): SaStationMeta? {
-        ensureLoaded(context)
-        return byStationName[name.uppercase()]
     }
 
     private fun cacheKey(artist: String, songTitle: String): String {

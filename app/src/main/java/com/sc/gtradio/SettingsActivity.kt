@@ -1,16 +1,23 @@
 package com.sc.gtradio
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
+import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.stations.SaMetadataRepository
 import java.util.concurrent.Executors
 
@@ -43,7 +50,12 @@ class SettingsActivity : AppCompatActivity() {
 
         private val permissionResultLauncher = registerForActivityResult(contract) { result: Uri? ->
             if (result == null) return@registerForActivityResult
-            activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            GTRadioLogger.log("SettingsActivity: Selected library URI: $result")
+            try {
+                activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: Exception) {
+                GTRadioLogger.log("SettingsActivity: takePersistableUriPermission error", e)
+            }
             val sharedPref = activity?.applicationContext?.let { PreferenceManager.getDefaultSharedPreferences(it) }
             with(sharedPref?.edit()) {
                 this?.putString(getString(R.string.radio_folders_uri_key), result.toString())
@@ -65,6 +77,39 @@ class SettingsActivity : AppCompatActivity() {
                 startEraArtworkScan(scanPref)
                 true
             }
+
+            val logsPref = findPreference<Preference>(getString(R.string.view_logs_key))
+            logsPref?.setOnPreferenceClickListener {
+                showDiagnosticLogsDialog()
+                true
+            }
+        }
+
+        private fun showDiagnosticLogsDialog() {
+            val ctx = requireContext()
+            val logText = GTRadioLogger.getLogsText()
+            val tv = TextView(ctx).apply {
+                text = logText
+                textSize = 11f
+                setPadding(32, 24, 32, 24)
+                setTextIsSelectable(true)
+            }
+            val scroll = ScrollView(ctx).apply { addView(tv) }
+
+            AlertDialog.Builder(ctx)
+                .setTitle("Diagnostic Logs")
+                .setView(scroll)
+                .setPositiveButton("Copy Logs") { _, _ ->
+                    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("GTRadio Logs", logText))
+                    Toast.makeText(ctx, "Logs copied to clipboard!", Toast.LENGTH_SHORT).show()
+                }
+                .setNeutralButton("Clear") { _, _ ->
+                    GTRadioLogger.clear(ctx)
+                    Toast.makeText(ctx, "Logs cleared.", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("Close", null)
+                .show()
         }
 
         private fun startEraArtworkScan(scanPref: Preference) {

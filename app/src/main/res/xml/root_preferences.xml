@@ -49,4 +49,12 @@
             app:summary="@string/scan_album_art_summary" />
     </PreferenceCategory>
 
+    <PreferenceCategory android:title="@string/diagnostics_header">
+        <Preference
+            android:clickable="true"
+            app:key="@string/view_logs_key"
+            app:title="@string/view_logs_title"
+            app:summary="@string/view_logs_summary" />
+    </PreferenceCategory>
+
 </PreferenceScreen>

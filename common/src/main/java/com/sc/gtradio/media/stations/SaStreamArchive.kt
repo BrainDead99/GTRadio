@@ -2,6 +2,7 @@ package com.sc.gtradio.media.stations
 
 import android.content.Context
 import android.net.Uri
+import com.sc.gtradio.common.GTRadioLogger
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -47,8 +48,9 @@ class SaStreamArchive(
                     }
                 }
             }
+            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexed ${slices.size} tracks ($containerType)")
         } catch (e: Exception) {
-            e.printStackTrace()
+            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexing failed", e)
         }
     }
 
@@ -193,8 +195,9 @@ class SaStreamArchive(
             if (outFile.exists() && outFile.length() > 0L) {
                 return Uri.fromFile(outFile)
             }
+            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexed ${slices.size} tracks ($containerType)")
         } catch (e: Exception) {
-            e.printStackTrace()
+            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexing failed", e)
         }
         return null
     }

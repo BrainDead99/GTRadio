@@ -27,6 +27,7 @@ import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SimpleExoPlayer
 import androidx.media3.ui.PlayerNotificationManager
+import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.stations.*
 import java.util.ArrayList
 
@@ -42,9 +43,10 @@ import java.util.ArrayList
             if (prefs != null) {
                 when(key) {
                     resources.getString(R.string.radio_folders_uri_key) -> {
-                        //Update stations list
+                        GTRadioLogger.log("GTRadioMusicService: Library URI preference changed, rescanning...")
                         this@GTRadioMusicService.stationGroups = this@GTRadioMusicService.getStationGroups()
                         this@GTRadioMusicService.fullStationList = this@GTRadioMusicService.getFullStationList()
+                        this@GTRadioMusicService.notifyChildrenChanged("root")
                     }
                     resources.getString(R.string.ads_enabled_preference_key)  -> {
                         //Update ads enabled
@@ -385,7 +387,12 @@ import java.util.ArrayList
 
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaItem>>) {
         if (parentId.isBlank() || parentId == "root") {
+            if (stationGroups.isEmpty()) {
+                stationGroups = getStationGroups()
+                fullStationList = getFullStationList()
+            }
             val groups = ArrayList(stationGroups.map { x -> x.mediaItem })
+            GTRadioLogger.log("GTRadioMusicService.onLoadChildren(root): sending ${groups.size} groups")
             result.sendResult(groups)
             return
         }

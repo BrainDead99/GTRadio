@@ -17,6 +17,7 @@ import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.databinding.FragmentGrouplistBinding
 import com.sc.gtradio.databinding.FragmentStationgroupitemBinding
 import com.sc.gtradio.media.MusicServiceConnection
@@ -28,14 +29,22 @@ class GroupList : Fragment() {
 
     private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
         override fun onChildrenLoaded(parentId: String, children: List<MediaBrowserCompat.MediaItem>) {
+            GTRadioLogger.log("GroupList.onChildrenLoaded: parentId=$parentId, count=${children.size}")
             if (_binding != null) {
-                val sharedPref = PreferenceManager.getDefaultSharedPreferences(requireActivity().applicationContext)
-                val radioUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "")
-
-                if (children.isEmpty() && activity?.contentResolver?.persistedUriPermissions?.any { x -> x.uri == Uri.parse(radioUri) && x.isReadPermission } == true) {
-                    binding.textviewNogroups.visibility = View.VISIBLE
-                    binding.sadFaceIcon.visibility = View.VISIBLE
+                val hasValidFolder = hasValidLibraryPermission()
+                if (children.isEmpty()) {
+                    binding.stationList.visibility = View.GONE
+                    if (hasValidFolder) {
+                        binding.textviewNogroups.visibility = View.VISIBLE
+                        binding.sadFaceIcon.visibility = View.VISIBLE
+                    } else {
+                        binding.textviewNogroups.visibility = View.INVISIBLE
+                        binding.sadFaceIcon.visibility = View.INVISIBLE
+                    }
                 } else {
+                    binding.stationList.visibility = View.VISIBLE
+                    binding.buttonSelect.visibility = View.GONE
+                    binding.textviewNofolder.visibility = View.GONE
                     binding.textviewNogroups.visibility = View.INVISIBLE
                     binding.sadFaceIcon.visibility = View.INVISIBLE
                 }
@@ -65,27 +74,52 @@ class GroupList : Fragment() {
     }
 
     private val permissionResultLauncher = registerForActivityResult(contract) { result: Uri? ->
-        if (result == null) return@registerForActivityResult
-        activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (result == null) {
+            GTRadioLogger.log("GroupList: Folder picker cancelled by user.")
+            return@registerForActivityResult
+        }
+        GTRadioLogger.log("GroupList: Folder selected: $result")
+        try {
+            activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (e: Exception) {
+            GTRadioLogger.log("GroupList: takePersistableUriPermission error", e)
+        }
         val sharedPref = activity?.applicationContext?.let { PreferenceManager.getDefaultSharedPreferences(it) }
         with(sharedPref?.edit()) {
             this?.putString(getString(R.string.radio_folders_uri_key), result.toString())
             this?.apply()
         }
+        updateLibrarySelectedComponents()
+        reloadRootSubscription()
     }
 
     private val sharedPrefListener = GroupListOnSharedPrefChange()
     private inner class GroupListOnSharedPrefChange : SharedPreferences.OnSharedPreferenceChangeListener {
         override fun onSharedPreferenceChanged(prefs: SharedPreferences?, key: String?) {
-            if (prefs != null && key == resources.getString(R.string.radio_folders_uri_key)) {
+            if (prefs != null && _binding != null && isAdded && key == getString(R.string.radio_folders_uri_key)) {
                 updateLibrarySelectedComponents()
-                musicServiceConnection?.unsubscribe("root", subscriptionCallback)
-                musicServiceConnection?.subscribe("root", subscriptionCallback)
+                reloadRootSubscription()
             }
         }
     }
 
+    private fun reloadRootSubscription() {
+        musicServiceConnection?.unsubscribe("root", subscriptionCallback)
+        musicServiceConnection?.subscribe("root", subscriptionCallback)
+    }
+
+    private fun hasValidLibraryPermission(): Boolean {
+        val ctx = context?.applicationContext ?: return false
+        val sharedPref = PreferenceManager.getDefaultSharedPreferences(ctx)
+        val radioUri = sharedPref.getString(getString(R.string.radio_folders_uri_key), "")
+        if (radioUri.isNullOrEmpty()) return false
+        return activity?.contentResolver?.persistedUriPermissions?.any { x ->
+            x.uri == Uri.parse(radioUri) && x.isReadPermission
+        } == true
+    }
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
+        GTRadioLogger.init(requireContext())
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(requireActivity().applicationContext)
         sharedPref.registerOnSharedPreferenceChangeListener(sharedPrefListener)
 
@@ -101,34 +135,40 @@ class GroupList : Fragment() {
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
-        binding.buttonSelect.setOnClickListener { permissionResultLauncher.launch(null) }
-        updateLibrarySelectedComponents()
+        binding.buttonSelect.setOnClickListener {
+            GTRadioLogger.log("GroupList: Select button tapped, launching folder picker.")
+            permissionResultLauncher.launch(null)
+        }
         binding.stationList.layoutManager = LinearLayoutManager(context)
         binding.stationList.adapter = listAdapter
+        updateLibrarySelectedComponents()
     }
 
     override fun onResume() {
         super.onResume()
         updateLibrarySelectedComponents()
+        reloadRootSubscription()
     }
 
     private fun updateLibrarySelectedComponents() {
+        if (_binding == null) return
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(requireActivity().applicationContext)
         val radioUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "")
-        if (radioUri.isNullOrEmpty() || activity?.contentResolver?.persistedUriPermissions?.any { x -> x.uri == Uri.parse(radioUri) && x.isReadPermission } != true) {
+        if (!hasValidLibraryPermission()) {
             if (!radioUri.isNullOrEmpty()) {
                 with(sharedPref?.edit()) {
                     this?.putString(getString(R.string.radio_folders_uri_key), "")
                     this?.apply()
                 }
             }
+            binding.stationList.visibility = View.GONE
             binding.buttonSelect.visibility = View.VISIBLE
             binding.textviewNofolder.visibility = View.VISIBLE
             binding.textviewNogroups.visibility = View.INVISIBLE
             binding.sadFaceIcon.visibility = View.INVISIBLE
         } else {
-            binding.buttonSelect.visibility = View.INVISIBLE
-            binding.textviewNofolder.visibility = View.INVISIBLE
+            binding.buttonSelect.visibility = View.GONE
+            binding.textviewNofolder.visibility = View.GONE
         }
     }
 
