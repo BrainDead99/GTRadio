@@ -32,7 +32,7 @@ class SaStreamArchive(
 ) {
     private val slices = HashMap<Int, SaTrackSlice>()
     private var indexed = false
-    private var pcXorKey: ByteArray = ByteArray(16)
+    private var pcXorKey: ByteArray = intArrayOf(0xEA, 0x3A, 0xC4, 0xA1, 0x9A, 0xA8, 0x14, 0xF3, 0x48, 0xB0, 0xD7, 0x23, 0x9D, 0xE8, 0xFF, 0xF1).map { it.toByte() }.toByteArray()
 
     @Synchronized
     fun ensureIndexed() {
@@ -64,12 +64,24 @@ class SaStreamArchive(
         return slices.keys
     }
 
+    private fun readFully(ch: FileChannel, dst: ByteBuffer, position: Long): Int {
+        var total = 0
+        var pos = position
+        while (dst.hasRemaining()) {
+            val n = ch.read(dst, pos)
+            if (n <= 0) break
+            total += n
+            pos += n
+        }
+        return total
+    }
+
     private fun indexOswZip(ch: FileChannel) {
         val size = ch.size()
         if (size < 22) return
         val tailSize = minOf(size, 65557L).toInt()
         val tailBuf = ByteBuffer.allocate(tailSize).order(ByteOrder.LITTLE_ENDIAN)
-        ch.read(tailBuf, size - tailSize)
+        readFully(ch, tailBuf, size - tailSize)
         val arr = tailBuf.array()
 
         var eocdPos = -1
@@ -88,7 +100,7 @@ class SaStreamArchive(
         val cdOffset = tailBuf.getInt(eocdPos + 16).toLong() and 0xFFFFFFFFL
 
         val cdBuf = ByteBuffer.allocate(cdSize.toInt()).order(ByteOrder.LITTLE_ENDIAN)
-        ch.read(cdBuf, cdOffset)
+        readFully(ch, cdBuf, cdOffset)
         cdBuf.flip()
 
         val numRegex = Regex("(\\d+)")
@@ -123,15 +135,21 @@ class SaStreamArchive(
         val fileSize = ch.size()
         if (fileSize < 8080L) return
 
-        // Bytes 7984..7999 (16-byte aligned) are always 0xCD padding at the end of the 8000-byte beat table
-        val keyProbe = ByteBuffer.allocate(16)
-        ch.read(keyProbe, 7984L)
-        val kp = keyProbe.array()
-        val derived = ByteArray(16)
-        for (i in 0 until 16) {
-            derived[i] = (kp[i].toInt() xor 0xCD).toByte()
+        // Derive 16-byte XOR key from the four 16-byte-aligned blocks at 8000..8063
+        // (7 of the 8 length/rate slots are 0xCDCDCDCD, so 3 of the 4 16-byte blocks are pure 0xCD)
+        val probe64 = ByteBuffer.allocate(64)
+        if (readFully(ch, probe64, 8000L) == 64) {
+            val raw64 = probe64.array()
+            val b0 = raw64.copyOfRange(0, 16)
+            val b1 = raw64.copyOfRange(16, 32)
+            val b2 = raw64.copyOfRange(32, 48)
+            val padBlock = if (b0.contentEquals(b1) || b0.contentEquals(b2)) b0 else b1
+            val derived = ByteArray(16)
+            for (i in 0 until 16) {
+                derived[i] = (padBlock[i].toInt() xor 0xCD).toByte()
+            }
+            pcXorKey = derived
         }
-        pcXorKey = derived
 
         var offset = 0L
         var trackNum = 1
@@ -139,7 +157,7 @@ class SaStreamArchive(
 
         while (offset + 8068L < fileSize) {
             hdrBuf.clear()
-            val readCount = ch.read(hdrBuf, offset + 8000L)
+            val readCount = readFully(ch, hdrBuf, offset + 8000L)
             if (readCount < 68) break
 
             val raw68 = hdrBuf.array()
@@ -154,7 +172,7 @@ class SaStreamArchive(
             for (slot in 0 until 8) {
                 val lenInt = bb.getInt(slot * 8)
                 val rateInt = bb.getInt(slot * 8 + 4)
-                if (lenInt != -842150451 && rateInt != -842150451 && lenInt > 0) { // -842150451 is 0xCDCDCDCD
+                if (lenInt != -842150451 && rateInt != -842150451 && lenInt > 0) {
                     val cand = lenInt.toLong() and 0xFFFFFFFFL
                     if (cand > 0L && offset + 8068L + cand <= fileSize) {
                         oggLen = cand
@@ -184,6 +202,17 @@ class SaStreamArchive(
             return Uri.fromFile(outFile)
         }
 
+        // Keep cache folder tidy so extracted segments never bloat phone storage
+        try {
+            val cachedFiles = cacheDir.listFiles()
+            if (cachedFiles != null && cachedFiles.size > 60) {
+                cachedFiles.sortBy { it.lastModified() }
+                for (i in 0 until 20) {
+                    cachedFiles[i].delete()
+                }
+            }
+        } catch (_: Exception) {}
+
         try {
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 FileInputStream(pfd.fileDescriptor).channel.use { ch ->
@@ -205,13 +234,13 @@ class SaStreamArchive(
 
     private fun extractOswSlice(ch: FileChannel, slice: SaTrackSlice, outFile: File) {
         val lfh = ByteBuffer.allocate(30).order(ByteOrder.LITTLE_ENDIAN)
-        ch.read(lfh, slice.dataOffset)
+        readFully(ch, lfh, slice.dataOffset)
         val nameLen = lfh.getShort(26).toInt() and 0xFFFF
         val extraLen = lfh.getShort(28).toInt() and 0xFFFF
         val payloadOffset = slice.dataOffset + 30L + nameLen + extraLen
 
         val compBytes = ByteArray(slice.dataLength.toInt())
-        ch.read(ByteBuffer.wrap(compBytes), payloadOffset)
+        readFully(ch, ByteBuffer.wrap(compBytes), payloadOffset)
 
         FileOutputStream(outFile).use { out ->
             if (slice.compressionMethod == 0) {
@@ -226,7 +255,7 @@ class SaStreamArchive(
 
     private fun extractPcSlice(ch: FileChannel, slice: SaTrackSlice, outFile: File) {
         val raw = ByteArray(slice.dataLength.toInt())
-        ch.read(ByteBuffer.wrap(raw), slice.dataOffset)
+        readFully(ch, ByteBuffer.wrap(raw), slice.dataOffset)
         val baseMod = (slice.dataOffset % 16L).toInt()
         for (i in raw.indices) {
             val k = pcXorKey[(baseMod + i) and 15]
