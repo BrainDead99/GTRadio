@@ -32,7 +32,7 @@ class SaStreamArchive(
 ) {
     private val slices = HashMap<Int, SaTrackSlice>()
     private var indexed = false
-    private var pcXorKey: ByteArray = intArrayOf(0xEA, 0x3A, 0xC4, 0xA1, 0x9A, 0xA8, 0x14, 0xF3, 0x48, 0xB0, 0xD7, 0x23, 0x9D, 0xE8, 0xFF, 0xF1).map { it.toByte() }.toByteArray()
+    private var pcXorKey: ByteArray = ByteArray(16)
 
     @Synchronized
     fun ensureIndexed() {
@@ -121,53 +121,55 @@ class SaStreamArchive(
 
     private fun indexPcStream(ch: FileChannel) {
         val fileSize = ch.size()
-        if (fileSize < 8024L) return
+        if (fileSize < 8080L) return
 
-        // Auto-derive 16-byte XOR key from Track 1 boundary (8000..8021)
-        val probe = ByteBuffer.allocate(8032)
-        ch.read(probe, 0L)
-        val p = probe.array()
+        // Bytes 7984..7999 (16-byte aligned) are always 0xCD padding at the end of the 8000-byte beat table
+        val keyProbe = ByteBuffer.allocate(16)
+        ch.read(keyProbe, 7984L)
+        val kp = keyProbe.array()
         val derived = ByteArray(16)
-        // Bytes 8000..8003 decrypt to 01 00 FF FF (little-endian 0xFFFF0001)
-        derived[0] = (p[8000].toInt() xor 0x01).toByte()
-        derived[1] = (p[8001].toInt() xor 0x00).toByte()
-        derived[2] = (p[8002].toInt() xor 0xFF).toByte()
-        derived[3] = (p[8003].toInt() xor 0xFF).toByte()
-        // Bytes 8008..8021 decrypt to "OggS" + 0x00, 0x02 + 8 zero bytes
-        val oggHeader = byteArrayOf(
-            0x4F, 0x67, 0x67, 0x53, 0x00, 0x02,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-        )
-        for (i in 8 until 16) {
-            derived[i] = (p[8000 + i].toInt() xor oggHeader[i - 8].toInt()).toByte()
-        }
-        // Bytes 64..79 are unused header slots filled with repeating padding byte (0xCD or 0x00)
-        val padByte = p[64].toInt() xor derived[0].toInt()
-        for (i in 4..7) {
-            derived[i] = (p[64 + i].toInt() xor padByte).toByte()
+        for (i in 0 until 16) {
+            derived[i] = (kp[i].toInt() xor 0xCD).toByte()
         }
         pcXorKey = derived
 
         var offset = 0L
         var trackNum = 1
-        val hdrBuf = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN)
-        while (offset + 8008L < fileSize) {
+        val hdrBuf = ByteBuffer.allocate(68)
+
+        while (offset + 8068L < fileSize) {
             hdrBuf.clear()
-            ch.read(hdrBuf, offset + 8000L)
-            val raw8 = hdrBuf.array()
-            val dec8 = ByteArray(8)
-            for (i in 0 until 8) {
+            val readCount = ch.read(hdrBuf, offset + 8000L)
+            if (readCount < 68) break
+
+            val raw68 = hdrBuf.array()
+            val dec68 = ByteArray(68)
+            for (i in 0 until 68) {
                 val kIdx = ((offset + 8000L + i) % 16L).toInt()
-                dec8[i] = (raw8[i].toInt() xor pcXorKey[kIdx].toInt()).toByte()
+                dec68[i] = (raw68[i].toInt() xor pcXorKey[kIdx].toInt()).toByte()
             }
-            val bb = ByteBuffer.wrap(dec8).order(ByteOrder.LITTLE_ENDIAN)
-            val magic = bb.int
-            val oggLen = bb.int.toLong() and 0xFFFFFFFFL
-            if (oggLen <= 0L || offset + 8008L + oggLen > fileSize) {
+
+            val bb = ByteBuffer.wrap(dec68).order(ByteOrder.LITTLE_ENDIAN)
+            var oggLen = -1L
+            for (slot in 0 until 8) {
+                val lenInt = bb.getInt(slot * 8)
+                val rateInt = bb.getInt(slot * 8 + 4)
+                if (lenInt != -842150451 && rateInt != -842150451 && lenInt > 0) { // -842150451 is 0xCDCDCDCD
+                    val cand = lenInt.toLong() and 0xFFFFFFFFL
+                    if (cand > 0L && offset + 8068L + cand <= fileSize) {
+                        oggLen = cand
+                        break
+                    }
+                }
+            }
+
+            if (oggLen <= 0L) {
+                GTRadioLogger.log("SaStreamArchive[$streamCode]: Stopped at offset $offset (invalid oggLen=$oggLen)")
                 break
             }
-            slices[trackNum] = SaTrackSlice(trackNum, offset + 8008L, oggLen, 0)
-            offset += 8008L + oggLen
+
+            slices[trackNum] = SaTrackSlice(trackNum, offset + 8068L, oggLen, 0)
+            offset += 8068L + oggLen
             trackNum++
         }
     }
@@ -178,7 +180,7 @@ class SaStreamArchive(
         val ext = if (containerType == SaContainerType.MOBILE_OSW) "mp3" else "ogg"
         val cacheDir = File(context.cacheDir, "sa_stream_tracks").apply { mkdirs() }
         val outFile = File(cacheDir, "${streamCode}_${trackNum}.$ext")
-        if (outFile.exists() && outFile.length() > 128L) {
+        if (outFile.exists() && outFile.length() == slice.dataLength) {
             return Uri.fromFile(outFile)
         }
 
@@ -195,9 +197,8 @@ class SaStreamArchive(
             if (outFile.exists() && outFile.length() > 0L) {
                 return Uri.fromFile(outFile)
             }
-            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexed ${slices.size} tracks ($containerType)")
         } catch (e: Exception) {
-            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexing failed", e)
+            GTRadioLogger.log("SaStreamArchive[$streamCode]: Failed extracting track $trackNum", e)
         }
         return null
     }

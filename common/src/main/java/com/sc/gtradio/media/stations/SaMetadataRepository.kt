@@ -322,7 +322,9 @@ object SaMetadataRepository {
                 }
                 return true
             }
-        } catch (_: Exception) {}
+        } catch (e: Exception) {
+            GTRadioLogger.log("iTunes art fetch error for $artist - $songTitle", e)
+        }
         return false
     }
 

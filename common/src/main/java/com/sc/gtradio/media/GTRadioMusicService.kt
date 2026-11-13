@@ -44,6 +44,8 @@ import java.util.ArrayList
                 when(key) {
                     resources.getString(R.string.radio_folders_uri_key) -> {
                         GTRadioLogger.log("GTRadioMusicService: Library URI preference changed, rescanning...")
+                        this@GTRadioMusicService.activeStation?.stop()
+                        this@GTRadioMusicService.activeStation = null
                         this@GTRadioMusicService.stationGroups = this@GTRadioMusicService.getStationGroups()
                         this@GTRadioMusicService.fullStationList = this@GTRadioMusicService.getFullStationList()
                         this@GTRadioMusicService.notifyChildrenChanged("root")
