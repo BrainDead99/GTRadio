@@ -17,6 +17,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
+import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.stations.SaMetadataRepository
 import java.util.concurrent.Executors
@@ -48,19 +49,36 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
-        private val permissionResultLauncher = registerForActivityResult(contract) { result: Uri? ->
+        private val libraryResultLauncher = registerForActivityResult(contract) { result: Uri? ->
             if (result == null) return@registerForActivityResult
             GTRadioLogger.log("SettingsActivity: Selected library URI: $result")
             try {
-                activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: Exception) {
-                GTRadioLogger.log("SettingsActivity: takePersistableUriPermission error", e)
+                activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            } catch (_: Exception) {
+                try { activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
             }
             val sharedPref = activity?.applicationContext?.let { PreferenceManager.getDefaultSharedPreferences(it) }
             with(sharedPref?.edit()) {
                 this?.putString(getString(R.string.radio_folders_uri_key), result.toString())
                 this?.apply()
             }
+            context?.let { DynamicThemeManager.forceRescan(it) }
+        }
+
+        private val themeResultLauncher = registerForActivityResult(contract) { result: Uri? ->
+            if (result == null) return@registerForActivityResult
+            GTRadioLogger.log("SettingsActivity: Selected Dynamic Theme URI: $result")
+            try {
+                activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            } catch (_: Exception) {
+                try { activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Exception) {}
+            }
+            val sharedPref = activity?.applicationContext?.let { PreferenceManager.getDefaultSharedPreferences(it) }
+            with(sharedPref?.edit()) {
+                this?.putString(getString(R.string.dynamic_theme_uri_key), result.toString())
+                this?.apply()
+            }
+            context?.let { DynamicThemeManager.forceRescan(it) }
         }
 
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
@@ -68,7 +86,13 @@ class SettingsActivity : AppCompatActivity() {
 
             val pathPref = findPreference<Preference>(getString(R.string.radio_folders_uri_key))
             pathPref?.setOnPreferenceClickListener {
-                permissionResultLauncher.launch(null)
+                libraryResultLauncher.launch(null)
+                true
+            }
+
+            val themePathPref = findPreference<Preference>(getString(R.string.dynamic_theme_uri_key))
+            themePathPref?.setOnPreferenceClickListener {
+                themeResultLauncher.launch(null)
                 true
             }
 

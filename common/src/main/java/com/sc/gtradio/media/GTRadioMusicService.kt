@@ -42,7 +42,7 @@ import java.util.ArrayList
         override fun onSharedPreferenceChanged(prefs: SharedPreferences?, key: String?) {
             if (prefs != null) {
                 when(key) {
-                    resources.getString(R.string.radio_folders_uri_key) -> {
+                    "dynamic_theme_uri", resources.getString(R.string.radio_folders_uri_key) -> {
                         GTRadioLogger.log("GTRadioMusicService: Library URI preference changed, rescanning...")
                         this@GTRadioMusicService.activeStation?.stop()
                         this@GTRadioMusicService.activeStation = null

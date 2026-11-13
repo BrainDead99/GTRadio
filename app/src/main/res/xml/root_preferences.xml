@@ -9,6 +9,20 @@
             app:useSimpleSummaryProvider="true" />
     </PreferenceCategory>
 
+    <PreferenceCategory app:title="@string/theme_header">
+        <SwitchPreference
+            android:defaultValue="true"
+            android:key="@string/enable_dynamic_theme_key"
+            android:summary="@string/enable_dynamic_theme_summary"
+            android:title="@string/enable_dynamic_theme_title" />
+
+        <Preference
+            android:clickable="true"
+            app:key="@string/dynamic_theme_uri_key"
+            app:title="@string/dynamic_theme_path_title"
+            app:useSimpleSummaryProvider="true" />
+    </PreferenceCategory>
+
     <PreferenceCategory android:title="@string/playback_header">
         <SwitchPreference
             android:defaultValue="true"

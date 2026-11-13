@@ -7,7 +7,9 @@ import android.support.v4.media.MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.documentfile.provider.DocumentFile
+import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.FileUtils
+import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.common.SimpleFileInfo
@@ -181,9 +183,14 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
             val stName = stMeta?.stationName ?: SaMetadataRepository.defaultStations[code]?.first ?: code
             val mediaId = "${folderDoc.uri}#SA_RAW#$code"
 
+            val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
+            val iconUri = themePack?.stationIconUris?.get(DynamicThemeManager.normalizeStationKey(stName))
+            val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512)
             val metadata = MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)
                 .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stName)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, iconBmp)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, iconBmp)
                 .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
                 .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, stName)
                 .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
@@ -197,8 +204,9 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     }
 
     private fun getMediaItem(folderDoc: DocumentFile, simpleFiles: Array<SimpleFileInfo>, groupName: String): MediaBrowserCompat.MediaItem {
-        val logoUri = simpleFiles.find { x -> !x.isDirectory && x.name.uppercase().contains("LOGO") }?.uri
-        val logoBitmap = FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
+        val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
+        val logoUri = simpleFiles.find { x -> !x.isDirectory && x.name.uppercase().contains("LOGO") }?.uri ?: themePack?.groupLogoUri
+        val logoBitmap = DynamicThemeManager.loadBitmap(context, logoUri, 512) ?: FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
 
         val metadata = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, folderDoc.uri.toString())

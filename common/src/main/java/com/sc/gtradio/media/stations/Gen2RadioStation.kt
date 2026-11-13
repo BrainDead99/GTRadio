@@ -131,17 +131,26 @@ import java.util.*
         return dur
     }
 
-    private fun buildStationMetadata(trackTitle: String, trackSubtitle: String, art: Bitmap?): MediaMetadataCompat {
+    private fun buildStationMetadata(
+        trackTitle: String,
+        trackSubtitle: String,
+        art: Bitmap?,
+        isSongOrShow: Boolean = false,
+        cleanArtist: String = "",
+        cleanAlbum: String = ""
+    ): MediaMetadataCompat {
         return MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, trackTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, trackTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, trackSubtitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, trackSubtitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, stationTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, cleanArtist.ifBlank { trackSubtitle })
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, cleanAlbum)
+            .putString(MediaMetadataCompat.METADATA_KEY_WRITER, stationTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, "$stationTitle • $groupTitle")
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
+            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, if (isSongOrShow) 1L else 0L)
             .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
             .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, art)
             .build()
@@ -215,6 +224,14 @@ import java.util.*
             try { retriever.release() } catch (_: Exception) {}
         }
 
+        var rawAlbum: String = ""
+        try {
+            val retr2 = MediaMetadataRetriever()
+            retr2.setDataSource(context, uri)
+            rawAlbum = retr2.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: ""
+            retr2.release()
+        } catch (_: Exception) {}
+
         if (isWctr) {
             val noSeg = suffixRegex.replace(rawTitle, "").trim()
             val cleanShow = episodeRegex.replace(noSeg, "").trim().ifBlank { noSeg }
@@ -222,7 +239,10 @@ import java.util.*
                 _currentMetadata = buildStationMetadata(
                     trackTitle = "News",
                     trackSubtitle = stationTitle,
-                    art = stationLogo
+                    art = stationLogo,
+                    isSongOrShow = true,
+                    cleanArtist = stationTitle,
+                    cleanAlbum = ""
                 )
             } else {
                 val host = resolveWctrHost(cleanShow, rawTitle, rawArtist)
@@ -230,16 +250,25 @@ import java.util.*
                 _currentMetadata = buildStationMetadata(
                     trackTitle = cleanShow,
                     trackSubtitle = subtitle,
-                    art = stationLogo
+                    art = stationLogo,
+                    isSongOrShow = true,
+                    cleanArtist = host.ifBlank { stationTitle },
+                    cleanAlbum = ""
                 )
             }
         } else {
             val cleanTitle = suffixRegex.replace(rawTitle, "").trim()
-            val subtitle = if (!rawArtist.isNullOrBlank()) "$rawArtist • $stationTitle" else stationTitle
+            val artistStr = rawArtist ?: ""
+            val cachedAlb = SaMetadataRepository.getCachedAlbumName(context, artistStr, cleanTitle)
+            val finalAlbum = if (!cachedAlb.isNullOrBlank()) cachedAlb else if (!rawAlbum.startsWith("GTA", ignoreCase = true)) rawAlbum else ""
+            val subtitle = if (artistStr.isNotBlank()) "$artistStr • $stationTitle" else stationTitle
             _currentMetadata = buildStationMetadata(
                 trackTitle = cleanTitle,
                 trackSubtitle = subtitle,
-                art = art
+                art = art,
+                isSongOrShow = true,
+                cleanArtist = artistStr,
+                cleanAlbum = finalAlbum
             )
         }
         onMetadataChanged?.invoke(_currentMetadata)

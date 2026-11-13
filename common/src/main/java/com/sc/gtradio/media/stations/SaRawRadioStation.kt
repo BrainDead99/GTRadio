@@ -99,17 +99,26 @@ import java.util.*
         return prefs.getBoolean("download_album_art_enabled", true)
     }
 
-    private fun buildStationMetadata(trackTitle: String, trackSubtitle: String, art: Bitmap?): MediaMetadataCompat {
+    private fun buildStationMetadata(
+        trackTitle: String,
+        trackSubtitle: String,
+        art: Bitmap?,
+        isSongOrShow: Boolean = false,
+        cleanArtist: String = "",
+        cleanAlbum: String = ""
+    ): MediaMetadataCompat {
         return MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, trackTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, trackTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, trackSubtitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, trackSubtitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, stationTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, cleanArtist.ifBlank { trackSubtitle })
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, cleanAlbum)
+            .putString(MediaMetadataCompat.METADATA_KEY_WRITER, stationTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupTitle)
             .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, "$stationTitle • $groupTitle")
             .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
+            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, if (isSongOrShow) 1L else 0L)
             .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
             .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, art)
             .build()
@@ -145,11 +154,11 @@ import java.util.*
         if (isWctr) {
             val cleanShow = episodeRegex.replace(song.cleanTitle, "").trim().ifBlank { song.cleanTitle }
             if (cleanShow.uppercase().startsWith("NEWS")) {
-                _currentMetadata = buildStationMetadata("News", stationTitle, stationLogo)
+                _currentMetadata = buildStationMetadata("News", stationTitle, stationLogo, isSongOrShow = true, cleanArtist = stationTitle, cleanAlbum = "")
             } else {
                 val host = resolveWctrHost(cleanShow, song.cleanTitle)
                 val subtitle = if (host.isNotBlank()) "$host • $stationTitle" else stationTitle
-                _currentMetadata = buildStationMetadata(cleanShow, subtitle, stationLogo)
+                _currentMetadata = buildStationMetadata(cleanShow, subtitle, stationLogo, isSongOrShow = true, cleanArtist = host.ifBlank { stationTitle }, cleanAlbum = "")
             }
             onMetadataChanged?.invoke(_currentMetadata)
             return
@@ -166,7 +175,8 @@ import java.util.*
                         if (_playing && lastSegment == RadioSegmentType.Song && currentSongGroup == song) {
                             val newArt = SaMetadataRepository.getCachedAlbumArt(context, song.artist, song.cleanTitle) ?: stationLogo
                             val sub = buildSongSubtitle(song)
-                            _currentMetadata = buildStationMetadata(song.cleanTitle, sub, newArt)
+                            val alb = SaMetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle) ?: ""
+                            _currentMetadata = buildStationMetadata(song.cleanTitle, sub, newArt, isSongOrShow = true, cleanArtist = song.artist, cleanAlbum = alb)
                             onMetadataChanged?.invoke(_currentMetadata)
                         }
                     }
@@ -175,7 +185,8 @@ import java.util.*
         }
 
         val subtitle = buildSongSubtitle(song)
-        _currentMetadata = buildStationMetadata(song.cleanTitle, subtitle, art)
+        val eraAlbum = SaMetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle) ?: ""
+        _currentMetadata = buildStationMetadata(song.cleanTitle, subtitle, art, isSongOrShow = true, cleanArtist = song.artist, cleanAlbum = eraAlbum)
         onMetadataChanged?.invoke(_currentMetadata)
     }
 

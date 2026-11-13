@@ -26,6 +26,14 @@
     <string name="news_reports_enabled_title">Play News Reports</string>
     <string name="news_reports_summary">Note: This setting only affects gen 3 stations.</string>
 
+    <string name="theme_header">Dynamic Theme</string>
+    <string name="enable_dynamic_theme_key">enable_dynamic_theme_ui</string>
+    <string name="enable_dynamic_theme_title">Enable Dynamic Series Theme UI</string>
+    <string name="enable_dynamic_theme_summary">Automatically switches to custom series skin when a matching folder is found in Dynamic Theme.</string>
+
+    <string name="dynamic_theme_uri_key">dynamic_theme_uri</string>
+    <string name="dynamic_theme_path_title">Path to Dynamic Theme</string>
+
     <string name="metadata_header">GTA SA Metadata &amp; Artwork</string>
     <string name="show_song_metadata_key">show_song_metadata_enabled</string>
     <string name="show_song_metadata_title">Show Song Name, Artist &amp; WCTR Hosts</string>
