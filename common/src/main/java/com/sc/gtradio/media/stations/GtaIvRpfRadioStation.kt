@@ -18,6 +18,7 @@ import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
+import com.sc.gtradio.common.GTRadioLogger
 import java.util.*
 
 data class GtaIvSongItem(
@@ -334,6 +335,7 @@ data class GtaIvSongItem(
     }
 
     override fun play() {
+        GTRadioLogger.log("GtaIvRpfRadioStation[$stationTitle]: play() called")
         ensureStationIndexed()
         _playing = true
         player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
@@ -553,6 +555,7 @@ data class GtaIvSongItem(
         lastSegment = RadioSegmentType.Song
 
         val item = songQueue.next()
+        GTRadioLogger.log("GtaIvRpfRadioStation[$stationTitle]: Selected track '${item.trackName}' (intros=${item.introNames.size})")
         val mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false
         val list = ArrayList<Uri>(2)
 

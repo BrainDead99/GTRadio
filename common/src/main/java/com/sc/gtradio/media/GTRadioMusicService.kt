@@ -456,6 +456,19 @@ import java.util.ArrayList
         val newsReportsEnabled  = sharedPref?.getBoolean(getString(R.string.news_reports_preference_key), false) ?: false
 
         val stationMedia = group.stationList.find { x -> x.mediaId == mediaId } ?: return null
+        if (group.isGtaIvRpfGroup) {
+            com.sc.gtradio.common.GTRadioLogger.log("GTRadioMusicService: Creating GTA IV RPF station for ${stationMedia.description.title}")
+            return group.createGtaIvRpfStation(
+                group.mediaItem.mediaId!!,
+                stationMedia.mediaId!!,
+                stationMedia,
+                radioPlayer,
+                applicationContext,
+                adsEnabled,
+                weatherChatterEnabled,
+                newsReportsEnabled
+            )
+        }
         if (group.isRawSaGroup && mediaId.contains("#SA_RAW#")) {
             val code = mediaId.substringAfter("#SA_RAW#")
             val stationArch = group.getOrCreateArchive(code) ?: return null
