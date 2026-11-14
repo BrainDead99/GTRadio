@@ -19,6 +19,7 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
+import com.sc.gtradio.media.stations.GtaIvMetadataRepository
 import com.sc.gtradio.media.stations.SaMetadataRepository
 import java.util.concurrent.Executors
 
@@ -140,36 +141,42 @@ class SettingsActivity : AppCompatActivity() {
             if (isScanning) return
             val ctx = context?.applicationContext ?: return
             isScanning = true
-            scanPref.summary = "Preparing GTA San Andreas tracklist..."
+            scanPref.summary = "Preparing GTA SA & GTA IV tracklists..."
 
             Executors.newSingleThreadExecutor().submit {
                 SaMetadataRepository.ensureLoaded(ctx)
-                val allSongs = ArrayList<Pair<String, String>>()
+                GtaIvMetadataRepository.ensureLoaded(ctx)
+
+                // Tuple: (artist, title, maxYear)
+                val allSongs = ArrayList<Triple<String, String, Int>>()
                 val codes = listOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG")
                 for (code in codes) {
                     val st = SaMetadataRepository.getByStreamCode(ctx, code) ?: continue
                     for (s in st.songGroups) {
-                        allSongs.add(Pair(s.artist, s.cleanTitle))
+                        allSongs.add(Triple(s.artist, s.cleanTitle, 2004))
                     }
+                }
+                for ((artist, title) in GtaIvMetadataRepository.getAllMusicSongs(ctx)) {
+                    allSongs.add(Triple(artist, title, 2008))
                 }
 
                 var done = 0
                 var okCount = 0
                 val total = allSongs.size
-                for ((artist, title) in allSongs) {
+                for ((artist, title, maxYear) in allSongs) {
                     done++
                     val cur = done
                     mainHandler.post {
                         scanPref.summary = "Scanning ($cur / $total): $artist - $title"
                     }
-                    if (SaMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title)) {
+                    if (SaMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, maxYear)) {
                         okCount++
                     }
                 }
                 val finalOk = okCount
                 mainHandler.post {
                     isScanning = false
-                    scanPref.summary = "Complete! Cached $finalOk / $total era-accurate album covers offline."
+                    scanPref.summary = "Complete! Cached $finalOk / $total era-accurate GTA SA & GTA IV album covers offline."
                 }
             }
         }

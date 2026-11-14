@@ -264,7 +264,7 @@ object SaMetadataRepository {
         }
     }
 
-    fun fetchEraAccurateArtSync(context: Context, artist: String, songTitle: String): Boolean {
+    fun fetchEraAccurateArtSync(context: Context, artist: String, songTitle: String, maxYear: Int = 2004): Boolean {
         val key = cacheKey(artist, songTitle)
         val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
         val imgFile = File(dir, "$key.jpg")
