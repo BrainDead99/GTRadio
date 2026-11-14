@@ -465,15 +465,16 @@ import java.util.*
                     lastSegment = RadioSegmentType.fromInt(rng.nextInt(5))
                 }
                 RadioSegmentType.Commercial -> {
-                    val roll = rng.nextInt(20)
-                    if (announcerFiles.isNotEmpty() && roll < 17) {
-                        if (prepareAnnouncerSegment()) return
-                    } else {
+                    val songOrAnnouncer = rng.nextInt(11)
+                    if (songOrAnnouncer < 6 || announcerFiles.isEmpty()) {
                         if (prepareSongSegment(requireDjIntro = true)) return
+                    } else {
+                        if (prepareAnnouncerSegment()) return
                     }
                 }
                 RadioSegmentType.Announcer -> {
-                    if (rng.nextInt(10) < 7 || currentDJFiles.isEmpty()) {
+                    val songOrDj = rng.nextInt(11)
+                    if (songOrDj < 3 || currentDJFiles.isEmpty()) {
                         if (prepareSongSegment(requireDjIntro = true)) return
                     } else {
                         if (prepareDjSegment()) return

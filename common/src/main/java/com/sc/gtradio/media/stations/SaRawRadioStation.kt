@@ -334,12 +334,14 @@ import java.util.*
             when (lastSegment) {
                 RadioSegmentType.None -> lastSegment = RadioSegmentType.fromInt(rng.nextInt(5))
                 RadioSegmentType.Commercial -> {
-                    if (announcerTracks.isNotEmpty() && rng.nextInt(20) < 17) {
-                        if (prepareAnnouncerSegment()) return
-                    } else if (prepareSongSegment(true)) return
+                    val songOrAnnouncer = rng.nextInt(11)
+                    if (songOrAnnouncer < 6 || announcerTracks.isEmpty()) {
+                        if (prepareSongSegment(true)) return
+                    } else if (prepareAnnouncerSegment()) return
                 }
                 RadioSegmentType.Announcer -> {
-                    if (rng.nextInt(10) < 7 || currentDjTracks.isEmpty()) {
+                    val songOrDj = rng.nextInt(11)
+                    if (songOrDj < 3 || currentDjTracks.isEmpty()) {
                         if (prepareSongSegment(true)) return
                     } else if (prepareDjSegment()) return
                 }
