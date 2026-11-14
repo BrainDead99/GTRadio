@@ -453,3 +453,16 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
         }
     }
 }
+
+enum class StationGroupType(val value: Int) {
+    None(0),
+    Gen1(1),
+    Gen2(2),
+    Gen3(3);
+
+    companion object {
+        fun fromInt(value: Int): StationGroupType {
+            return values().firstOrNull { it.value == value } ?: None
+        }
+    }
+}
