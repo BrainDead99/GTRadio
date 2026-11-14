@@ -61,7 +61,7 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
             }
 
             GTRadioLogger.log("scanRootDirectory: Starting scan at '${rootDoc.name}' (${rootDoc.uri})")
-            scanRecursive(rootDoc, context, results, depth = 0, maxDepth = 6)
+            scanRecursive(rootDoc, context, results, depth = 0, maxDepth = 7)
             results.sortBy { it.groupName }
             GTRadioLogger.log("scanRootDirectory: Finished scan. Found ${results.size} station group(s): ${results.map { it.groupName }}")
             return results
@@ -133,7 +133,7 @@ init {
         }
 
         mediaItem = getMediaItem(folderDoc, simpleFiles, groupName)
-        stationList = if (isRawSaGroup) {
+        stationList = if (isRawSaGroup || isGtaIvRpfGroup) {
             getRawSaStationsList()
         } else {
             getStationsList(folderDoc)
