@@ -2,7 +2,6 @@ package com.sc.gtradio.media.stations
 
 import GTRadioPlayer
 import android.content.Context
-import androidx.preference.PreferenceManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
@@ -18,6 +17,7 @@ import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import java.util.*
 
@@ -61,8 +61,6 @@ import java.util.*
 
     override var stationName: String = ""
 
-    private var advertFiles: Array<Uri> = emptyArray()
-    private var announcerFiles: Array<Uri> = emptyArray()
     private var djMorningFiles: Array<Uri> = emptyArray()
     private var djEveningFiles: Array<Uri> = emptyArray()
     private var djNightFiles: Array<Uri> = emptyArray()
@@ -71,19 +69,17 @@ import java.util.*
     private var djWeatherRainFiles: Array<Uri> = emptyArray()
     private var djWeatherSunFiles: Array<Uri> = emptyArray()
     private var djWeatherStormFiles: Array<Uri> = emptyArray()
-    private var songs: Array<Song> = emptyArray()
-    private var currentDJFiles: Array<Uri> = emptyArray()
 
-    private var advertIterator: Iterator<Uri>? = null
-    private var announcerIterator: Iterator<Uri>? = null
-    private var djIterator: Iterator<Uri>? = null
-    private var songIterator: Iterator<Song>? = null
+    private val rng = Random()
+    private val advertQueue = RandomizedDualHeadQueue<Uri>(emptyList(), rng)
+    private val announcerQueue = RandomizedDualHeadQueue<Uri>(emptyList(), rng)
+    private val djQueue = RandomizedDualHeadQueue<Uri>(emptyList(), rng)
+    private val songQueue = RandomizedDualHeadQueue<Song>(emptyList(), rng)
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
     private var songsSinceLastBreak = 0
     private var activeListener: Player.Listener? = null
-    private val rng = Random()
 
     // Real-time radio state tracking
     private var currentSegmentUris: List<Uri> = emptyList()
@@ -109,7 +105,7 @@ import java.util.*
             }
         }
         setupAdvertFiles(advertsFolderDoc)
-        randomizeAll()
+        randomizeDJFiles()
     }
 
     private fun getFileDurationMs(uri: Uri): Long {
@@ -195,8 +191,10 @@ import java.util.*
             return
         }
         val allowAlbumArt = prefs.getBoolean("download_album_art_enabled", true)
+
         var rawTitle = fallbackTitle
         var rawArtist: String? = null
+        var rawAlbum = ""
         var art: Bitmap? = stationLogo
 
         val retriever = MediaMetadataRetriever()
@@ -204,6 +202,7 @@ import java.util.*
             retriever.setDataSource(context, uri)
             val extractedTitle = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
             val extractedArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+            rawAlbum = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: ""
             val durStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
             durStr?.toLongOrNull()?.let { if (it > 0L) durationCache[uri] = it }
 
@@ -223,14 +222,6 @@ import java.util.*
         } finally {
             try { retriever.release() } catch (_: Exception) {}
         }
-
-        var rawAlbum: String = ""
-        try {
-            val retr2 = MediaMetadataRetriever()
-            retr2.setDataSource(context, uri)
-            rawAlbum = retr2.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: ""
-            retr2.release()
-        } catch (_: Exception) {}
 
         if (isWctr) {
             val noSeg = suffixRegex.replace(rawTitle, "").trim()
@@ -283,11 +274,11 @@ import java.util.*
     }
 
     private fun setupAnnouncerFiles(folder: DocumentFile) {
-        announcerFiles = folder.listFiles().map { x -> x.uri }.toTypedArray()
+        announcerQueue.reset(folder.listFiles().map { x -> x.uri })
     }
 
     private fun setupAdvertFiles(folder: DocumentFile) {
-        advertFiles = folder.listFiles().map { x -> x.uri }.toTypedArray()
+        advertQueue.reset(folder.listFiles().map { x -> x.uri })
     }
 
     private fun setupDJFiles(folder: DocumentFile) {
@@ -308,77 +299,29 @@ import java.util.*
     }
 
     private fun setupSongs(folder: DocumentFile) {
-        songs = folder.listFiles().map { x -> Song(x) }.toTypedArray()
-    }
-
-    private fun randomizeAll() {
-        randomizeAnnouncerFiles()
-        randomizeAdvertFiles()
-        randomizeDJFiles()
-        randomizeSongFolders()
-    }
-
-    private fun randomizeAnnouncerFiles() {
-        announcerFiles.shuffle()
-        announcerIterator = announcerFiles.iterator()
-    }
-
-    private fun randomizeAdvertFiles() {
-        advertFiles.shuffle()
-        advertIterator = advertFiles.iterator()
+        songQueue.reset(folder.listFiles().map { x -> Song(x) })
     }
 
     private fun randomizeDJFiles() {
         val now = Calendar.getInstance()
         val currentHour = now.get(Calendar.HOUR_OF_DAY)
-        var arrToConcat: Array<Uri> = emptyArray()
+        val combined = ArrayList<Uri>()
+        combined.addAll(djOtherFiles)
         if (currentHour in 3..11) {
-            djMorningFiles.shuffle()
-            arrToConcat = djMorningFiles
+            combined.addAll(djMorningFiles)
         } else if (currentHour in 17..22) {
-            djEveningFiles.shuffle()
-            arrToConcat = djEveningFiles
+            combined.addAll(djEveningFiles)
         } else if (currentHour < 3 || currentHour >= 23) {
-            djNightFiles.shuffle()
-            arrToConcat = djNightFiles
+            combined.addAll(djNightFiles)
         }
-        djOtherFiles.shuffle()
-        currentDJFiles = djOtherFiles.plus(arrToConcat)
 
         if (weatherChatterEnabled) {
-            djWeatherFogFiles.shuffle()
-            djWeatherRainFiles.shuffle()
-            djWeatherStormFiles.shuffle()
-            djWeatherSunFiles.shuffle()
-            currentDJFiles = currentDJFiles.plus(djWeatherFogFiles).plus(djWeatherStormFiles).plus(djWeatherRainFiles).plus(djWeatherSunFiles)
+            combined.addAll(djWeatherFogFiles)
+            combined.addAll(djWeatherStormFiles)
+            combined.addAll(djWeatherRainFiles)
+            combined.addAll(djWeatherSunFiles)
         }
-        currentDJFiles.shuffle()
-        djIterator = currentDJFiles.iterator()
-    }
-
-    private fun randomizeSongFolders() {
-        songs.shuffle()
-        songIterator = songs.iterator()
-    }
-
-    private fun getNextAdvertFile(): Uri {
-        if (!advertIterator!!.hasNext()) randomizeAdvertFiles()
-        return advertIterator!!.next()
-    }
-
-    private fun getNextAnnouncerFile(): Uri {
-        if (!announcerIterator!!.hasNext()) randomizeAnnouncerFiles()
-        return announcerIterator!!.next()
-    }
-
-    private fun getNextDjFile(): Uri {
-        if (!djIterator!!.hasNext()) randomizeDJFiles()
-        return djIterator!!.next()
-    }
-
-    private fun getNextSongFolder(): Song {
-        if (!songIterator!!.hasNext()) randomizeSongFolders()
-        return songIterator!!.next()
+        djQueue.reset(combined)
     }
 
     override fun stop() {
@@ -466,7 +409,7 @@ import java.util.*
                 }
                 RadioSegmentType.Commercial -> {
                     val songOrAnnouncer = rng.nextInt(11)
-                    if (songOrAnnouncer < 6 || announcerFiles.isEmpty()) {
+                    if (songOrAnnouncer < 6 || announcerQueue.isEmpty()) {
                         if (prepareSongSegment(requireDjIntro = true)) return
                     } else {
                         if (prepareAnnouncerSegment()) return
@@ -474,7 +417,7 @@ import java.util.*
                 }
                 RadioSegmentType.Announcer -> {
                     val songOrDj = rng.nextInt(11)
-                    if (songOrDj < 3 || currentDJFiles.isEmpty()) {
+                    if (songOrDj < 3 || djQueue.isEmpty()) {
                         if (prepareSongSegment(requireDjIntro = true)) return
                     } else {
                         if (prepareDjSegment()) return
@@ -485,7 +428,7 @@ import java.util.*
                         if (prepareSongSegment()) return
                     } else {
                         val numberOfSongsBeforeBreak = rng.nextInt(3) + 3
-                        if (adsEnabled && advertFiles.isNotEmpty() && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
+                        if (adsEnabled && advertQueue.isNotEmpty() && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
                             if (prepareAdvertSegment()) return
                         } else {
                             if (prepareSongSegment()) return
@@ -494,12 +437,12 @@ import java.util.*
                 }
                 RadioSegmentType.Song -> {
                     val numberOfSongsBeforeBreak = rng.nextInt(3) + 3
-                    if (adsEnabled && advertFiles.isNotEmpty() && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
+                    if (adsEnabled && advertQueue.isNotEmpty() && numberOfSongsBeforeBreak <= songsSinceLastBreak) {
                         if (prepareAdvertSegment()) return
                     } else {
-                        val nextThing = if (currentDJFiles.isEmpty() && announcerFiles.isEmpty()) 0
-                        else if (currentDJFiles.isEmpty()) rng.nextInt(2)
-                        else if (announcerFiles.isEmpty()) (if (rng.nextInt(2) == 0) 0 else 2)
+                        val nextThing = if (djQueue.isEmpty() && announcerQueue.isEmpty()) 0
+                        else if (djQueue.isEmpty()) rng.nextInt(2)
+                        else if (announcerQueue.isEmpty()) (if (rng.nextInt(2) == 0) 0 else 2)
                         else rng.nextInt(3)
                         when (nextThing) {
                             0 -> if (prepareSongSegment()) return
@@ -517,35 +460,35 @@ import java.util.*
 
     private fun prepareAnnouncerSegment(): Boolean {
         lastSegment = RadioSegmentType.Announcer
-        if (announcerFiles.isEmpty()) return false
+        if (announcerQueue.isEmpty()) return false
         currentSongMainUri = null
-        currentSegmentUris = listOf(getNextAnnouncerFile())
+        currentSegmentUris = listOf(announcerQueue.next())
         return true
     }
 
     private fun prepareDjSegment(): Boolean {
         lastSegment = RadioSegmentType.DJChatter
-        if (currentDJFiles.isEmpty()) return false
+        if (djQueue.isEmpty()) return false
         currentSongMainUri = null
-        currentSegmentUris = listOf(getNextDjFile())
+        currentSegmentUris = listOf(djQueue.next())
         return true
     }
 
     private fun prepareAdvertSegment(): Boolean {
         lastSegment = RadioSegmentType.Commercial
         songsSinceLastBreak = 0
-        if (!adsEnabled || advertFiles.isEmpty()) return false
+        if (!adsEnabled || advertQueue.isEmpty()) return false
         currentSongMainUri = null
-        currentSegmentUris = listOf(getNextAdvertFile())
+        currentSegmentUris = listOf(advertQueue.next())
         return true
     }
 
     private fun prepareSongSegment(requireDjIntro: Boolean = false, requireDjOutro: Boolean = false): Boolean {
         songsSinceLastBreak += 1
         lastSegment = RadioSegmentType.Song
-        if (songs.isEmpty()) return false
+        if (songQueue.isEmpty()) return false
 
-        val song = getNextSongFolder()
+        val song = songQueue.next()
         val mainUri = song.mainSongUri ?: return false
 
         val introToUse = if (requireDjIntro && song.djIntroUris.isNotEmpty()) {
