@@ -24,8 +24,8 @@ import java.io.InputStreamReader
 
 class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
 
-    var mediaItem: MediaBrowserCompat.MediaItem
-    var stationList: ArrayList<MediaBrowserCompat.MediaItem>
+    lateinit var mediaItem: MediaBrowserCompat.MediaItem
+    var stationList: ArrayList<MediaBrowserCompat.MediaItem> = ArrayList()
     var generation: Int = -1
     var groupName: String = ""
 
@@ -103,7 +103,8 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
         }
     }
 
-    init {
+    
+init {
         val rpfScanFiles = try {
             folderDoc.listSimpleFiles(context)
         } catch (e: Exception) {
