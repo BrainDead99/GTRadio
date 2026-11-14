@@ -1,5 +1,11 @@
 package com.sc.gtradio.media.stations
 
+import java.util.UUID
+
+import android.support.v4.media.MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
+
+import GTRadioPlayer
+
 import android.content.Context
 import android.net.Uri
 import android.support.v4.media.MediaBrowserCompat
@@ -30,7 +36,8 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     private var gtaIvAdvertsArchive: GtaIvRpfArchive? = null
     private var gtaIvNewsArchive: GtaIvRpfArchive? = null
     private var gtaIvWeatherArchive: GtaIvRpfArchive? = null
-
+    var mediaId: String = ""
+    var isValid: Boolean = true
     var isRawSaGroup: Boolean = false
     var rawContainerType: SaContainerType? = null
     private val rawStreamUris = HashMap<String, Uri>()
@@ -146,7 +153,7 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     private fun setupGtaIvRpfGroup(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
         GtaIvMetadataRepository.ensureLoaded(context)
         isGtaIvRpfGroup = true
-        generation = StationGroupType.Gen3
+        generation = 3
         groupName = "GTA IV (RPF Audio)"
         mediaId = UUID.randomUUID().toString()
 
@@ -188,7 +195,9 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
                 .build()
 
             stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
-            gtaIvStationArchives[stMediaId] = GtaIvRpfArchive(context, stFile.name, stFile.uri)
+            val arch = GtaIvRpfArchive(context, stFile.name, stFile.uri)
+            gtaIvStationArchives[stMediaId] = arch
+            gtaIvStationArchives[stDisplayName] = arch
         }
 
         if (stationList.isNotEmpty()) {
@@ -214,7 +223,10 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
         weatherChatterEnabled: Boolean,
         newsReportsEnabled: Boolean
     ): RadioStation {
-        val arch = gtaIvStationArchives[stMediaId] ?: gtaIvStationArchives.values.first()
+        val titleKey = stMediaItem.description.title?.toString() ?: ""
+        val arch = gtaIvStationArchives[stMediaId]
+            ?: gtaIvStationArchives[titleKey]
+            ?: gtaIvStationArchives.values.first()
         return GtaIvRpfRadioStation(
             stationGroupId = stationGroupId,
             mediaId = stMediaId,
