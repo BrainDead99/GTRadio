@@ -276,7 +276,7 @@ data class GtaIvSongItem(
             if (cached != null) {
                 art = cached
             } else {
-                SaMetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear = 2008) {
+                SaMetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, 2008) {
                     mainHandler.post {
                         if (_playing && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
                             val newArt = SaMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo

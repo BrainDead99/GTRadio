@@ -35,6 +35,10 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     var groupName: String = ""
     lateinit var mediaItem: MediaBrowserCompat.MediaItem
     var stations: ArrayList<MediaBrowserCompat.MediaItem> = ArrayList()
+    val stationList: ArrayList<MediaBrowserCompat.MediaItem>
+        get() = stations
+    val mediaId: String
+        get() = if (::mediaItem.isInitialized) (mediaItem.mediaId ?: "") else ""
 
     private val stationDocs = HashMap<String, DocumentFile>()
     private var advertsDoc: DocumentFile? = null
