@@ -41,7 +41,7 @@ import java.util.*
         set(enabled) {
             if (enabled != _weatherChatterEnabled) {
                 _weatherChatterEnabled = enabled
-                rebuildDjQueue()
+                rebuildDjQueues()
             }
         }
 
@@ -59,12 +59,19 @@ import java.util.*
     private val rng = Random()
     private val advertQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
     private val announcerQueue = RandomizedDualHeadQueue<Int>(stationMeta.idTracks, rng)
-    private val djQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
+    private val djTalkQueue = RandomizedDualHeadQueue<Int>(stationMeta.djOtherTracks, rng)
+    private val callerStoryQueue = RandomizedDualHeadQueue<Int>(stationMeta.djCallerStoryTracks, rng)
+    private val timeOfDayQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
+    private val weatherQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
     private val songQueue = RandomizedDualHeadQueue<SaSongGroup>(stationMeta.songGroups, rng)
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
     private var songsSinceLastBreak = 0
+    private var consecutiveSongs = 0
+    private var interludeChainCount = 0
+    private var lastDjSubCategory = -1
+    private var activeHourBucket = -1
     private var activeListener: Player.Listener? = null
 
     // Real-time radio state tracking
@@ -82,7 +89,7 @@ import java.util.*
             val adTrackList = (adMeta?.tracks?.keys ?: advertsArchive.getTrackNumbers()).toList()
             advertQueue.reset(adTrackList)
         }
-        rebuildDjQueue()
+        rebuildDjQueues()
     }
 
     private fun isMetadataEnabled(): Boolean {
@@ -203,17 +210,75 @@ import java.util.*
         }
     }
 
-    private fun rebuildDjQueue() {
+    private fun getHourBucket(): Int {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        val list = ArrayList<Int>(stationMeta.djOtherTracks)
-        if (hour in 3..11) list.addAll(stationMeta.djMorningTracks)
-        else if (hour in 17..22) list.addAll(stationMeta.djEveningTracks)
-        else if (hour < 3 || hour >= 23) list.addAll(stationMeta.djNightTracks)
-
-        if (weatherChatterEnabled) {
-            list.addAll(stationMeta.djWeatherTracks)
+        return when {
+            hour in 4..11 -> 0 // Morning
+            hour in 12..20 -> 1 // Afternoon/Evening
+            else -> 2 // Night
         }
-        djQueue.reset(list)
+    }
+
+    private fun rebuildDjQueues() {
+        val bucket = getHourBucket()
+        activeHourBucket = bucket
+        val todTracks = when (bucket) {
+            0 -> stationMeta.djMorningTracks
+            1 -> stationMeta.djEveningTracks.ifEmpty { stationMeta.djMorningTracks }
+            else -> stationMeta.djNightTracks.ifEmpty { stationMeta.djEveningTracks }
+        }
+        timeOfDayQueue.reset(todTracks)
+        if (weatherChatterEnabled) {
+            weatherQueue.reset(stationMeta.djWeatherTracks)
+        } else {
+            weatherQueue.reset(emptyList())
+        }
+    }
+
+    private fun hasAnyDjContent(): Boolean {
+        return djTalkQueue.isNotEmpty() || callerStoryQueue.isNotEmpty() ||
+               timeOfDayQueue.isNotEmpty() || weatherQueue.isNotEmpty()
+    }
+
+    private fun pickNextDjTrack(): Int? {
+        if (getHourBucket() != activeHourBucket) {
+            rebuildDjQueues()
+        }
+        // Build weighted candidate pools:
+        // 0 = DJ Banter (38%), 1 = Caller/Story/Bridge (26%), 2 = Time-of-Day (20%), 3 = Weather (16%)
+        val available = ArrayList<Pair<Int, Int>>()
+        if (djTalkQueue.isNotEmpty()) available.add(Pair(0, 38))
+        if (callerStoryQueue.isNotEmpty()) available.add(Pair(1, 26))
+        if (timeOfDayQueue.isNotEmpty()) available.add(Pair(2, 20))
+        if (weatherChatterEnabled && weatherQueue.isNotEmpty()) available.add(Pair(3, 16))
+        if (available.isEmpty()) return null
+
+        // Avoid repeating the exact same sub-category twice in a row if another is available
+        val filtered = if (available.size > 1) {
+            available.filter { it.first != lastDjSubCategory }.ifEmpty { available }
+        } else {
+            available
+        }
+
+        val totalWeight = filtered.sumOf { it.second }
+        var roll = rng.nextInt(totalWeight)
+        var chosenCat = filtered.first().first
+        for ((cat, weight) in filtered) {
+            if (roll < weight) {
+                chosenCat = cat
+                break
+            }
+            roll -= weight
+        }
+        lastDjSubCategory = chosenCat
+
+        return when (chosenCat) {
+            0 -> djTalkQueue.next()
+            1 -> callerStoryQueue.next()
+            2 -> timeOfDayQueue.next()
+            3 -> weatherQueue.next()
+            else -> djTalkQueue.next()
+        }
     }
 
     private fun getFileDurationMs(uri: Uri): Long {
@@ -310,40 +375,53 @@ import java.util.*
             when (lastSegment) {
                 RadioSegmentType.None -> lastSegment = RadioSegmentType.fromInt(rng.nextInt(5))
                 RadioSegmentType.Commercial -> {
-                    val songOrAnnouncer = rng.nextInt(11)
-                    if (songOrAnnouncer < 6 || announcerQueue.isEmpty()) {
-                        if (prepareSongSegment(true)) return
-                    } else if (prepareAnnouncerSegment()) return
+                    // After commercial: 60% Station ID, 20% DJ/Caller/Weather, 20% Song with DJ intro
+                    val roll = rng.nextInt(10)
+                    if (interludeChainCount < 2 && announcerQueue.isNotEmpty() && roll < 6) {
+                        if (prepareAnnouncerSegment()) return
+                    } else if (interludeChainCount < 2 && hasAnyDjContent() && roll < 8) {
+                        if (prepareDjSegment()) return
+                    } else if (prepareSongSegment(true)) return
                 }
                 RadioSegmentType.Announcer -> {
-                    val songOrDj = rng.nextInt(11)
-                    if (songOrDj < 3 || djQueue.isEmpty()) {
-                        if (prepareSongSegment(true)) return
-                    } else if (prepareDjSegment()) return
+                    // After Station ID: if we haven't chained 2 interludes yet, 55% chance to play DJ/Caller/Story/Weather
+                    if (interludeChainCount < 2 && hasAnyDjContent() && rng.nextInt(100) < 55) {
+                        if (prepareDjSegment()) return
+                    } else if (prepareSongSegment(true)) return
                 }
                 RadioSegmentType.DJChatter -> {
-                    if (songsSinceLastBreak == 0) {
-                        if (prepareSongSegment()) return
-                    } else {
-                        val threshold = rng.nextInt(3) + 3
-                        if (adsEnabled && advertQueue.isNotEmpty() && threshold <= songsSinceLastBreak) {
-                            if (prepareAdvertSegment()) return
-                        } else if (prepareSongSegment()) return
-                    }
+                    // After DJ/Caller/Story/Weather: if we only did 1 interlude, 25% chance for a quick Station ID before the song
+                    val adThreshold = rng.nextInt(3) + 2 // 2 to 4 songs
+                    if (adsEnabled && advertQueue.isNotEmpty() && songsSinceLastBreak >= adThreshold && interludeChainCount < 2) {
+                        if (prepareAdvertSegment()) return
+                    } else if (interludeChainCount < 2 && announcerQueue.isNotEmpty() && rng.nextInt(100) < 25) {
+                        if (prepareAnnouncerSegment()) return
+                    } else if (prepareSongSegment(false)) return
                 }
                 RadioSegmentType.Song -> {
-                    val threshold = rng.nextInt(3) + 3
-                    if (adsEnabled && advertQueue.isNotEmpty() && threshold <= songsSinceLastBreak) {
+                    val adThreshold = rng.nextInt(3) + 2 // 2 to 4 songs before commercial break
+                    if (isWctr && adsEnabled && advertQueue.isNotEmpty()) {
+                        if (rng.nextInt(10) < 6 && prepareAdvertSegment()) return
+                        if (announcerQueue.isNotEmpty() && prepareAnnouncerSegment()) return
+                    }
+                    if (adsEnabled && advertQueue.isNotEmpty() && songsSinceLastBreak >= adThreshold) {
                         if (prepareAdvertSegment()) return
                     } else {
-                        val choice = if (djQueue.isEmpty() && announcerQueue.isEmpty()) 0
-                        else if (djQueue.isEmpty()) rng.nextInt(2)
-                        else if (announcerQueue.isEmpty()) (if (rng.nextInt(2) == 0) 0 else 2)
-                        else rng.nextInt(3)
-                        when (choice) {
-                            0 -> if (prepareSongSegment()) return
-                            1 -> if (prepareAnnouncerSegment()) return
-                            else -> if (prepareDjSegment()) return
+                        // Only allow back-to-back song 20% of the time (and never 3 songs in a row without a break)
+                        val allowBackToBackSong = consecutiveSongs < 2 && rng.nextInt(100) < 20
+                        if (allowBackToBackSong || (!hasAnyDjContent() && announcerQueue.isEmpty())) {
+                            if (prepareSongSegment(false)) return
+                        } else if (hasAnyDjContent() && announcerQueue.isNotEmpty()) {
+                            // 60% DJ/Caller/Story/Time/Weather, 40% Station ID
+                            if (rng.nextInt(100) < 60) {
+                                if (prepareDjSegment()) return
+                            } else {
+                                if (prepareAnnouncerSegment()) return
+                            }
+                        } else if (hasAnyDjContent()) {
+                            if (prepareDjSegment()) return
+                        } else {
+                            if (prepareAnnouncerSegment()) return
                         }
                     }
                 }
@@ -357,6 +435,8 @@ import java.util.*
         if (announcerQueue.isEmpty()) return false
         val tr = announcerQueue.next()
         val uri = stationArchive.materializeTrackUri(tr) ?: return false
+        consecutiveSongs = 0
+        interludeChainCount += 1
         currentSongGroup = null
         currentSegmentUris = listOf(uri)
         return true
@@ -364,9 +444,10 @@ import java.util.*
 
     private fun prepareDjSegment(): Boolean {
         lastSegment = RadioSegmentType.DJChatter
-        if (djQueue.isEmpty()) return false
-        val tr = djQueue.next()
+        val tr = pickNextDjTrack() ?: return false
         val uri = stationArchive.materializeTrackUri(tr) ?: return false
+        consecutiveSongs = 0
+        interludeChainCount += 1
         currentSongGroup = null
         currentSegmentUris = listOf(uri)
         return true
@@ -376,15 +457,26 @@ import java.util.*
         lastSegment = RadioSegmentType.Commercial
         songsSinceLastBreak = 0
         if (!adsEnabled || advertsArchive == null || advertQueue.isEmpty()) return false
-        val tr = advertQueue.next()
-        val uri = advertsArchive.materializeTrackUri(tr) ?: return false
+        val tr1 = advertQueue.next()
+        val uri1 = advertsArchive.materializeTrackUri(tr1) ?: return false
+        val list = ArrayList<Uri>(2)
+        list.add(uri1)
+        // 25% chance to play a 2-ad commercial pod
+        if (advertQueue.size() > 2 && rng.nextInt(100) < 25) {
+            val tr2 = advertQueue.next()
+            advertsArchive.materializeTrackUri(tr2)?.let { list.add(it) }
+        }
+        consecutiveSongs = 0
+        interludeChainCount += 1
         currentSongGroup = null
-        currentSegmentUris = listOf(uri)
+        currentSegmentUris = list
         return true
     }
 
     private fun prepareSongSegment(requireDjIntro: Boolean = false): Boolean {
         songsSinceLastBreak += 1
+        consecutiveSongs += 1
+        interludeChainCount = 0
         lastSegment = RadioSegmentType.Song
         if (songQueue.isEmpty()) return false
         val song = songQueue.next()
@@ -392,13 +484,13 @@ import java.util.*
 
         val introTrack = if (requireDjIntro && song.djIntroTracks.isNotEmpty()) {
             song.djIntroTracks[rng.nextInt(song.djIntroTracks.size)]
-        } else if (rng.nextInt(11) < 6 && song.djIntroTracks.isNotEmpty()) {
+        } else if (rng.nextInt(100) < 65 && song.djIntroTracks.isNotEmpty()) {
             song.djIntroTracks[rng.nextInt(song.djIntroTracks.size)]
         } else {
             song.cleanIntroTrack
         }
 
-        val outroTrack = if (rng.nextInt(11) < 6 && song.djOutroTracks.isNotEmpty()) {
+        val outroTrack = if (rng.nextInt(100) < 60 && song.djOutroTracks.isNotEmpty()) {
             song.djOutroTracks[rng.nextInt(song.djOutroTracks.size)]
         } else {
             song.cleanOutroTrack

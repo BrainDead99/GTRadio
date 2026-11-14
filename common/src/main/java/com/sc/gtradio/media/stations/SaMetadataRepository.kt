@@ -43,6 +43,7 @@ class SaStationMeta(
     val djEveningTracks = ArrayList<Int>()
     val djNightTracks = ArrayList<Int>()
     val djOtherTracks = ArrayList<Int>()
+    val djCallerStoryTracks = ArrayList<Int>()
     val djWeatherTracks = ArrayList<Int>()
     val songGroups = ArrayList<SaSongGroup>()
 }
@@ -179,7 +180,10 @@ object SaMetadataRepository {
                         else -> st.djOtherTracks.add(num)
                     }
                 }
-                !isWctr && (u.contains("(DJ)") || u.contains("(CALLER)") || u.contains("(STORY)") || u.contains("(BRIDGE ANNOUNCE")) -> {
+                !isWctr && (u.contains("(CALLER)") || u.contains("(STORY)") || u.contains("(BRIDGE ANNOUNCE")) -> {
+                    st.djCallerStoryTracks.add(num)
+                }
+                !isWctr && u.contains("(DJ)") -> {
                     st.djOtherTracks.add(num)
                 }
                 u.contains("(MID)") || u.contains("(INTRO") || u.contains("(OUTRO") || isWctr -> {

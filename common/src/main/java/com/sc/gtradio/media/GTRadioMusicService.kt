@@ -27,6 +27,7 @@ import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SimpleExoPlayer
 import androidx.media3.ui.PlayerNotificationManager
+import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.stations.*
 import java.util.ArrayList
@@ -109,8 +110,14 @@ import java.util.ArrayList
     private val callback = object : MediaSessionCompat.Callback() {
         override fun onCommand(command: String?, extras: Bundle?, cb: ResultReceiver?) {
             super.onCommand(command, extras, cb)
-            if (command == "setActiveStationGroupId") {
-                activeStationGroupId = extras?.getString("stationGroupId")
+            when (command) {
+                "setActiveStationGroupId" -> {
+                    activeStationGroupId = extras?.getString("stationGroupId")
+                }
+                "setStreamMuted" -> {
+                    val muted = extras?.getBoolean("muted", false) ?: false
+                    radioPlayer.setStreamMuted(muted)
+                }
             }
         }
 
@@ -189,6 +196,8 @@ import java.util.ArrayList
             radioPlayer.previousEnabled = stationIndex != 0
             val playbackActions = group.getPlaybackActionsForStation(stationIndex)
 
+            DynamicThemeManager.stopTuningNoise()
+            radioPlayer.setStreamMuted(false)
             activeStation?.stop()
             val playbackState = PlaybackStateCompat.Builder()
                 .setState(PlaybackStateCompat.STATE_STOPPED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)
@@ -209,6 +218,8 @@ import java.util.ArrayList
             radioPlayer.previousEnabled = stationIndex != 0
             val playbackActions = group.getPlaybackActionsForStation(stationIndex)
 
+            DynamicThemeManager.stopTuningNoise()
+            radioPlayer.setStreamMuted(false)
             activeStation?.stop()
             val playbackState = PlaybackStateCompat.Builder()
                 .setState(PlaybackStateCompat.STATE_STOPPED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)

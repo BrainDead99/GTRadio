@@ -369,40 +369,71 @@ object DynamicThemeManager {
         }
     }
 
-    fun playTuningNoiseBurst(context: Context, pack: DynamicThemePack?, durationMs: Long = 550L) {
-        val sounds = pack?.noiseSoundUris ?: return
-        if (sounds.isEmpty()) return
+    fun playTuningNoiseUntilReady(
+        context: Context,
+        pack: DynamicThemePack?,
+        isRadioReady: () -> Boolean,
+        onComplete: () -> Unit
+    ) {
+        val sounds = pack?.noiseSoundUris ?: emptyList()
+        if (!isDynamicThemeEnabled(context) || sounds.isEmpty()) {
+            onComplete()
+            return
+        }
         stopTuningNoise()
         isNoiseLooping = true
         activeNoiseList = sounds
-        playNextNoiseClip(context.applicationContext)
-        mainHandler.postDelayed({ stopTuningNoise() }, durationMs)
+        playNoiseCycle(context.applicationContext, isRadioReady, onComplete)
     }
 
-    private fun playNextNoiseClip(appContext: Context) {
-        if (!isNoiseLooping || activeNoiseList.isEmpty()) return
+    private fun playNoiseCycle(
+        appContext: Context,
+        isRadioReady: () -> Boolean,
+        onComplete: () -> Unit
+    ) {
+        if (!isNoiseLooping || activeNoiseList.isEmpty()) {
+            onComplete()
+            return
+        }
         val uri = activeNoiseList[rng.nextInt(activeNoiseList.size)]
         try {
             noisePlayer?.release()
             noisePlayer = MediaPlayer().apply {
                 setAudioAttributes(
                     AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
                         .setUsage(AudioAttributes.USAGE_MEDIA)
                         .build()
                 )
                 setDataSource(appContext, uri)
-                setVolume(0.65f, 0.65f)
+                setVolume(0.85f, 0.85f)
                 setOnCompletionListener {
-                    if (isNoiseLooping) {
-                        playNextNoiseClip(appContext)
+                    if (!isNoiseLooping) {
+                        onComplete()
+                    } else if (isRadioReady()) {
+                        // Noise finished its full clip and radio is ready: cut to live broadcast
+                        stopTuningNoise()
+                        onComplete()
+                    } else {
+                        // Radio is still loading: loop with a freshly picked random noise clip
+                        playNoiseCycle(appContext, isRadioReady, onComplete)
                     }
+                }
+                setOnErrorListener { _, _, _ ->
+                    stopTuningNoise()
+                    onComplete()
+                    true
                 }
                 prepare()
                 start()
             }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+            stopTuningNoise()
+            onComplete()
+        }
     }
+
+    fun isPlayingTuningNoise(): Boolean = isNoiseLooping
 
     fun stopTuningNoise() {
         isNoiseLooping = false

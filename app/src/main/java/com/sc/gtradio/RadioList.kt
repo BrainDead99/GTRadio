@@ -88,9 +88,6 @@ class RadioList : Fragment() {
 
     private val playbackStateObserver = Observer<PlaybackStateCompat> { state ->
         currentPlaybackState = state ?: EMPTY_PLAYBACK_STATE
-        if (currentPlaybackState.isPlaying) {
-            DynamicThemeManager.stopTuningNoise()
-        }
         updateDynamicThemePlaybackUi()
     }
 
@@ -105,6 +102,26 @@ class RadioList : Fragment() {
 
     private val binding get() = _binding!!
 
+    private fun startStationWithTuningNoise(playAction: () -> Unit) {
+        val pack = activeThemePack
+        if (pack != null && pack.noiseSoundUris.isNotEmpty() && DynamicThemeManager.isDynamicThemeEnabled(requireContext())) {
+            musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", true) })
+            playAction()
+            DynamicThemeManager.playTuningNoiseUntilReady(
+                requireContext(),
+                pack,
+                isRadioReady = { currentPlaybackState.isPlaying },
+                onComplete = {
+                    musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
+                    updateDynamicThemePlaybackUi()
+                }
+            )
+        } else {
+            musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
+            playAction()
+        }
+    }
+
     private fun onStationClicked(clickedItem: MediaBrowserCompat.MediaItem) {
         val nowPlaying = musicServiceConnection?.nowPlaying?.value
         val transportControls = musicServiceConnection?.transportControls
@@ -114,15 +131,14 @@ class RadioList : Fragment() {
             musicServiceConnection?.playbackState?.value?.let { state ->
                 if (state.isPlaying) {
                     DynamicThemeManager.stopTuningNoise()
+                    musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
                     transportControls?.stop()
                 } else {
-                    DynamicThemeManager.playTuningNoiseBurst(requireContext(), activeThemePack, 450L)
-                    transportControls?.play()
+                    startStationWithTuningNoise { transportControls?.play() }
                 }
             }
         } else {
-            DynamicThemeManager.playTuningNoiseBurst(requireContext(), activeThemePack, 550L)
-            transportControls?.playFromMediaId(clickedItem.mediaId, null)
+            startStationWithTuningNoise { transportControls?.playFromMediaId(clickedItem.mediaId, null) }
         }
         updateDynamicThemePlaybackUi()
     }
@@ -152,17 +168,17 @@ class RadioList : Fragment() {
             val transportControls = musicServiceConnection?.transportControls
             if (currentPlaybackState.isPlaying) {
                 DynamicThemeManager.stopTuningNoise()
+                musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
                 transportControls?.stop()
             } else {
                 val firstOrSelected = loadedStations.find {
                     it.description.title?.toString().equals(selectedStationTitle, ignoreCase = true)
                 } ?: loadedStations.firstOrNull()
-                DynamicThemeManager.playTuningNoiseBurst(requireContext(), activeThemePack, 500L)
                 if (currentMetadata.description.mediaId.isNullOrBlank() && firstOrSelected != null) {
                     selectedStationTitle = firstOrSelected.description.title?.toString() ?: ""
-                    transportControls?.playFromMediaId(firstOrSelected.mediaId, null)
+                    startStationWithTuningNoise { transportControls?.playFromMediaId(firstOrSelected.mediaId, null) }
                 } else {
-                    transportControls?.play()
+                    startStationWithTuningNoise { transportControls?.play() }
                 }
             }
         }
@@ -324,7 +340,7 @@ class RadioList : Fragment() {
             iv.alpha = if (isThisActive) 1.0f else 0.28f
         }
 
-        val isSongOrShow = isPlaying && currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
+        val isSongOrShow = isPlaying && !DynamicThemeManager.isPlayingTuningNoise() && currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
         if (isSongOrShow && activeMediaId.isNotBlank()) {
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
             val songTitle = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: ""
