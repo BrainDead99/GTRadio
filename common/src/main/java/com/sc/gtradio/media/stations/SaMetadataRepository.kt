@@ -249,7 +249,8 @@ object SaMetadataRepository {
         return null
     }
 
-    fun fetchEraAccurateArtAsync(context: Context, artist: String, songTitle: String, onDone: (() -> Unit)? = null) {
+    fun fetchEraAccurateArtAsync(context: Context, artist: String, songTitle: String,
+        maxYear: Int = 2004, onDone: (() -> Unit)? = null) {
         val key = cacheKey(artist, songTitle)
         val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
         val imgFile = File(dir, "$key.jpg")
@@ -273,7 +274,7 @@ object SaMetadataRepository {
                fetchFromMusicBrainzEraFiltered(artist, songTitle, dir, key)
     }
 
-    private fun fetchFromItunesEraFiltered(artist: String, songTitle: String, dir: File, key: String): Boolean {
+    private fun fetchFromItunesEraFiltered(artist: String, songTitle: String, dir: File, key: String, maxYear: Int = 2004): Boolean {
         try {
             val cleanSong = songTitle.replace(Regex("\\(.*?\\)"), "").trim()
             val q = URLEncoder.encode("$artist $cleanSong", "UTF-8")
@@ -332,7 +333,7 @@ object SaMetadataRepository {
         return false
     }
 
-    private fun fetchFromMusicBrainzEraFiltered(artist: String, songTitle: String, dir: File, key: String): Boolean {
+    private fun fetchFromMusicBrainzEraFiltered(artist: String, songTitle: String, dir: File, key: String, maxYear: Int = 2004): Boolean {
         try {
             val cleanSong = songTitle.replace(Regex("\\(.*?\\)"), "").trim()
             val q = URLEncoder.encode("recording:\"$cleanSong\" AND artist:\"$artist\" AND date:[1950 TO 2004]", "UTF-8")
