@@ -29,6 +29,11 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     var generation: Int = -1
     var groupName: String = ""
 
+    var isGen1RawGroup: Boolean = false
+        private set
+    private val gen1StationFiles = HashMap<String, SimpleFileInfo>()
+    private var isGen1ViceCity: Boolean = false
+
     var isGtaIvRpfGroup: Boolean = false
         private set
     private val gtaIvStationArchives = HashMap<String, GtaIvRpfArchive>()
@@ -111,8 +116,11 @@ init {
             emptyArray()
         }
         val detectedRpfFiles = detectGtaIvRpfs(rpfScanFiles)
+        val detectedGen1Pair = if (detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
         if (detectedRpfFiles.isNotEmpty()) {
             setupGtaIvRpfGroup(rpfScanFiles, detectedRpfFiles)
+        } else if (detectedGen1Pair != null) {
+            setupGen1RawGroup(rpfScanFiles, detectedGen1Pair.first, detectedGen1Pair.second)
         } else {
 
         val simpleFiles = try {
@@ -133,13 +141,114 @@ init {
         }
 
         mediaItem = getMediaItem(folderDoc, simpleFiles, groupName)
-        stationList = if (isRawSaGroup || isGtaIvRpfGroup) {
+        stationList = if (isRawSaGroup || isGtaIvRpfGroup || isGen1RawGroup) {
             getRawSaStationsList()
         } else {
             getStationsList(folderDoc)
         }
     
         }
+    }
+
+    private fun detectGen1RawFiles(files: Array<SimpleFileInfo>): Pair<Boolean, List<SimpleFileInfo>>? {
+        val vcKeys = Gen1MetadataRepository.viceCityStationsByFile.keys
+        val vcMatched = files.filter { !it.isDirectory && vcKeys.contains(it.name.lowercase()) }
+        if (vcMatched.size >= 2) {
+            GTRadioLogger.log("detectGen1RawFiles: Detected ${vcMatched.size} GTA Vice City (.adf) stations in '${folderDoc.name}'")
+            return Pair(true, vcMatched)
+        }
+        val gta3Keys = Gen1MetadataRepository.gta3StationsByFile.keys
+        val gta3Matched = files.filter { !it.isDirectory && gta3Keys.contains(it.name.lowercase()) }
+        if (gta3Matched.size >= 2) {
+            GTRadioLogger.log("detectGen1RawFiles: Detected ${gta3Matched.size} GTA III (.wav) stations in '${folderDoc.name}'")
+            return Pair(false, gta3Matched)
+        }
+        return null
+    }
+
+    private fun setupGen1RawGroup(allFiles: Array<SimpleFileInfo>, isVc: Boolean, stationFiles: List<SimpleFileInfo>) {
+        isGen1RawGroup = true
+        isGen1ViceCity = isVc
+        generation = 1
+        groupName = if (isVc) "GTA Vice City (ADF Audio)" else "GTA III (WAV Audio)"
+        mediaId = UUID.randomUUID().toString()
+
+        val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
+        val logoUri = allFiles.find { !it.isDirectory && it.name.uppercase().contains("LOGO") }?.uri
+            ?: themePack?.groupLogoUri
+        val logoBitmap = DynamicThemeManager.loadBitmap(context, logoUri, 512)
+            ?: FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
+
+        val sortedFiles = stationFiles.sortedBy {
+            Gen1MetadataRepository.getStationInfo(it.name)?.displayName ?: it.name
+        }
+
+        for (stFile in sortedFiles) {
+            val info = Gen1MetadataRepository.getStationInfo(stFile.name)
+            val stDisplayName = info?.displayName ?: stFile.name
+            val stMediaId = UUID.randomUUID().toString()
+
+            val iconUri = themePack?.stationIconUris?.get(DynamicThemeManager.normalizeStationKey(stDisplayName))
+            val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
+
+            val meta = MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, stMediaId)
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stDisplayName)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, stDisplayName)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupName)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, iconBmp)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, iconBmp)
+                .build()
+
+            stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
+            gen1StationFiles[stMediaId] = stFile
+            gen1StationFiles[stDisplayName] = stFile
+        }
+
+        if (stationList.isNotEmpty()) {
+            val groupMeta = MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, groupName)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, groupName)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, logoBitmap)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, logoBitmap)
+                .build()
+            metadata = groupMeta
+            mediaItem = MediaBrowserCompat.MediaItem(groupMeta.description, FLAG_BROWSABLE)
+            isValid = true
+        }
+    }
+
+    fun createGen1RawStation(
+        stationGroupId: String,
+        stMediaId: String,
+        stMediaItem: MediaBrowserCompat.MediaItem,
+        player: GTRadioPlayer,
+        ctx: Context,
+        adsEnabled: Boolean,
+        weatherChatterEnabled: Boolean,
+        newsReportsEnabled: Boolean
+    ): RadioStation {
+        val titleKey = stMediaItem.description.title?.toString() ?: ""
+        val fileInfo = gen1StationFiles[stMediaId]
+            ?: gen1StationFiles[titleKey]
+            ?: gen1StationFiles.values.first()
+        val stInfo = Gen1MetadataRepository.getStationInfo(fileInfo.name)
+        return Gen1RawRadioStation(
+            stationGroupId = stationGroupId,
+            mediaId = stMediaId,
+            mediaItem = stMediaItem,
+            fileName = fileInfo.name,
+            sourceUri = fileInfo.uri,
+            isVcAdf = isGen1ViceCity,
+            stationInfo = stInfo,
+            player = player,
+            context = ctx,
+            adsEnabled = adsEnabled,
+            weatherChatterEnabled = weatherChatterEnabled,
+            newsReportsEnabled = newsReportsEnabled
+        )
     }
 
     private fun detectGtaIvRpfs(files: Array<SimpleFileInfo>): List<SimpleFileInfo> {
@@ -155,7 +264,8 @@ init {
         GtaIvMetadataRepository.ensureLoaded(context)
         isGtaIvRpfGroup = true
         generation = 3
-        groupName = "GTA IV (RPF Audio)"
+        val isEflc = stationRpfFiles.any { it.name.lowercase() in setOf("radio_vcfm.rpf", "radio_ramjamfm.rpf", "radio_meditation.rpf") } || folderDoc.name?.uppercase()?.contains("EFLC") == true
+        groupName = if (isEflc) "GTA: Episodes from Liberty City (RPF Audio)" else "GTA IV (RPF Audio)"
         mediaId = UUID.randomUUID().toString()
 
         val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)

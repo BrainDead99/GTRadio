@@ -35,6 +35,9 @@ object GtaIvMetadataRepository {
         "radio_the_vibe.rpf" to "The Vibe 98.8",
         "radio_vladivostok.rpf" to "Vladivostok FM",
         "radio_wktt.rpf" to "WKTT Talk Radio",
+        "radio_vcfm.rpf" to "Vice City FM",
+        "radio_ramjamfm.rpf" to "RamJam FM",
+        "radio_meditation.rpf" to "Self-Actualization FM",
         "radio_vice.rpf" to "Vice City FM",
         "radio_ramjam.rpf" to "RamJam FM",
         "radio_self.rpf" to "Self-Actualization FM"
