@@ -44,9 +44,10 @@ class GtaIvRpfArchive(
     private var indexed = false
 
     companion object {
-        const val CHUNK_BLOCKS = 4
-        const val CHUNK_THRESHOLD_BLOCKS = 10
+        const val CHUNK_BLOCKS = 6
+        const val CHUNK_THRESHOLD_BLOCKS = 18
         private val prefetchExecutor = Executors.newSingleThreadExecutor()
+        private val decodeLock = Any()
         @Volatile private var oldCachePurged = false
 
         private val RPF3_AES_KEY = ByteArray(32) // Runtime key extraction added in GtaIvKeyManager
@@ -304,32 +305,34 @@ class GtaIvRpfArchive(
         return uri
     }
 
-    private fun materializeInternal(cleanKey: String, startBlock: Int, blockCount: Int): Uri? {
+    private fun materializeInternal(cleanKey: String, startBlock: Int, blockCount: Int): Uri? = synchronized(decodeLock) {
         val cacheDir = getCacheDir()
         val chunkSuffix = if (blockCount < Int.MAX_VALUE) "_blk${startBlock}_${blockCount}" else ""
         val safeFileName = "${rpfName.removeSuffix(".rpf")}_${cleanKey.replace(Regex("[^A-Z0-9_]"), "_")}$chunkSuffix.wav"
         val outFile = File(cacheDir, safeFileName)
+        val now = System.currentTimeMillis()
         if (outFile.exists() && outFile.length() > 44L) {
-            outFile.setLastModified(System.currentTimeMillis())
+            outFile.setLastModified(now)
             return Uri.fromFile(outFile)
         }
 
-        // Keep total decoded audio cache strictly under 45 MB so total app storage stays < 90 MB
+        // Keep decoded audio cache under 95 MB (total app storage ~115-135 MB) and never delete active/recent files
         try {
-            val maxCacheBytes = 45L * 1024L * 1024L
+            val maxCacheBytes = 95L * 1024L * 1024L
             val allCached = ArrayList<File>()
-            cacheDir.listFiles()?.let { allCached.addAll(it) }
-            File(context.cacheDir, "sa_raw_tracks").listFiles()?.let { allCached.addAll(it) }
+            cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "sa_raw_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
 
             var totalBytes = 0L
             for (f in allCached) totalBytes += f.length()
 
             if (totalBytes > maxCacheBytes) {
                 allCached.sortBy { it.lastModified() }
-                val targetBytes = 28L * 1024L * 1024L
+                val targetBytes = 65L * 1024L * 1024L
                 for (f in allCached) {
                     if (totalBytes <= targetBytes) break
-                    if (f.name != safeFileName) {
+                    val ageMs = now - f.lastModified()
+                    if (f.name != safeFileName && ageMs > 25_000L) {
                         val len = f.length()
                         if (f.delete()) totalBytes -= len
                     }
@@ -341,7 +344,7 @@ class GtaIvRpfArchive(
         val fileEntry = entries[cleanKey]
         if (subTrack == null && fileEntry == null) return null
 
-        val tempFile = File(cacheDir, "$safeFileName.tmp")
+        val tempFile = File(cacheDir, "${safeFileName}_${Thread.currentThread().id}.tmp")
         try {
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 FileInputStream(pfd.fileDescriptor).channel.use { ch ->

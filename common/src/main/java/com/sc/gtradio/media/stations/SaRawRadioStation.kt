@@ -18,6 +18,7 @@ import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
+import java.io.File
 import java.util.*
 
 @UnstableApi class SaRawRadioStation(
@@ -316,7 +317,7 @@ import java.util.*
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
-        if (lastStoppedTimeMs > 0L && currentSegmentUris.isNotEmpty()) {
+        if (lastStoppedTimeMs > 0L && currentSegmentUris.isNotEmpty() && currentSegmentUris.all { u -> u.path?.let { File(it).exists() } == true }) {
             val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
             resumeFromRealTime(elapsedMs)
         } else {

@@ -348,6 +348,16 @@ data class GtaIvSongItem(
         player.stop()
     }
 
+    private fun areSegmentFilesValid(uris: List<Uri>): Boolean {
+        if (uris.isEmpty()) return false
+        for (u in uris) {
+            val p = u.path ?: return false
+            val f = File(p)
+            if (!f.exists() || f.length() <= 44L) return false
+        }
+        return true
+    }
+
     override fun play() {
         GTRadioLogger.log("GtaIvRpfRadioStation[$stationTitle]: play() called")
         ensureStationIndexed()
@@ -356,7 +366,7 @@ data class GtaIvSongItem(
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
-        if (lastStoppedTimeMs > 0L && currentSegmentUris.isNotEmpty()) {
+        if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
             val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
             resumeFromRealTime(elapsedMs)
         } else {
@@ -387,7 +397,7 @@ data class GtaIvSongItem(
                 val uri = currentSegmentUris[i]
                 val durMs = getFileDurationMs(uri)
                 val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
-                if (remainingMs < timeLeftMs) {
+                if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
                     refreshCurrentSegmentMetadata()
                     startPlayback(currentSegmentUris, i, posMs + remainingMs)
                     return
