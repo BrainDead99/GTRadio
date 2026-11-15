@@ -10,6 +10,8 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
@@ -17,13 +19,15 @@ data class GtaIvRpfEntry(
     val name: String,
     val offset: Long,
     val size: Long,
-    val isWaveBank: Boolean
+    val isWaveBank: Boolean,
+    val numBlocks: Int = 1
 )
 
 data class GtaIvBankSubTrack(
     val parentEntryName: String,
     val subName: String,
     val dataOffsetInRpf: Long,
+    val numSamplesInBytes: Int,
     val numSamples16Bit: Int,
     val sampleRate: Int,
     val isCompressed: Boolean
@@ -36,9 +40,15 @@ class GtaIvRpfArchive(
 ) {
     private val entries = LinkedHashMap<String, GtaIvRpfEntry>()
     private val bankSubTracks = LinkedHashMap<String, GtaIvBankSubTrack>()
+    private val chunkStates = ConcurrentHashMap<String, IntArray>()
     private var indexed = false
 
     companion object {
+        const val CHUNK_BLOCKS = 6
+        const val CHUNK_THRESHOLD_BLOCKS = 16
+        private val prefetchExecutor = Executors.newSingleThreadExecutor()
+        @Volatile private var oldCachePurged = false
+
         private val RPF3_AES_KEY = ByteArray(32) // Runtime key extraction added in GtaIvKeyManager
 
         private val INDEX_TABLE = intArrayOf(
@@ -98,6 +108,16 @@ class GtaIvRpfArchive(
         return total
     }
 
+    private fun getCacheDir(): File {
+        if (!oldCachePurged) {
+            oldCachePurged = true
+            try {
+                File(context.cacheDir, "gta4_rpf_tracks").deleteRecursively()
+            } catch (_: Exception) {}
+        }
+        return File(context.cacheDir, "gta4_rpf_tracks_v2").apply { mkdirs() }
+    }
+
     @Synchronized
     fun ensureIndexed() {
         if (indexed) return
@@ -131,6 +151,11 @@ class GtaIvRpfArchive(
         return entries.containsKey(u) || bankSubTracks.containsKey(u)
     }
 
+    fun getEntryBlockCount(name: String): Int {
+        ensureIndexed()
+        return entries[name.uppercase()]?.numBlocks ?: 1
+    }
+
     private fun indexRpf(ch: FileChannel) {
         if (ch.size() < 2048L) return
         val hdrBuf = ByteBuffer.allocate(20).order(ByteOrder.LITTLE_ENDIAN)
@@ -162,7 +187,7 @@ class GtaIvRpfArchive(
         }
 
         val tocOrder = ByteBuffer.wrap(tocBytes).order(ByteOrder.LITTLE_ENDIAN)
-        val probe4 = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+        val probe16 = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
 
         for (i in 0 until entryCount) {
             val pos = i * 16
@@ -180,12 +205,14 @@ class GtaIvRpfArchive(
             val entryName = GtaIvMetadataRepository.resolveHash(context, nameHash).uppercase()
             if (entryName == "NULLTRACK") continue
 
-            probe4.clear()
-            readFully(ch, probe4, fileOffset)
-            val firstInt = probe4.getInt(0)
-            val isBank = (firstInt == 28)
+            probe16.clear()
+            readFully(ch, probe16, fileOffset)
+            val firstInt = probe16.getInt(0)
+            val secondInt = probe16.getInt(4)
+            val isBank = (firstInt == 28 && secondInt == 0)
+            val blocks = if (isBank) 1 else probe16.getInt(8).coerceAtLeast(1)
 
-            val entry = GtaIvRpfEntry(entryName, fileOffset, fileSize, isBank)
+            val entry = GtaIvRpfEntry(entryName, fileOffset, fileSize, isBank, blocks)
             entries[entryName] = entry
 
             if (isBank) {
@@ -222,19 +249,25 @@ class GtaIvRpfArchive(
 
             val sampleDataRelOffset = wiBuf.getLong(0)
             val wiHash = wiBuf.getInt(8)
+            val numSamplesInBytes = wiBuf.getInt(12)
             val numSamples16Bit = wiBuf.getInt(16)
-            val sampleRate = wiBuf.getShort(24).toInt() and 0xFFFF
-            val isCompressed = if (wihSize > 32 && readLen >= 60) (wiBuf.getInt(56) > 0) else true
+            var sampleRate = wiBuf.getShort(24).toInt() and 0xFFFF
+            if (sampleRate !in 8000..48000) sampleRate = 32000
+
+            // WInumStates is at byte offset 52 of WaveInfo (not 56), and 4-bit ADPCM uses ~0.5 bytes/sample
+            val numStates = if (wihSize > 32 && readLen >= 56) wiBuf.getInt(52) else 1
+            val isCompressed = (numStates > 0) || (numSamplesInBytes in 1 until numSamples16Bit)
 
             val resolvedSubName = GtaIvMetadataRepository.resolveHash(context, if (wihHash != 0) wihHash else wiHash).uppercase()
             val subKey = if (resolvedSubName.startsWith("0X")) "${bankEntry.name}_$i" else resolvedSubName
 
             val absDataOffset = bankEntry.offset + headerSize.toLong() + sampleDataRelOffset
-            if (numSamples16Bit > 0 && sampleRate in 8000..48000 && absDataOffset < bankEntry.offset + bankEntry.size) {
+            if (numSamples16Bit > 0 && absDataOffset < bankEntry.offset + bankEntry.size) {
                 bankSubTracks[subKey] = GtaIvBankSubTrack(
                     parentEntryName = bankEntry.name,
                     subName = subKey,
                     dataOffsetInRpf = absDataOffset,
+                    numSamplesInBytes = numSamplesInBytes,
                     numSamples16Bit = numSamples16Bit,
                     sampleRate = sampleRate,
                     isCompressed = isCompressed
@@ -246,19 +279,46 @@ class GtaIvRpfArchive(
     fun materializeAudioUri(trackKey: String): Uri? {
         ensureIndexed()
         val cleanKey = trackKey.uppercase()
-        val cacheDir = File(context.cacheDir, "gta4_rpf_tracks").apply { mkdirs() }
-        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${cleanKey.replace(Regex("[^A-Z0-9_]"), "_")}.wav"
+        val fileEntry = entries[cleanKey]
+        if (fileEntry != null && !fileEntry.isWaveBank && fileEntry.numBlocks > CHUNK_THRESHOLD_BLOCKS) {
+            return materializeAudioChunkUri(cleanKey, 0, CHUNK_BLOCKS)
+        }
+        return materializeInternal(cleanKey, 0, Int.MAX_VALUE)
+    }
+
+    fun materializeAudioChunkUri(trackKey: String, startBlock: Int, blockCount: Int = CHUNK_BLOCKS): Uri? {
+        ensureIndexed()
+        val cleanKey = trackKey.uppercase()
+        val uri = materializeInternal(cleanKey, startBlock, blockCount)
+        val fileEntry = entries[cleanKey]
+        if (fileEntry != null && !fileEntry.isWaveBank) {
+            val nextStart = startBlock + blockCount
+            if (nextStart < fileEntry.numBlocks) {
+                prefetchExecutor.submit {
+                    try {
+                        materializeInternal(cleanKey, nextStart, blockCount)
+                    } catch (_: Throwable) {}
+                }
+            }
+        }
+        return uri
+    }
+
+    private fun materializeInternal(cleanKey: String, startBlock: Int, blockCount: Int): Uri? {
+        val cacheDir = getCacheDir()
+        val chunkSuffix = if (blockCount < Int.MAX_VALUE) "_blk${startBlock}_${blockCount}" else ""
+        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${cleanKey.replace(Regex("[^A-Z0-9_]"), "_")}$chunkSuffix.wav"
         val outFile = File(cacheDir, safeFileName)
         if (outFile.exists() && outFile.length() > 44L) {
             return Uri.fromFile(outFile)
         }
 
-        // Keep cache folder bounded so phone storage never fills up
+        // Keep cache folder bounded
         try {
             val cached = cacheDir.listFiles()
-            if (cached != null && cached.size > 40) {
+            if (cached != null && cached.size > 36) {
                 cached.sortBy { it.lastModified() }
-                for (i in 0 until 15) cached[i].delete()
+                for (i in 0 until 12) cached[i].delete()
             }
         } catch (_: Exception) {}
 
@@ -266,26 +326,29 @@ class GtaIvRpfArchive(
         val fileEntry = entries[cleanKey]
         if (subTrack == null && fileEntry == null) return null
 
+        val tempFile = File(cacheDir, "$safeFileName.tmp")
         try {
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 FileInputStream(pfd.fileDescriptor).channel.use { ch ->
                     if (subTrack != null) {
-                        decodeBankSubTrackToWav(ch, subTrack, outFile)
+                        decodeBankSubTrackToWav(ch, subTrack, tempFile)
                     } else if (fileEntry != null) {
                         if (fileEntry.isWaveBank) {
                             val firstSub = bankSubTracks.values.firstOrNull { it.parentEntryName == fileEntry.name }
-                            if (firstSub != null) decodeBankSubTrackToWav(ch, firstSub, outFile)
+                            if (firstSub != null) decodeBankSubTrackToWav(ch, firstSub, tempFile)
                         } else {
-                            decodeMultiCToWav(ch, fileEntry, outFile)
+                            decodeMultiCToWav(ch, fileEntry, tempFile, startBlock, blockCount)
                         }
                     }
                 }
             }
-            if (outFile.exists() && outFile.length() > 44L) {
+            if (tempFile.exists() && tempFile.length() > 44L) {
+                tempFile.renameTo(outFile)
                 return Uri.fromFile(outFile)
             }
-        } catch (e: Exception) {
-            GTRadioLogger.log("GtaIvRpfArchive[$rpfName]: Failed decoding $cleanKey", e)
+        } catch (t: Throwable) {
+            GTRadioLogger.log("GtaIvRpfArchive[$rpfName]: Failed decoding $cleanKey (start=$startBlock)", Exception(t))
+            tempFile.delete()
             outFile.delete()
         }
         return null
@@ -332,28 +395,39 @@ class GtaIvRpfArchive(
         }
     }
 
-    private fun decodeMultiCToWav(ch: FileChannel, entry: GtaIvRpfEntry, outFile: File) {
+    private fun decodeMultiCToWav(
+        ch: FileChannel,
+        entry: GtaIvRpfEntry,
+        outFile: File,
+        startBlock: Int = 0,
+        maxBlocks: Int = Int.MAX_VALUE
+    ) {
         val hdrBuf = ByteBuffer.allocate(512).order(ByteOrder.LITTLE_ENDIAN)
         if (readFully(ch, hdrBuf, entry.offset) < 128) return
 
         val numBlocks = hdrBuf.getInt(8)
         val blockSize = hdrBuf.getInt(12)
-        val chTableOffset = hdrBuf.getLong(16).toInt()
+        // Byte 20 is u32[5] (chTblOff = 48); fallback to byte 16 if byte 20 is 0
+        val rawChOff20 = hdrBuf.getInt(20)
+        val rawChOff16 = hdrBuf.getInt(16)
+        val chTableOffset = if (rawChOff20 in 16..256) rawChOff20 else if (rawChOff16 in 16..256) rawChOff16 else 48
         val numChannels = hdrBuf.getInt(36)
         val headerSize = hdrBuf.getInt(44)
 
         if (numBlocks <= 0 || blockSize <= 2048 || numChannels <= 0 || headerSize <= 0) return
 
         val detailOffset = chTableOffset + (numChannels * 16)
-        val totalSamplesPerCh = if (detailOffset + 28 <= 512) hdrBuf.getInt(detailOffset + 16) else 0
         var sampleRate = if (detailOffset + 28 <= 512) (hdrBuf.getShort(detailOffset + 24).toInt() and 0xFFFF) else 32000
-        if (sampleRate !in 8000..48000) sampleRate = 32000
+        if (sampleRate !in 16000..48000) sampleRate = 32000
+
+        val firstBlock = startBlock.coerceIn(0, numBlocks - 1)
+        val endBlockExclusive = if (maxBlocks == Int.MAX_VALUE) numBlocks else minOf(numBlocks, firstBlock + maxBlocks)
+        if (firstBlock >= endBlockExclusive) return
 
         val outChannels = if (numChannels >= 2) 2 else 1
-        // Pre-scan blocks to compute exact total samples if header value is 0
         val blockHeaderBuf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
         var computedTotalSamples = 0
-        for (b in 0 until numBlocks) {
+        for (b in firstBlock until endBlockExclusive) {
             val blockStart = entry.offset + headerSize.toLong() + (b.toLong() * blockSize.toLong())
             if (blockStart + 2048L > entry.offset + entry.size) break
             blockHeaderBuf.clear()
@@ -363,21 +437,21 @@ class GtaIvRpfArchive(
             if (samplesInBlk > 0) computedTotalSamples += samplesInBlk
         }
 
-        val finalSamplesPerCh = if (computedTotalSamples > 0) computedTotalSamples else totalSamplesPerCh
-        if (finalSamplesPerCh <= 0) return
+        if (computedTotalSamples <= 0) return
 
-        val totalPcmBytes = finalSamplesPerCh * outChannels * 2
-        val leftState = AdpcmState()
-        val rightState = AdpcmState()
+        val totalPcmBytes = computedTotalSamples * outChannels * 2
+        val prevState = chunkStates["${entry.name}_$firstBlock"]
+        val leftState = if (prevState != null) AdpcmState(prevState[0], prevState[1]) else AdpcmState()
+        val rightState = if (prevState != null) AdpcmState(prevState[2], prevState[3]) else AdpcmState()
 
         val blockBytes = ByteArray(blockSize)
-        val pcmOutBuf = ByteArray(16384)
+        val pcmOutBuf = ByteArray(32768)
         var pcmOutPos = 0
 
         BufferedOutputStream(FileOutputStream(outFile), 65536).use { out ->
             writeWavHeader(out, totalPcmBytes, sampleRate, outChannels)
 
-            for (b in 0 until numBlocks) {
+            for (b in firstBlock until endBlockExclusive) {
                 val blockStart = entry.offset + headerSize.toLong() + (b.toLong() * blockSize.toLong())
                 if (blockStart + blockSize.toLong() > entry.offset + entry.size) break
 
@@ -402,7 +476,6 @@ class GtaIvRpfArchive(
                     val bL = blockBytes[ch0ByteOff + i].toInt() and 0xFF
                     val bR = if (outChannels == 2) (blockBytes[ch1ByteOff + i].toInt() and 0xFF) else 0
 
-                    // Sample 1 (low nibble)
                     if (decodedInBlk < ch0Samples) {
                         val sL1 = decodeNibble(bL and 0x0F, leftState).toInt()
                         pcmOutBuf[pcmOutPos++] = (sL1 and 0xFF).toByte()
@@ -415,7 +488,6 @@ class GtaIvRpfArchive(
                         decodedInBlk++
                     }
 
-                    // Sample 2 (high nibble)
                     if (decodedInBlk < ch0Samples) {
                         val sL2 = decodeNibble((bL shr 4) and 0x0F, leftState).toInt()
                         pcmOutBuf[pcmOutPos++] = (sL2 and 0xFF).toByte()
@@ -437,6 +509,12 @@ class GtaIvRpfArchive(
             if (pcmOutPos > 0) {
                 out.write(pcmOutBuf, 0, pcmOutPos)
             }
+        }
+
+        if (endBlockExclusive < numBlocks) {
+            chunkStates["${entry.name}_$endBlockExclusive"] = intArrayOf(
+                leftState.valprev, leftState.index, rightState.valprev, rightState.index
+            )
         }
     }
 

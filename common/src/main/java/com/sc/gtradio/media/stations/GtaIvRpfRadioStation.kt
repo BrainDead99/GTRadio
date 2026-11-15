@@ -3,7 +3,6 @@ package com.sc.gtradio.media.stations
 import GTRadioPlayer
 import android.content.Context
 import android.graphics.Bitmap
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -19,6 +18,10 @@ import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.GTRadioLogger
+import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.util.*
 
 data class GtaIvSongItem(
@@ -87,6 +90,10 @@ data class GtaIvSongItem(
 
     private var currentSegmentUris: List<Uri> = emptyList()
     private var currentSongItem: GtaIvSongItem? = null
+    private var currentMultiChunkNextBlock: Int = 0
+    private var currentMultiChunkTotalBlocks: Int = 0
+    private var currentMultiChunksPlayedInRow: Int = 0
+
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedWindowIndex: Int = 0
     private var stoppedPositionMs: Long = 0L
@@ -108,7 +115,6 @@ data class GtaIvSongItem(
         val toWeather = ArrayList<String>()
         val introMap = HashMap<String, MutableList<String>>()
 
-        // 1. Collect wave-bank sub-tracks (TIME, GENERAL, TO, INTRO)
         for (sub in stationArchive.getBankSubTracks()) {
             val sName = sub.subName.uppercase()
             when {
@@ -127,7 +133,6 @@ data class GtaIvSongItem(
             }
         }
 
-        // 2. Collect top-level MultiC entries (Songs, Talk Shows, IDs, Solos)
         val songItems = ArrayList<GtaIvSongItem>()
         for (entry in stationArchive.getFileEntries()) {
             if (entry.isWaveBank) continue
@@ -149,7 +154,6 @@ data class GtaIvSongItem(
             }
         }
 
-        // 3. Attach extra tracks from radio_extratracks.rpf for The Beat 102.7, Massive B, and Electro-Choc
         if (extraTracksArchive != null) {
             val extraSet = when {
                 rpfLower.contains("beat_95") -> GtaIvMetadataRepository.beatExtraTracks
@@ -187,10 +191,10 @@ data class GtaIvSongItem(
     private fun getHourBucket(): Int {
         val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
         return when {
-            hour in 4..11 -> 0 // Morning
-            hour in 12..16 -> 1 // Afternoon
-            hour in 17..22 -> 2 // Evening
-            else -> 3 // Night
+            hour in 4..11 -> 0
+            hour in 12..16 -> 1
+            hour in 17..22 -> 2
+            else -> 3
         }
     }
 
@@ -308,14 +312,24 @@ data class GtaIvSongItem(
     private fun getFileDurationMs(uri: Uri): Long {
         durationCache[uri]?.let { return it }
         var dur = 30_000L
-        val retriever = MediaMetadataRetriever()
         try {
-            retriever.setDataSource(context, uri)
-            dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 30_000L
-        } catch (_: Exception) {
-        } finally {
-            try { retriever.release() } catch (_: Exception) {}
-        }
+            val path = uri.path
+            if (path != null) {
+                val f = File(path)
+                if (f.exists() && f.length() > 44L) {
+                    RandomAccessFile(f, "r").use { raf ->
+                        val hdr = ByteArray(44)
+                        raf.readFully(hdr)
+                        val bb = ByteBuffer.wrap(hdr).order(ByteOrder.LITTLE_ENDIAN)
+                        val byteRate = bb.getInt(28)
+                        val dataBytes = (f.length() - 44L).coerceAtLeast(0L)
+                        if (byteRate > 0) {
+                            dur = (dataBytes * 1000L) / byteRate.toLong()
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
         durationCache[uri] = dur
         return dur
     }
@@ -347,19 +361,27 @@ data class GtaIvSongItem(
             resumeFromRealTime(elapsedMs)
         } else {
             pickNextSegment()
-            stoppedWindowIndex = 0
-            stoppedPositionMs = 0L
-            resumeFromRealTime(rng.nextInt(45_000).toLong())
+            if (currentSegmentUris.isNotEmpty()) {
+                refreshCurrentSegmentMetadata()
+                val lastIdx = currentSegmentUris.size - 1
+                val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
+                val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
+                    rng.nextInt(25_000).toLong()
+                } else {
+                    0L
+                }
+                startPlayback(currentSegmentUris, 0, startOffset)
+            }
         }
     }
 
     private fun resumeFromRealTime(rawElapsedMs: Long) {
-        var remainingMs = if (rawElapsedMs > 600_000L) (rawElapsedMs % 600_000L) else rawElapsedMs
+        var remainingMs = if (rawElapsedMs > 180_000L) (rawElapsedMs % 180_000L) else rawElapsedMs
         var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
 
         var safety = 0
-        while (safety < 30 && currentSegmentUris.isNotEmpty()) {
+        while (safety < 6 && currentSegmentUris.isNotEmpty()) {
             safety++
             for (i in winIdx until currentSegmentUris.size) {
                 val uri = currentSegmentUris[i]
@@ -374,7 +396,7 @@ data class GtaIvSongItem(
                     posMs = 0L
                 }
             }
-            pickNextSegment()
+            if (!advanceMultiChunkOrPickNext()) break
             winIdx = 0
             posMs = 0L
         }
@@ -385,10 +407,34 @@ data class GtaIvSongItem(
         }
     }
 
+    private fun advanceMultiChunkOrPickNext(): Boolean {
+        val item = currentSongItem
+        if (lastSegment == RadioSegmentType.Song && item != null &&
+            currentMultiChunkNextBlock in 1 until currentMultiChunkTotalBlocks
+        ) {
+            val isContinuousMix = GtaIvMetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow == true && !isTalkRadio
+            val maxChunksBeforeBreak = if (isContinuousMix) 3 else 100
+            if (currentMultiChunksPlayedInRow < maxChunksBeforeBreak) {
+                val nextUri = item.archive.materializeAudioChunkUri(
+                    item.trackName,
+                    currentMultiChunkNextBlock,
+                    GtaIvRpfArchive.CHUNK_BLOCKS
+                )
+                if (nextUri != null) {
+                    currentMultiChunkNextBlock += GtaIvRpfArchive.CHUNK_BLOCKS
+                    currentMultiChunksPlayedInRow += 1
+                    currentSegmentUris = listOf(nextUri)
+                    return true
+                }
+            }
+        }
+        pickNextSegment()
+        return currentSegmentUris.isNotEmpty()
+    }
+
     private fun playNext() {
         if (!_playing) return
-        pickNextSegment()
-        if (currentSegmentUris.isNotEmpty()) {
+        if (advanceMultiChunkOrPickNext()) {
             refreshCurrentSegmentMetadata()
             startPlayback(currentSegmentUris, 0, 0L)
         }
@@ -403,11 +449,18 @@ data class GtaIvSongItem(
     }
 
     private fun pickNextSegment() {
+        currentMultiChunkNextBlock = 0
+        currentMultiChunkTotalBlocks = 0
+        currentMultiChunksPlayedInRow = 0
+
         var attempts = 0
-        while (attempts < 15) {
+        while (attempts < 12) {
             attempts++
             when (lastSegment) {
-                RadioSegmentType.None -> lastSegment = RadioSegmentType.Song
+                RadioSegmentType.None -> {
+                    if (prepareSongSegment(requireDjIntro = false)) return
+                    lastSegment = RadioSegmentType.Song
+                }
                 RadioSegmentType.Commercial, RadioSegmentType.NewsReport -> {
                     val roll = rng.nextInt(10)
                     if (interludeChainCount < 2 && hasAnyAnnouncerOrSolo() && (isTalkRadio || roll < 6)) {
@@ -431,7 +484,7 @@ data class GtaIvSongItem(
                 }
                 RadioSegmentType.Song -> {
                     val adThreshold = rng.nextInt(3) + 2
-                    if (isTalkRadio || ((adsEnabled || newsReportsEnabled) && songsSinceLastBreak >= adThreshold)) {
+                    if ((isTalkRadio && songsSinceLastBreak >= 1) || ((adsEnabled || newsReportsEnabled) && songsSinceLastBreak >= adThreshold)) {
                         if (prepareAdvertOrNewsSegment()) return
                     }
                     val allowBackToBack = consecutiveSongs < 2 && rng.nextInt(100) < 20
@@ -555,10 +608,29 @@ data class GtaIvSongItem(
         lastSegment = RadioSegmentType.Song
 
         val item = songQueue.next()
-        GTRadioLogger.log("GtaIvRpfRadioStation[$stationTitle]: Selected track '${item.trackName}' (intros=${item.introNames.size})")
-        val mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false
-        val list = ArrayList<Uri>(2)
+        val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
+        GTRadioLogger.log("GtaIvRpfRadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, intros=${item.introNames.size})")
 
+        val mainUri: Uri
+        if (totalBlocks > GtaIvRpfArchive.CHUNK_THRESHOLD_BLOCKS) {
+            val isContinuousMix = GtaIvMetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow == true && !isTalkRadio
+            val startBlk = if (isContinuousMix && totalBlocks > GtaIvRpfArchive.CHUNK_BLOCKS * 2) {
+                (rng.nextInt(totalBlocks / GtaIvRpfArchive.CHUNK_BLOCKS) * GtaIvRpfArchive.CHUNK_BLOCKS).coerceAtMost(totalBlocks - GtaIvRpfArchive.CHUNK_BLOCKS)
+            } else {
+                0
+            }
+            mainUri = item.archive.materializeAudioChunkUri(item.trackName, startBlk, GtaIvRpfArchive.CHUNK_BLOCKS) ?: return false
+            currentMultiChunkTotalBlocks = totalBlocks
+            currentMultiChunkNextBlock = startBlk + GtaIvRpfArchive.CHUNK_BLOCKS
+            currentMultiChunksPlayedInRow = 1
+        } else {
+            mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false
+            currentMultiChunkTotalBlocks = totalBlocks
+            currentMultiChunkNextBlock = totalBlocks
+            currentMultiChunksPlayedInRow = 1
+        }
+
+        val list = ArrayList<Uri>(2)
         if (item.introNames.isNotEmpty() && (requireDjIntro || rng.nextInt(100) < 60)) {
             val chosenIntro = item.introNames[rng.nextInt(item.introNames.size)]
             stationArchive.materializeAudioUri(chosenIntro)?.let { list.add(it) }
