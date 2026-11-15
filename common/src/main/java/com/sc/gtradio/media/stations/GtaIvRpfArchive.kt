@@ -44,8 +44,8 @@ class GtaIvRpfArchive(
     private var indexed = false
 
     companion object {
-        const val CHUNK_BLOCKS = 6
-        const val CHUNK_THRESHOLD_BLOCKS = 16
+        const val CHUNK_BLOCKS = 4
+        const val CHUNK_THRESHOLD_BLOCKS = 10
         private val prefetchExecutor = Executors.newSingleThreadExecutor()
         @Volatile private var oldCachePurged = false
 
@@ -310,15 +310,30 @@ class GtaIvRpfArchive(
         val safeFileName = "${rpfName.removeSuffix(".rpf")}_${cleanKey.replace(Regex("[^A-Z0-9_]"), "_")}$chunkSuffix.wav"
         val outFile = File(cacheDir, safeFileName)
         if (outFile.exists() && outFile.length() > 44L) {
+            outFile.setLastModified(System.currentTimeMillis())
             return Uri.fromFile(outFile)
         }
 
-        // Keep cache folder bounded
+        // Keep total decoded audio cache strictly under 45 MB so total app storage stays < 90 MB
         try {
-            val cached = cacheDir.listFiles()
-            if (cached != null && cached.size > 36) {
-                cached.sortBy { it.lastModified() }
-                for (i in 0 until 12) cached[i].delete()
+            val maxCacheBytes = 45L * 1024L * 1024L
+            val allCached = ArrayList<File>()
+            cacheDir.listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "sa_raw_tracks").listFiles()?.let { allCached.addAll(it) }
+
+            var totalBytes = 0L
+            for (f in allCached) totalBytes += f.length()
+
+            if (totalBytes > maxCacheBytes) {
+                allCached.sortBy { it.lastModified() }
+                val targetBytes = 28L * 1024L * 1024L
+                for (f in allCached) {
+                    if (totalBytes <= targetBytes) break
+                    if (f.name != safeFileName) {
+                        val len = f.length()
+                        if (f.delete()) totalBytes -= len
+                    }
+                }
             }
         } catch (_: Exception) {}
 
