@@ -1,0 +1,4 @@
+#pragma once
+
+#define PPSSPP_ARCH(PPSSPP_FEATURE) 0
+#define PPSSPP_PLATFORM(PPSSPP_FEATURE) 0
