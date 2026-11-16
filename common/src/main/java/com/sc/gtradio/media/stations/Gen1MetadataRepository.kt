@@ -279,7 +279,112 @@ object Gen1MetadataRepository {
             Gen1TrackCue(mmss(59, 35), mmss(61, 38), "Mambo Gozón", "Tito Puente")
         )
     )
-    private val lcsCuesByFile: Map<String, List<Gen1TrackCue>> = emptyMap()
+    // --- PART 3: GTA: Liberty City Stories (.AT3) Timestamp Cue Sheets ---
+    private val lcsCuesByFile: Map<String, List<Gen1TrackCue>> = mapOf(
+        "head.at3" to listOf(
+            Gen1TrackCue(mmss(0, 14), mmss(3, 19), "Train", "Conor & Jay"),
+            Gen1TrackCue(mmss(3, 24), mmss(6, 15), "The One For Me", "Cloud Nineteen"),
+            Gen1TrackCue(mmss(8, 12), mmss(11, 36), "Take the Pain", "Purser"),
+            Gen1TrackCue(mmss(11, 46), mmss(15, 28), "Free Yourself", "L-Marie feat. Raff"),
+            Gen1TrackCue(mmss(17, 20), mmss(20, 36), "Drive", "15 Ways"),
+            Gen1TrackCue(mmss(20, 42), mmss(23, 22), "Welcome to the Real World", "Roush"),
+            Gen1TrackCue(mmss(23, 28), mmss(26, 25), "Keep Dreaming", "Vanilla Smoothie")
+        ),
+        "lips.at3" to listOf(
+            Gen1TrackCue(mmss(0, 18), mmss(3, 48), "Funk in Time", "Rudy La Fontaine"),
+            Gen1TrackCue(mmss(3, 55), mmss(7, 2), "Love is the Feeling", "Sawaar"),
+            Gen1TrackCue(mmss(9, 5), mmss(12, 8), "Mine Until Monday", "Sunshine Shine"),
+            Gen1TrackCue(mmss(12, 15), mmss(15, 25), "Get Down", "Credit Check"),
+            Gen1TrackCue(mmss(17, 22), mmss(20, 45), "Tonight", "Cool Timers"),
+            Gen1TrackCue(mmss(20, 52), mmss(24, 12), "Bass", "Nina Barry"),
+            Gen1TrackCue(mmss(24, 20), mmss(27, 45), "Into Something (Come on, Get Down)", "The Jackstars")
+        ),
+        "double.at3" to listOf(
+            Gen1TrackCue(mmss(0, 28), mmss(3, 14), "Anvil Chorus (Il trovatore)", "Giuseppe Verdi"),
+            Gen1TrackCue(mmss(3, 35), mmss(7, 30), "Tacea la notte placida", "Giuseppe Verdi"),
+            Gen1TrackCue(mmss(9, 30), mmss(12, 40), "Vesti la giubba (Pagliacci)", "Ruggero Leoncavallo"),
+            Gen1TrackCue(mmss(12, 55), mmss(16, 50), "E amore un ladroncello", "Wolfgang Amadeus Mozart"),
+            Gen1TrackCue(mmss(18, 45), mmss(22, 50), "The Marriage of Figaro: Overture", "Wolfgang Amadeus Mozart"),
+            Gen1TrackCue(mmss(23, 5), mmss(26, 25), "Va, pensiero (Nabucco)", "Giuseppe Verdi")
+        ),
+        "kjah.at3" to listOf(
+            Gen1TrackCue(mmss(0, 18), mmss(3, 38), "Pick a Sound", "Selah Collins"),
+            Gen1TrackCue(mmss(3, 42), mmss(6, 52), "What a Wonderful Feeling", "Errol Bellot"),
+            Gen1TrackCue(mmss(6, 56), mmss(10, 18), "Watch How the People Dancing", "Kenny Knots"),
+            Gen1TrackCue(mmss(12, 15), mmss(15, 28), "Lean Boot", "Richie Davis"),
+            Gen1TrackCue(mmss(15, 32), mmss(19, 0), "Ready for the Dancehall Tonight", "Peter Bouncer"),
+            Gen1TrackCue(mmss(19, 5), mmss(22, 18), "Ring My Number", "Kenny Knots"),
+            Gen1TrackCue(mmss(22, 22), mmss(25, 35), "Run Come Call Me", "Kenny Knots"),
+            Gen1TrackCue(mmss(25, 40), mmss(28, 42), "You Ha Fe Cool", "Richie Davis")
+        ),
+        "rise.at3" to listOf(
+            Gen1TrackCue(mmss(0, 0), mmss(4, 38), "Sing It Back (Boris Musical Mix)", "Moloko"),
+            Gen1TrackCue(mmss(4, 38), mmss(8, 25), "Free", "Ultra Naté"),
+            Gen1TrackCue(mmss(8, 25), mmss(12, 15), "I Believe", "Happy Clappers"),
+            Gen1TrackCue(mmss(12, 15), mmss(15, 52), "House Music", "Eddie Amador"),
+            Gen1TrackCue(mmss(15, 52), mmss(19, 35), "Feel What You Want", "Kristine W"),
+            Gen1TrackCue(mmss(19, 35), mmss(23, 28), "Hideaway (Deep Dish Vocal Remix)", "De'Lacy"),
+            Gen1TrackCue(mmss(23, 28), mmss(27, 10), "Spin Spin Sugar (Armand's Dark Garage Mix)", "Sneaker Pimps"),
+            Gen1TrackCue(mmss(27, 10), mmss(30, 45), "Plastic Dreams", "Jaydee"),
+            Gen1TrackCue(mmss(30, 45), mmss(34, 20), "Altered States", "Ron Trent"),
+            Gen1TrackCue(mmss(34, 20), mmss(37, 15), "There Will Come a Day (Half Tab Mix)", "The Absolute"),
+            Gen1TrackCue(mmss(37, 15), mmss(39, 50), "Positive Education", "Slam"),
+            Gen1TrackCue(mmss(39, 50), mmss(42, 20), "Flash", "Green Velvet")
+        ),
+        "msx.at3" to listOf(
+            Gen1TrackCue(mmss(0, 0), mmss(3, 25), "Renegade Snares", "Omni Trio"),
+            Gen1TrackCue(mmss(3, 25), mmss(6, 48), "Terrorist", "Renegade"),
+            Gen1TrackCue(mmss(6, 48), mmss(10, 12), "Finest Illusion (Legal Mix)", "Foul Play"),
+            Gen1TrackCue(mmss(10, 12), mmss(13, 20), "Thru the Vibe (2 on 1 Mix)", "Omni Trio"),
+            Gen1TrackCue(mmss(13, 20), mmss(16, 45), "The Helicopter Tune", "Deep Blue"),
+            Gen1TrackCue(mmss(16, 45), mmss(20, 10), "Dred Bass", "Dead Dred"),
+            Gen1TrackCue(mmss(20, 10), mmss(23, 30), "Soul Promenade", "Omni Trio"),
+            Gen1TrackCue(mmss(23, 30), mmss(26, 45), "Living For The Future (FBD Project Remix)", "Omni Trio"),
+            Gen1TrackCue(mmss(26, 45), mmss(29, 55), "Disturbance (Tango Remix)", "Hyper-On Experience"),
+            Gen1TrackCue(mmss(29, 55), mmss(33, 10), "Cold Fresh Air", "Higher Sense"),
+            Gen1TrackCue(mmss(33, 10), mmss(36, 5), "First Contact", "Omni Trio"),
+            Gen1TrackCue(mmss(36, 5), mmss(38, 48), "Rolled Into 1 (Photek Remix)", "E-Z Rollers")
+        ),
+        "flash.at3" to listOf(
+            Gen1TrackCue(mmss(0, 14), mmss(4, 25), "I Wanna Rock You", "Giorgio Moroder"),
+            Gen1TrackCue(mmss(4, 32), mmss(8, 28), "E=MC2", "Giorgio Moroder"),
+            Gen1TrackCue(mmss(8, 35), mmss(13, 5), "From Here to Eternity", "Giorgio Moroder"),
+            Gen1TrackCue(mmss(15, 8), mmss(19, 45), "Chase", "Giorgio Moroder"),
+            Gen1TrackCue(mmss(19, 52), mmss(24, 18), "First Hand Experience in Second Hand Love", "Giorgio Moroder"),
+            Gen1TrackCue(mmss(24, 25), mmss(28, 50), "Knights in White Satin", "Giorgio Moroder")
+        ),
+        "lcj.at3" to listOf(
+            Gen1TrackCue(mmss(0, 20), mmss(3, 45), "All I Need", "Method Man"),
+            Gen1TrackCue(mmss(3, 52), mmss(7, 45), "Shook Ones (Part II)", "Mobb Deep"),
+            Gen1TrackCue(mmss(7, 52), mmss(11, 35), "Incarcerated Scarfaces", "Raekwon"),
+            Gen1TrackCue(mmss(11, 42), mmss(15, 5), "N.O.R.E.", "Noreaga"),
+            Gen1TrackCue(mmss(17, 10), mmss(21, 5), "Shut 'Em Down (Remix)", "Onyx feat. Noreaga & Big Pun"),
+            Gen1TrackCue(mmss(21, 12), mmss(24, 15), "Beware", "Big Pun"),
+            Gen1TrackCue(mmss(24, 20), mmss(27, 55), "Twinz (Deep Cover 98)", "Big Pun & Fat Joe"),
+            Gen1TrackCue(mmss(28, 2), mmss(30, 55), "Get At Me Dog", "DMX feat. Sheek Louch"),
+            Gen1TrackCue(mmss(33, 0), mmss(36, 45), "Ruff Ryders' Anthem (Remix)", "DMX feat. DJ Clue, Jadakiss, Styles P, Drag-On & Eve"),
+            Gen1TrackCue(mmss(36, 52), mmss(40, 35), "Do What Ya Feel", "Redman feat. Method Man"),
+            Gen1TrackCue(mmss(40, 42), mmss(44, 0), "Chain Gang Freestyle", "The LOX & Black Rob"),
+            Gen1TrackCue(mmss(44, 5), mmss(47, 30), "Chest2Chest Freestyle", "The LOX")
+        ),
+        "mundo.at3" to listOf(
+            Gen1TrackCue(mmss(0, 15), mmss(3, 38), "Raghupati", "Ananda Shankar"),
+            Gen1TrackCue(mmss(3, 45), mmss(7, 35), "Dum Maro Dum", "Asha Bhosle"),
+            Gen1TrackCue(mmss(7, 42), mmss(11, 25), "Neeve Nanna (Only You Were Mine)", "Vijaya Anand"),
+            Gen1TrackCue(mmss(13, 20), mmss(17, 30), "Kidda", "Natacha Atlas"),
+            Gen1TrackCue(mmss(17, 38), mmss(21, 45), "Hebeena Hebeena", "Farid El Atrache"),
+            Gen1TrackCue(mmss(21, 52), mmss(25, 25), "Aini Bet Ref", "Ahmed Mneimneh"),
+            Gen1TrackCue(mmss(27, 20), mmss(30, 40), "Im Nin'alu", "Ofra Haza"),
+            Gen1TrackCue(mmss(30, 48), mmss(33, 32), "Ballaa Tsoubou Hul Kahwa", "Samira Tawfik")
+        ),
+        "lcfr.at3" to listOf(
+            Gen1TrackCue(mmss(0, 10), mmss(9, 45), "Heartland Values", "Nurse Bob"),
+            Gen1TrackCue(mmss(11, 30), mmss(21, 15), "The Electron Zone", "Steve & Bill"),
+            Gen1TrackCue(mmss(23, 0), mmss(31, 45), "Breathing World", "Crow & Isis"),
+            Gen1TrackCue(mmss(33, 20), mmss(40, 30), "Coq 'O' Vin", "Richard Goblin"),
+            Gen1TrackCue(mmss(42, 0), mmss(50, 10), "Chatterbox", "Lazlow")
+        )
+    )
     private val vcsCuesByFile: Map<String, List<Gen1TrackCue>> = emptyMap()
 
     fun getStationInfo(fileName: String, gameCode: Int = 0): Gen1StationInfo? {
