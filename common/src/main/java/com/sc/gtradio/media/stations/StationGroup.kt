@@ -32,7 +32,7 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     var isGen1RawGroup: Boolean = false
         private set
     private val gen1StationFiles = HashMap<String, SimpleFileInfo>()
-    private var isGen1ViceCity: Boolean = false
+    private var gen1GameCode: Int = 0
 
     var isGtaIvRpfGroup: Boolean = false
         private set
@@ -150,27 +150,52 @@ init {
         }
     }
 
-    private fun detectGen1RawFiles(files: Array<SimpleFileInfo>): Pair<Boolean, List<SimpleFileInfo>>? {
+    private val gen1At3Archives = HashMap<String, At3AudioArchive>()
+
+    private fun detectGen1RawFiles(files: Array<SimpleFileInfo>): Pair<Int, List<SimpleFileInfo>>? {
         val vcKeys = Gen1MetadataRepository.viceCityStationsByFile.keys
         val vcMatched = files.filter { !it.isDirectory && vcKeys.contains(it.name.lowercase()) }
         if (vcMatched.size >= 2) {
             GTRadioLogger.log("detectGen1RawFiles: Detected ${vcMatched.size} GTA Vice City (.adf) stations in '${folderDoc.name}'")
-            return Pair(true, vcMatched)
+            return Pair(1, vcMatched)
         }
         val gta3Keys = Gen1MetadataRepository.gta3StationsByFile.keys
         val gta3Matched = files.filter { !it.isDirectory && gta3Keys.contains(it.name.lowercase()) }
         if (gta3Matched.size >= 2) {
             GTRadioLogger.log("detectGen1RawFiles: Detected ${gta3Matched.size} GTA III (.wav) stations in '${folderDoc.name}'")
-            return Pair(false, gta3Matched)
+            return Pair(2, gta3Matched)
+        }
+        val lowerNames = files.filter { !it.isDirectory }.map { it.name.lowercase() }.toSet()
+        val isLcsFolder = lowerNames.any { it in setOf("lcfr.at3", "lcj.at3", "mundo.at3", "double.at3", "kjah.at3", "lips.at3", "head.at3", "msx.at3", "rise.at3") } ||
+            folderDoc.name?.uppercase()?.contains("LCS") == true
+        if (isLcsFolder) {
+            val lcsKeys = Gen1MetadataRepository.lcsStationsByFile.keys
+            val lcsMatched = files.filter { !it.isDirectory && lcsKeys.contains(it.name.lowercase()) }
+            if (lcsMatched.size >= 2) {
+                GTRadioLogger.log("detectGen1RawFiles: Detected ${lcsMatched.size} GTA: Liberty City Stories (.AT3) stations in '${folderDoc.name}'")
+                return Pair(3, lcsMatched)
+            }
+        }
+        val vcsKeys = Gen1MetadataRepository.vcsStationsByFile.keys
+        val vcsMatched = files.filter { !it.isDirectory && vcsKeys.contains(it.name.lowercase()) }
+        if (vcsMatched.size >= 2) {
+            GTRadioLogger.log("detectGen1RawFiles: Detected ${vcsMatched.size} GTA: Vice City Stories (.AT3) stations in '${folderDoc.name}'")
+            return Pair(4, vcsMatched)
         }
         return null
     }
 
-    private fun setupGen1RawGroup(allFiles: Array<SimpleFileInfo>, isVc: Boolean, stationFiles: List<SimpleFileInfo>) {
+    private fun setupGen1RawGroup(allFiles: Array<SimpleFileInfo>, gameCode: Int, stationFiles: List<SimpleFileInfo>) {
         isGen1RawGroup = true
-        isGen1ViceCity = isVc
+        gen1GameCode = gameCode
         generation = 1
-        groupName = if (isVc) "GTA Vice City (ADF Audio)" else "GTA III (WAV Audio)"
+        groupName = when (gameCode) {
+            1 -> "GTA Vice City (ADF Audio)"
+            2 -> "GTA III (WAV Audio)"
+            3 -> "GTA: Liberty City Stories (AT3 Audio)"
+            4 -> "GTA: Vice City Stories (AT3 Audio)"
+            else -> "GTA Radio (Gen1 Audio)"
+        }
         mediaId = UUID.randomUUID().toString()
 
         val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
@@ -180,11 +205,11 @@ init {
             ?: FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
 
         val sortedFiles = stationFiles.sortedBy {
-            Gen1MetadataRepository.getStationInfo(it.name)?.displayName ?: it.name
+            Gen1MetadataRepository.getStationInfo(it.name, gameCode)?.displayName ?: it.name
         }
 
         for (stFile in sortedFiles) {
-            val info = Gen1MetadataRepository.getStationInfo(stFile.name)
+            val info = Gen1MetadataRepository.getStationInfo(stFile.name, gameCode)
             val stDisplayName = info?.displayName ?: stFile.name
             val stMediaId = UUID.randomUUID().toString()
 
@@ -233,14 +258,34 @@ init {
         val fileInfo = gen1StationFiles[stMediaId]
             ?: gen1StationFiles[titleKey]
             ?: gen1StationFiles.values.first()
-        val stInfo = Gen1MetadataRepository.getStationInfo(fileInfo.name)
+        val stInfo = Gen1MetadataRepository.getStationInfo(fileInfo.name, gen1GameCode)
+
+        if (gen1GameCode == 3 || gen1GameCode == 4) {
+            val arch = gen1At3Archives.getOrPut(fileInfo.name.lowercase()) {
+                At3AudioArchive(ctx, fileInfo.name, fileInfo.uri)
+            }
+            return Gen1At3RadioStation(
+                stationGroupId = stationGroupId,
+                mediaId = stMediaId,
+                mediaItem = stMediaItem,
+                archive = arch,
+                stationInfo = stInfo,
+                isVcs = (gen1GameCode == 4),
+                player = player,
+                context = ctx,
+                adsEnabled = adsEnabled,
+                weatherChatterEnabled = weatherChatterEnabled,
+                newsReportsEnabled = newsReportsEnabled
+            )
+        }
+
         return Gen1RawRadioStation(
             stationGroupId = stationGroupId,
             mediaId = stMediaId,
             mediaItem = stMediaItem,
             fileName = fileInfo.name,
             sourceUri = fileInfo.uri,
-            isVcAdf = isGen1ViceCity,
+            isVcAdf = (gen1GameCode == 1),
             stationInfo = stInfo,
             player = player,
             context = ctx,

@@ -12,6 +12,9 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
+        ndk {
+            abiFilters "arm64-v8a", "armeabi-v7a", "x86_64"
+        }
     }
 
     buildTypes {
@@ -26,6 +29,15 @@ android {
     }
     kotlinOptions {
         jvmTarget = '17'
+    }
+    def envNdk = System.getenv("ANDROID_NDK_LATEST_HOME") ?: System.getenv("ANDROID_NDK_HOME") ?: System.getenv("ANDROID_NDK")
+    if (envNdk != null && new File(envNdk).exists()) {
+        ndkPath envNdk
+    }
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+        }
     }
     namespace 'com.sc.gtradio.media'
 }
