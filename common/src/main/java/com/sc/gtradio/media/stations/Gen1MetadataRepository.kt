@@ -385,7 +385,153 @@ object Gen1MetadataRepository {
             Gen1TrackCue(mmss(42, 0), mmss(50, 10), "Chatterbox", "Lazlow")
         )
     )
-    private val vcsCuesByFile: Map<String, List<Gen1TrackCue>> = emptyMap()
+    // --- PART 4: GTA: Vice City Stories (.AT3) Timestamp Cue Sheets ---
+    private val vcsCuesByFile: Map<String, List<Gen1TrackCue>> = mapOf(
+        "flash.at3" to listOf(
+            Gen1TrackCue(mmss(0, 0), mmss(3, 55), "Gloria", "Laura Branigan"),
+            Gen1TrackCue(mmss(4, 6), mmss(7, 50), "Human Touch", "Rick Springfield"),
+            Gen1TrackCue(mmss(8, 1), mmss(11, 12), "The One Thing", "INXS"),
+            Gen1TrackCue(mmss(11, 17), mmss(15, 22), "Easy Lover", "Philip Bailey & Phil Collins"),
+            Gen1TrackCue(mmss(15, 30), mmss(19, 18), "The Warrior", "Scandal feat. Patty Smyth"),
+            Gen1TrackCue(mmss(19, 28), mmss(22, 52), "Love Resurrection", "Alison Moyet"),
+            Gen1TrackCue(mmss(23, 1), mmss(26, 35), "Games People Play", "The Alan Parsons Project"),
+            Gen1TrackCue(mmss(27, 44), mmss(30, 40), "Family Man", "Hall & Oates"),
+            Gen1TrackCue(mmss(30, 46), mmss(34, 0), "Love Is a Battlefield", "Pat Benatar"),
+            Gen1TrackCue(mmss(34, 6), mmss(37, 18), "Wouldn't It Be Good", "Nik Kershaw"),
+            Gen1TrackCue(mmss(37, 23), mmss(40, 55), "Together in Electric Dreams", "Philip Oakey & Giorgio Moroder"),
+            Gen1TrackCue(mmss(41, 5), mmss(44, 45), "It's My Life", "Talk Talk"),
+            Gen1TrackCue(mmss(44, 55), mmss(48, 15), "Destination Unknown", "Missing Persons"),
+            Gen1TrackCue(mmss(48, 25), mmss(51, 55), "Don't Let Go", "Wang Chung"),
+            Gen1TrackCue(mmss(52, 5), mmss(55, 45), "Appaloosa", "Gino Vannelli"),
+            Gen1TrackCue(mmss(55, 55), mmss(59, 15), "Turn It On Again", "Genesis"),
+            Gen1TrackCue(mmss(59, 22), mmss(62, 5), "Living on the Ceiling", "Blancmange"),
+            Gen1TrackCue(mmss(62, 12), mmss(64, 50), "Come Back and Stay", "Paul Young")
+        ),
+        "vrock.at3" to listOf(
+            Gen1TrackCue(mmss(0, 32), mmss(4, 22), "Holy Diver", "Dio"),
+            Gen1TrackCue(mmss(4, 27), mmss(8, 35), "Queen of the Reich", "Queensrÿche"),
+            Gen1TrackCue(mmss(9, 52), mmss(13, 14), "Lick It Up", "KISS"),
+            Gen1TrackCue(mmss(13, 19), mmss(16, 55), "Breaking the Chains", "Dokken"),
+            Gen1TrackCue(mmss(18, 31), mmss(22, 20), "All I'm Gonna Take", "Autograph"),
+            Gen1TrackCue(mmss(23, 45), mmss(27, 55), "Balls to the Wall", "Accept"),
+            Gen1TrackCue(mmss(28, 1), mmss(32, 5), "Rock You Like a Hurricane", "Scorpions"),
+            Gen1TrackCue(mmss(32, 57), mmss(36, 35), "Long Stick Goes Boom", "Krokus"),
+            Gen1TrackCue(mmss(36, 41), mmss(40, 55), "Stranglehold", "Ted Nugent"),
+            Gen1TrackCue(mmss(41, 2), mmss(45, 10), "Round and Round", "Ratt"),
+            Gen1TrackCue(mmss(46, 15), mmss(50, 25), "Electric Eye", "Judas Priest"),
+            Gen1TrackCue(mmss(50, 35), mmss(54, 30), "Looks That Kill", "Mötley Crüe"),
+            Gen1TrackCue(mmss(55, 15), mmss(59, 38), "Metal Health (Bang Your Head)", "Quiet Riot")
+        ),
+        "emotion.at3" to listOf(
+            Gen1TrackCue(mmss(0, 0), mmss(2, 52), "Only the Lonely", "The Motels"),
+            Gen1TrackCue(mmss(2, 57), mmss(7, 55), "I'm Not in Love", "10cc"),
+            Gen1TrackCue(mmss(8, 8), mmss(11, 45), "Harden My Heart", "Quarterflash"),
+            Gen1TrackCue(mmss(13, 7), mmss(16, 25), "Make Believe", "Toto"),
+            Gen1TrackCue(mmss(16, 32), mmss(20, 5), "Fool (If You Think It's Over)", "Elkie Brooks"),
+            Gen1TrackCue(mmss(21, 6), mmss(24, 55), "I'm in Love with a German Film Star", "The Passions"),
+            Gen1TrackCue(mmss(25, 49), mmss(29, 35), "I Want to Know What Love Is", "Foreigner"),
+            Gen1TrackCue(mmss(29, 40), mmss(33, 15), "Never Never", "The Assembly"),
+            Gen1TrackCue(mmss(34, 15), mmss(37, 50), "We Belong", "Pat Benatar"),
+            Gen1TrackCue(mmss(37, 56), mmss(41, 12), "Private Life", "The Pretenders"),
+            Gen1TrackCue(mmss(41, 17), mmss(45, 58), "In the Air Tonight", "Phil Collins"),
+            Gen1TrackCue(mmss(46, 7), mmss(49, 55), "Avalon", "Roxy Music"),
+            Gen1TrackCue(mmss(50, 49), mmss(54, 15), "Baby Hold On", "Eddie Money"),
+            Gen1TrackCue(mmss(54, 22), mmss(58, 35), "Stone Cold", "Rainbow"),
+            Gen1TrackCue(mmss(58, 43), mmss(62, 28), "Call to the Heart", "Giuffria"),
+            Gen1TrackCue(mmss(62, 35), mmss(65, 40), "Moments in Love", "Art of Noise"),
+            Gen1TrackCue(mmss(65, 47), mmss(69, 5), "I Can Dream About You", "Dan Hartman")
+        ),
+        "wave_eu.at3" to listOf(
+            Gen1TrackCue(mmss(0, 10), mmss(3, 45), "Love Action (I Believe in Love)", "The Human League"),
+            Gen1TrackCue(mmss(3, 52), mmss(7, 25), "Love on Your Side", "Thompson Twins"),
+            Gen1TrackCue(mmss(7, 32), mmss(11, 15), "Everything Counts", "Depeche Mode"),
+            Gen1TrackCue(mmss(12, 30), mmss(16, 10), "Heart of Glass", "Blondie"),
+            Gen1TrackCue(mmss(16, 18), mmss(19, 55), "Relax", "Frankie Goes to Hollywood"),
+            Gen1TrackCue(mmss(20, 5), mmss(23, 35), "(How to Be A) Millionaire", "ABC"),
+            Gen1TrackCue(mmss(25, 0), mmss(29, 35), "Blue Monday", "New Order"),
+            Gen1TrackCue(mmss(29, 42), mmss(33, 25), "Quiet Life", "Japan"),
+            Gen1TrackCue(mmss(33, 32), mmss(37, 20), "Too Shy (Midnight Mix)", "Kajagoogoo"),
+            Gen1TrackCue(mmss(38, 30), mmss(42, 15), "Penthouse and Pavement", "Heaven 17"),
+            Gen1TrackCue(mmss(42, 55), mmss(46, 18), "Like to Get to Know You Well", "Howard Jones"),
+            Gen1TrackCue(mmss(46, 23), mmss(49, 55), "A Forest", "The Cure"),
+            Gen1TrackCue(mmss(50, 0), mmss(53, 35), "Space Age Love Song", "A Flock of Seagulls"),
+            Gen1TrackCue(mmss(53, 40), mmss(56, 20), "Don't Go", "Yazoo")
+        ),
+        "wave.at3" to listOf(
+            Gen1TrackCue(mmss(0, 10), mmss(3, 45), "Love Action (I Believe in Love)", "The Human League"),
+            Gen1TrackCue(mmss(3, 52), mmss(7, 25), "Love on Your Side", "Thompson Twins"),
+            Gen1TrackCue(mmss(7, 32), mmss(11, 15), "Everything Counts", "Depeche Mode"),
+            Gen1TrackCue(mmss(12, 30), mmss(16, 10), "Heart of Glass", "Blondie"),
+            Gen1TrackCue(mmss(16, 18), mmss(19, 55), "Relax", "Frankie Goes to Hollywood"),
+            Gen1TrackCue(mmss(20, 5), mmss(23, 35), "(How to Be A) Millionaire", "ABC"),
+            Gen1TrackCue(mmss(25, 0), mmss(29, 35), "Blue Monday", "New Order"),
+            Gen1TrackCue(mmss(29, 42), mmss(33, 25), "Quiet Life", "Japan"),
+            Gen1TrackCue(mmss(33, 32), mmss(37, 20), "Too Shy (Midnight Mix)", "Kajagoogoo"),
+            Gen1TrackCue(mmss(38, 30), mmss(42, 10), "Penthouse and Pavement", "Heaven 17"),
+            Gen1TrackCue(mmss(42, 15), mmss(45, 50), "Sex (I'm A...)", "Berlin"),
+            Gen1TrackCue(mmss(46, 37), mmss(49, 58), "Like to Get to Know You Well", "Howard Jones"),
+            Gen1TrackCue(mmss(50, 1), mmss(53, 32), "A Forest", "The Cure"),
+            Gen1TrackCue(mmss(53, 36), mmss(57, 15), "Space Age Love Song", "A Flock of Seagulls"),
+            Gen1TrackCue(mmss(57, 19), mmss(60, 0), "Don't Go", "Yazoo")
+        ),
+        "fresh.at3" to listOf(
+            Gen1TrackCue(mmss(0, 0), mmss(3, 5), "Renegades of Funk", "Afrika Bambaataa & the Soul Sonic Force"),
+            Gen1TrackCue(mmss(3, 8), mmss(5, 45), "Pack Jam (Look Out for the OVC)", "The Jonzun Crew"),
+            Gen1TrackCue(mmss(5, 47), mmss(8, 35), "It's Like That", "Run-D.M.C."),
+            Gen1TrackCue(mmss(8, 39), mmss(11, 55), "Play at Your Own Risk", "Planet Patrol"),
+            Gen1TrackCue(mmss(12, 0), mmss(15, 5), "Egypt, Egypt", "The Egyptian Lover"),
+            Gen1TrackCue(mmss(15, 9), mmss(17, 50), "Beat Box (Diversion One)", "Art of Noise"),
+            Gen1TrackCue(mmss(17, 55), mmss(20, 45), "Boogie Down Bronx", "Man Parrish"),
+            Gen1TrackCue(mmss(20, 50), mmss(23, 55), "Request Line", "Rock Master Scott & the Dynamic Three"),
+            Gen1TrackCue(mmss(24, 0), mmss(26, 55), "Freak-A-Zoid", "Midnight Star"),
+            Gen1TrackCue(mmss(27, 0), mmss(29, 44), "Freaks Come Out at Night", "Whodini")
+        ),
+        "paradise.at3" to listOf(
+            Gen1TrackCue(mmss(0, 1), mmss(2, 55), "I Hear Music in the Streets", "Unlimited Touch"),
+            Gen1TrackCue(mmss(2, 58), mmss(6, 54), "Everyway But Loose (Larry Levan Remix)", "Plunky & the Oneness of Juju"),
+            Gen1TrackCue(mmss(6, 57), mmss(9, 45), "Can't Fake the Feeling", "Geraldine Hunt"),
+            Gen1TrackCue(mmss(9, 49), mmss(12, 38), "Do It to the Music", "Raw Silk"),
+            Gen1TrackCue(mmss(12, 42), mmss(15, 22), "Is It In", "Jimmy 'Bo' Horne"),
+            Gen1TrackCue(mmss(15, 25), mmss(18, 22), "Together Forever", "Exodus"),
+            Gen1TrackCue(mmss(18, 25), mmss(23, 10), "This Time Baby", "Jackie Moore"),
+            Gen1TrackCue(mmss(23, 15), mmss(26, 20), "Weekend (Tonight Is Party Time)", "Class Action"),
+            Gen1TrackCue(mmss(26, 25), mmss(29, 50), "It Should Have Been You", "Gwen Guthrie"),
+            Gen1TrackCue(mmss(29, 55), mmss(32, 32), "You Used to Hold Me So Tight", "Thelma Houston"),
+            Gen1TrackCue(mmss(32, 35), mmss(35, 35), "Lost in Music (1984 Bernard Edwards & Nile Rodgers Remix)", "Sister Sledge"),
+            Gen1TrackCue(mmss(35, 40), mmss(38, 25), "Love Has Come Around", "Donald Byrd"),
+            Gen1TrackCue(mmss(38, 28), mmss(41, 17), "The Glow of Love", "Change feat. Luther Vandross")
+        ),
+        "vcfl.at3" to listOf(
+            Gen1TrackCue(mmss(0, 0), mmss(3, 20), "Sexual Healing", "Marvin Gaye"),
+            Gen1TrackCue(mmss(3, 22), mmss(6, 22), "Fantasy", "Earth, Wind & Fire"),
+            Gen1TrackCue(mmss(7, 27), mmss(10, 38), "It Started with a Kiss", "Hot Chocolate"),
+            Gen1TrackCue(mmss(10, 42), mmss(13, 32), "Mary Jane", "Rick James"),
+            Gen1TrackCue(mmss(13, 36), mmss(17, 15), "Nightshift", "Commodores"),
+            Gen1TrackCue(mmss(18, 20), mmss(21, 15), "Mambo", "Wally Badarou"),
+            Gen1TrackCue(mmss(21, 20), mmss(25, 10), "It's Ecstasy When You Lay Down Next to Me", "Barry White"),
+            Gen1TrackCue(mmss(26, 15), mmss(29, 45), "You Can't Turn Me Away", "Sylvia Striplin"),
+            Gen1TrackCue(mmss(29, 50), mmss(32, 55), "Everybody Loves the Sunshine", "Roy Ayers Ubiquity"),
+            Gen1TrackCue(mmss(33, 0), mmss(35, 55), "Risin' to the Top", "Keni Burke"),
+            Gen1TrackCue(mmss(36, 0), mmss(38, 54), "Love T.K.O.", "Teddy Pendergrass")
+        ),
+        "espant.at3" to listOf(
+            Gen1TrackCue(mmss(0, 1), mmss(3, 20), "Acid", "Ray Barretto"),
+            Gen1TrackCue(mmss(3, 24), mmss(7, 40), "I Like It (I Like It Like That)", "Pete 'El Conde' Rodriguez"),
+            Gen1TrackCue(mmss(7, 45), mmss(11, 20), "Oye Cómo Va", "Tito Puente"),
+            Gen1TrackCue(mmss(11, 24), mmss(14, 8), "Mi Ritmo Es Bueno", "Bobby Valentín & Frankie Hernández"),
+            Gen1TrackCue(mmss(14, 12), mmss(17, 38), "Químbara", "Celia Cruz & Johnny Pacheco"),
+            Gen1TrackCue(mmss(17, 41), mmss(21, 0), "Mi Gente", "Héctor Lavoe"),
+            Gen1TrackCue(mmss(21, 5), mmss(26, 15), "Revolt / La Libertad Lógico", "Eddie Palmieri & Ismael Quintana"),
+            Gen1TrackCue(mmss(26, 20), mmss(30, 32), "El Malo", "Willie Colón & Héctor Lavoe")
+        ),
+        "vcpr.at3" to listOf(
+            Gen1TrackCue(mmss(0, 0), mmss(17, 35), "Pressing Issues", "Maurice Chavez"),
+            Gen1TrackCue(mmss(17, 42), mmss(31, 25), "Bait and Switch", "Larry Joe & Bobbie Ray"),
+            Gen1TrackCue(mmss(31, 31), mmss(40, 30), "The Time Ranger", "VCPR Vintage Drama"),
+            Gen1TrackCue(mmss(40, 36), mmss(53, 20), "New World Order", "Dwayne Thorn"),
+            Gen1TrackCue(mmss(53, 25), mmss(64, 59), "Gordon Moorehead Rides Again", "VCPR Vintage Drama")
+        )
+    )
 
     fun getStationInfo(fileName: String, gameCode: Int = 0): Gen1StationInfo? {
         val lower = fileName.lowercase().trim()
