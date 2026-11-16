@@ -33,6 +33,7 @@ android {
     def envNdk = System.getenv("ANDROID_NDK_LATEST_HOME") ?: System.getenv("ANDROID_NDK_HOME") ?: System.getenv("ANDROID_NDK")
     if (envNdk != null && new File(envNdk).exists()) {
         ndkPath envNdk
+        ndkVersion new File(envNdk).name
     }
     externalNativeBuild {
         cmake {
