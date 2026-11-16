@@ -142,11 +142,11 @@ object Gen1MetadataRepository {
         ),
         "game.wav" to listOf(
             Gen1TrackCue(mmss(0, 0), mmss(0, 27), "Scary Movies (Instrumental)", "Bad Meets Evil"),
-            Gen1TrackCue(mmss(0, 27), mmss(2, 42), "We're Live (Danger)", "Royce Da 5'9""),
+            Gen1TrackCue(mmss(0, 27), mmss(2, 42), "We're Live (Danger)", "Royce Da 5'9\""),
             Gen1TrackCue(mmss(2, 42), mmss(3, 48), "Nature Freestyle", "Nature"),
             Gen1TrackCue(mmss(3, 48), mmss(5, 14), "JoJo Pellegrino Freestyle", "JoJo Pellegrino"),
-            Gen1TrackCue(mmss(5, 14), mmss(7, 35), "Spit Game", "Pretty Ugly & Royce Da 5'9""),
-            Gen1TrackCue(mmss(7, 35), mmss(9, 55), "I'm the King", "Royce Da 5'9""),
+            Gen1TrackCue(mmss(5, 14), mmss(7, 35), "Spit Game", "Pretty Ugly & Royce Da 5'9\""),
+            Gen1TrackCue(mmss(7, 35), mmss(9, 55), "I'm the King", "Royce Da 5'9\""),
             Gen1TrackCue(mmss(10, 51), mmss(12, 50), "By a Stranger", "Black Rob"),
             Gen1TrackCue(mmss(12, 50), mmss(15, 15), "Rising to the Top", "Agallah feat. Sean Price")
         ),
