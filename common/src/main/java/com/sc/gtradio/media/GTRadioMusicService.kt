@@ -121,37 +121,71 @@ import java.util.ArrayList
             }
         }
 
-        override fun onPlay() {
-            if (activeStation == null && activeStationGroupId != null) {
-                //Pick up the first station in the group
-                val group = getStationGroup(activeStationGroupId!!) ?: return
-                val firstStation = group.stationList.firstOrNull() ?: return
-                activeStation = getRadioStation(group, firstStation.mediaId!!)
-            } else if (activeStation == null) {
-                //Pick the first station overall
-                val mediaId = fullStationList.firstOrNull()?.mediaId ?: return
-                val group = getStationGroupContainingMedia(mediaId) ?: return
-                activeStation = getRadioStation(group, mediaId)
+        private fun configureLoopingNavigationActions(group: StationGroup, stationIndex: Int): Long {
+            val canCycle = group.stationList.size > 1
+            radioPlayer.nextEnabled = canCycle
+            radioPlayer.previousEnabled = canCycle
+            var actions = group.getPlaybackActionsForStation(stationIndex)
+            if (canCycle) {
+                actions = actions or
+                    PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                    PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+            }
+            return actions
+        }
+
+        private fun startStationWithGlobalTuningNoise(group: StationGroup, station: RadioStation, stationIndex: Int) {
+            val playbackActions = configureLoopingNavigationActions(group, stationIndex)
+            val noisePack = DynamicThemeManager.findNoisePackForSeries(applicationContext, group.groupName)
+            val shouldPlayNoise = noisePack != null &&
+                noisePack.noiseSoundUris.isNotEmpty() &&
+                DynamicThemeManager.isDynamicThemeEnabled(applicationContext)
+
+            if (shouldPlayNoise) {
+                radioPlayer.setStreamMuted(true)
+                station.play()
+                DynamicThemeManager.playTuningNoiseUntilReady(
+                    applicationContext,
+                    noisePack!!,
+                    isRadioReady = { radioPlayer.isExoPlayerReady() },
+                    onComplete = {
+                        radioPlayer.setStreamMuted(false)
+                        if (activeStation?.mediaId == station.mediaId) {
+                            session.setMetadata(station.metadata)
+                            notificationManager.showNotificationForPlayer(radioPlayer)
+                        }
+                    }
+                )
+            } else {
+                DynamicThemeManager.stopTuningNoise()
+                radioPlayer.setStreamMuted(false)
+                station.play()
             }
 
-            if (activeStation == null) {
-                return
-            }
-
-            //Get and set the playback actions available when on this station
-            val group = getStationGroup(activeStation!!.stationGroupId) ?: return
-            val stationIndex = group.getStationIndex(activeStation!!.mediaId)
-            radioPlayer.nextEnabled = stationIndex < group.stationList.lastIndex
-            radioPlayer.previousEnabled = stationIndex != 0
-            val playbackActions = group.getPlaybackActionsForStation(stationIndex)
-
-            activeStation?.play()
             val playbackState = PlaybackStateCompat.Builder()
                 .setState(PlaybackStateCompat.STATE_PLAYING, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)
                 .setActions(playbackActions)
                 .build()
             session.setPlaybackState(playbackState)
-            session.setMetadata(activeStation!!.metadata)
+            session.setMetadata(station.metadata)
+            notificationManager.showNotificationForPlayer(radioPlayer)
+        }
+
+        override fun onPlay() {
+            if (activeStation == null && activeStationGroupId != null) {
+                val group = getStationGroup(activeStationGroupId!!) ?: return
+                val firstStation = group.stationList.firstOrNull() ?: return
+                activeStation = getRadioStation(group, firstStation.mediaId!!)
+            } else if (activeStation == null) {
+                val mediaId = fullStationList.firstOrNull()?.mediaId ?: return
+                val group = getStationGroupContainingMedia(mediaId) ?: return
+                activeStation = getRadioStation(group, mediaId)
+            }
+
+            val st = activeStation ?: return
+            val group = getStationGroup(st.stationGroupId) ?: return
+            val stationIndex = group.getStationIndex(st.mediaId)
+            startStationWithGlobalTuningNoise(group, st, stationIndex)
         }
 
         override fun onPlayFromMediaId(mediaId: String?, extras: Bundle?) {
@@ -162,43 +196,22 @@ import java.util.ArrayList
             val group = getStationGroupContainingMedia(mediaId) ?: return
             if (activeStation?.mediaId != mediaId) { activeStation?.stop() }
             activeStation = getRadioStation(group, mediaId)
-            if (activeStation == null) {
-                //Unable to find the station to play
-                return
-            }
+            val st = activeStation ?: return
 
             activeStationGroupId = group.mediaItem.mediaId
-
-            //Get and set the playback actions available when on this station
-            val stationIndex = group.getStationIndex(activeStation!!.mediaId)
-            radioPlayer.nextEnabled = stationIndex < group.stationList.lastIndex
-            radioPlayer.previousEnabled = stationIndex != 0
-            val playbackActions = group.getPlaybackActionsForStation(stationIndex)
-
-            activeStation!!.play()
-            val playbackState = PlaybackStateCompat.Builder()
-                .setState(PlaybackStateCompat.STATE_PLAYING, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)
-                .setActions(playbackActions)
-                .build()
-            session.setPlaybackState(playbackState)
-            session.setMetadata(activeStation!!.metadata)
+            val stationIndex = group.getStationIndex(st.mediaId)
+            startStationWithGlobalTuningNoise(group, st, stationIndex)
         }
 
         override fun onPause() {
-            if (activeStation == null) {
-                return
-            }
-
-            //Get and set the playback actions available when on this station
-            val group = getStationGroup(activeStation!!.stationGroupId) ?: return
-            val stationIndex = group.getStationIndex(activeStation!!.mediaId)
-            radioPlayer.nextEnabled = stationIndex < group.stationList.lastIndex
-            radioPlayer.previousEnabled = stationIndex != 0
-            val playbackActions = group.getPlaybackActionsForStation(stationIndex)
+            val st = activeStation ?: return
+            val group = getStationGroup(st.stationGroupId) ?: return
+            val stationIndex = group.getStationIndex(st.mediaId)
+            val playbackActions = configureLoopingNavigationActions(group, stationIndex)
 
             DynamicThemeManager.stopTuningNoise()
             radioPlayer.setStreamMuted(false)
-            activeStation?.stop()
+            st.stop()
             val playbackState = PlaybackStateCompat.Builder()
                 .setState(PlaybackStateCompat.STATE_STOPPED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)
                 .setActions(playbackActions)
@@ -207,20 +220,14 @@ import java.util.ArrayList
         }
 
         override fun onStop() {
-            if (activeStation == null) {
-                return
-            }
-
-            //Get and set the playback actions available when on this station
-            val group = getStationGroup(activeStation!!.stationGroupId) ?: return
-            val stationIndex = group.getStationIndex(activeStation!!.mediaId)
-            radioPlayer.nextEnabled = stationIndex < group.stationList.lastIndex
-            radioPlayer.previousEnabled = stationIndex != 0
-            val playbackActions = group.getPlaybackActionsForStation(stationIndex)
+            val st = activeStation ?: return
+            val group = getStationGroup(st.stationGroupId) ?: return
+            val stationIndex = group.getStationIndex(st.mediaId)
+            val playbackActions = configureLoopingNavigationActions(group, stationIndex)
 
             DynamicThemeManager.stopTuningNoise()
             radioPlayer.setStreamMuted(false)
-            activeStation?.stop()
+            st.stop()
             val playbackState = PlaybackStateCompat.Builder()
                 .setState(PlaybackStateCompat.STATE_STOPPED, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)
                 .setActions(playbackActions)
@@ -232,78 +239,48 @@ import java.util.ArrayList
             if (activeStation == null && activeStationGroupId == null) {
                 return
             } else if (activeStation == null && activeStationGroupId != null) {
-                //Pick up the first station in the group
                 val group = getStationGroup(activeStationGroupId!!) ?: return
                 val firstStation = group.stationList.firstOrNull() ?: return
                 activeStation = getRadioStation(group, firstStation.mediaId!!)
-            }
-
-            //There is an active station, find its index and move to the next one if available
-            val group = getStationGroup(activeStation!!.stationGroupId) ?: return
-            val stationIndex = group.getStationIndex(activeStation!!.mediaId)
-            var nextStationIndex = stationIndex + 1
-            if (nextStationIndex >= group.stationList.size) {
-                //Loop back to start
-                nextStationIndex = 0
-            }
-            activeStation?.stop()
-            activeStation = getRadioStation(group, group.stationList[nextStationIndex].mediaId!!)
-
-            if (activeStation == null) {
+                val st = activeStation ?: return
+                startStationWithGlobalTuningNoise(group, st, 0)
                 return
             }
 
-            //Get and set the playback actions available when on this station
-            radioPlayer.nextEnabled = nextStationIndex < group.stationList.lastIndex
-            radioPlayer.previousEnabled = nextStationIndex != 0
-            val playbackActions = group.getPlaybackActionsForStation(nextStationIndex)
+            val currentSt = activeStation ?: return
+            val group = getStationGroup(currentSt.stationGroupId) ?: return
+            if (group.stationList.isEmpty()) return
+            val stationIndex = group.getStationIndex(currentSt.mediaId)
+            val nextStationIndex = if (stationIndex + 1 >= group.stationList.size) 0 else (stationIndex + 1)
 
-            activeStation?.play()
-            val playbackState = PlaybackStateCompat.Builder()
-                .setState(PlaybackStateCompat.STATE_PLAYING, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)
-                .setActions(playbackActions)
-                .build()
-            session.setPlaybackState(playbackState)
-            session.setMetadata(activeStation!!.metadata)
+            currentSt.stop()
+            activeStation = getRadioStation(group, group.stationList[nextStationIndex].mediaId!!)
+            val nextSt = activeStation ?: return
+            startStationWithGlobalTuningNoise(group, nextSt, nextStationIndex)
         }
 
         override fun onSkipToPrevious() {
             if (activeStation == null && activeStationGroupId == null) {
                 return
             } else if (activeStation == null && activeStationGroupId != null) {
-                //Pick up the first station in the group
                 val group = getStationGroup(activeStationGroupId!!) ?: return
                 val firstStation = group.stationList.firstOrNull() ?: return
                 activeStation = getRadioStation(group, firstStation.mediaId!!)
-            }
-
-            //There is an active station, find its index and move to the previous one if available
-            val group = getStationGroup(activeStation!!.stationGroupId) ?: return
-            val stationIndex = group.getStationIndex(activeStation!!.mediaId)
-            var prevStationIndex = stationIndex - 1
-            if (prevStationIndex < 0) {
-                //Loop back to end
-                prevStationIndex = group.stationList.lastIndex
-            }
-            activeStation?.stop()
-            activeStation = getRadioStation(group, group.stationList[prevStationIndex].mediaId!!)
-
-            if (activeStation == null) {
+                val st = activeStation ?: return
+                startStationWithGlobalTuningNoise(group, st, 0)
                 return
             }
 
-            //Get and set the playback actions available when on this station
-            radioPlayer.nextEnabled = prevStationIndex < group.stationList.lastIndex
-            radioPlayer.previousEnabled = prevStationIndex != 0
-            val playbackActions = group.getPlaybackActionsForStation(prevStationIndex)
+            val currentSt = activeStation ?: return
+            val group = getStationGroup(currentSt.stationGroupId) ?: return
+            if (group.stationList.isEmpty()) return
+            val stationIndex = group.getStationIndex(currentSt.mediaId)
+            val prevStationIndex = if (stationIndex - 1 < 0) group.stationList.lastIndex else (stationIndex - 1)
 
-            activeStation?.play()
-            val playbackState = PlaybackStateCompat.Builder()
-                .setState(PlaybackStateCompat.STATE_PLAYING, PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN, 1F)
-                .setActions(playbackActions)
-                .build()
-            session.setPlaybackState(playbackState)
-            session.setMetadata(activeStation!!.metadata)
+            currentSt.stop()
+            activeStation = getRadioStation(group, group.stationList[prevStationIndex].mediaId!!)
+            val prevSt = activeStation ?: return
+            startStationWithGlobalTuningNoise(group, prevSt, prevStationIndex)
         }
 
         override fun onPlayFromSearch(query: String?, extras: Bundle?) {

@@ -151,21 +151,13 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
 
     override fun isCommandAvailable(command: Int): Boolean {
         return when(command) {
-            Player.COMMAND_PLAY_PAUSE -> {
-                true
-            }
-            Player.COMMAND_STOP -> {
-                isPlaying
-            }
-            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> {
-                hasNext()
-            }
-            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> {
-                hasPrevious()
-            }
-            else -> {
-                exoPlayer.isCommandAvailable(command)
-            }
+            Player.COMMAND_PLAY_PAUSE -> true
+            Player.COMMAND_STOP -> isPlaying
+            Player.COMMAND_SEEK_TO_NEXT,
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> hasNext()
+            Player.COMMAND_SEEK_TO_PREVIOUS,
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM -> hasPrevious()
+            else -> exoPlayer.isCommandAvailable(command)
         }
     }
 
@@ -174,7 +166,16 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
     }
 
     override fun getAvailableCommands(): Player.Commands {
-        return exoPlayer.availableCommands
+        val builder = exoPlayer.availableCommands.buildUpon()
+        if (hasNext()) {
+            builder.add(Player.COMMAND_SEEK_TO_NEXT)
+            builder.add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        }
+        if (hasPrevious()) {
+            builder.add(Player.COMMAND_SEEK_TO_PREVIOUS)
+            builder.add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        }
+        return builder.build()
     }
     //---------
     //endregion

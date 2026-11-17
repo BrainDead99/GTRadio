@@ -103,23 +103,8 @@ class RadioList : Fragment() {
     private val binding get() = _binding!!
 
     private fun startStationWithTuningNoise(playAction: () -> Unit) {
-        val pack = activeThemePack
-        if (pack != null && pack.noiseSoundUris.isNotEmpty() && DynamicThemeManager.isDynamicThemeEnabled(requireContext())) {
-            musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", true) })
-            playAction()
-            DynamicThemeManager.playTuningNoiseUntilReady(
-                requireContext(),
-                pack,
-                isRadioReady = { currentPlaybackState.isPlaying },
-                onComplete = {
-                    musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
-                    updateDynamicThemePlaybackUi()
-                }
-            )
-        } else {
-            musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
-            playAction()
-        }
+        // Tuning noise and stream muting are now handled globally inside GTRadioMusicService
+        playAction()
     }
 
     private fun onStationClicked(clickedItem: MediaBrowserCompat.MediaItem) {
@@ -371,7 +356,6 @@ class RadioList : Fragment() {
     override fun onDestroyView() {
         super.onDestroyView()
         bgHandler.removeCallbacksAndMessages(null)
-        DynamicThemeManager.stopTuningNoise()
         volumeObserver?.let {
             try { requireContext().contentResolver.unregisterContentObserver(it) } catch (_: Exception) {}
         }
