@@ -86,19 +86,19 @@ object GtaIvMetadataRepository {
 
     val eflcRadioBrokerEp1Tracks = setOf(
         "BLOODONTHESTEPS_PH", "BODY_LANGUAGE_PH", "BORDERLINE_PH", "COMMAND_PH",
-        "DANCEGIRL_PH", "GETREADYTODIE_PH", "HELLONWHEELS", "I_HEAR_FOOTSTEPS",
-        "IWALKALONE_PH", "MY_FAVORITE_SONG", "NOUVEAUAMERICIAN_PH", "RADICALBUSINESS_PH",
+        "DANCEGIRL_PH", "GETREADYTODIE_PH", "HELLONWHEELS",
+        "IWALKALONE_PH", "NOUVEAUAMERICIAN_PH", "RADICALBUSINESS_PH",
         "SHAKEITLOOSE_PH", "THEHUNGER"
     )
 
     val eflcLchcEp1Tracks = setOf(
         "LCHC_32K_PH", "CALL_FROM_THE_GRAVE", "DROWNED", "FEAR_OF_NAPALM",
-        "I_CUM_BLOOD", "SLAUGHTER_OF_THE_SOUL", "SPIT"
+        "I_CUM_BLOOD", "SLAUGHTER_OF_THE_SOUL"
     )
 
     val eflcBeatEp1Tracks = setOf(
         "E1_BEAT_MIX_P1", "E1_BEAT_MIX_P2", "HERE_IN_LIBERTY_CITY",
-        "CAR_JACK", "THE_CHASE_IS_ON"
+        "CAR_JACK", "THE_CHASE_IS_ON", "SPIT", "I_HEAR_FOOTSTEPS", "MY_FAVORITE_SONG"
     )
 
     val eflcWkttEp1Tracks = setOf("7_MARTINSERIOUSSHOW")
@@ -243,11 +243,11 @@ object GtaIvMetadataRepository {
         addSong("BORDERLINE_PH", "Borderline", "Freeland")
         addSong("COMMAND_PH", "Command", "Foxylane")
         addSong("DANCEGIRL_PH", "Dance Girl (GTA Mix)", "Game Rebellion")
-        addSong("GETREADYTODIE_PH", "Get Ready to Die", "Andrew W.K.")
+        addSong("GETREADYTODIE_PH", "Get Ready to Die", "Magic Dirt")
         addSong("HELLONWHEELS", "Hell on Wheels", "Kill Memory Crash")
-        addSong("I_HEAR_FOOTSTEPS", "I Hear Footsteps", "Blonde Acid Cult")
-        addSong("IWALKALONE_PH", "I Walk Alone", "Jane's Addiction")
-        addSong("MY_FAVORITE_SONG", "My Favorite Song", "Japanther")
+        addSong("I_HEAR_FOOTSTEPS", "I Hear Footsteps", "Consequence")
+        addSong("IWALKALONE_PH", "I Walk Alone", "The Jane Shermans")
+        addSong("MY_FAVORITE_SONG", "My Favorite Song", "Talib Kweli")
         addSong("NOUVEAUAMERICIAN_PH", "Nouveau Americain", "Brazilian Girls")
         addSong("RADICALBUSINESS_PH", "Radical Businessman", "Japanther")
         addSong("SHAKEITLOOSE_PH", "Shake It Loose", "Blonde Acid Cult")
@@ -282,7 +282,7 @@ object GtaIvMetadataRepository {
         addSong("FEAR_OF_NAPALM", "Fear of Napalm", "Terrorizer")
         addSong("I_CUM_BLOOD", "I Cum Blood", "Cannibal Corpse")
         addSong("SLAUGHTER_OF_THE_SOUL", "Slaughter of the Soul", "At the Gates")
-        addSong("SPIT", "Dead Embryonic Cells", "Sepultura")
+        addSong("SPIT", "Spit", "Saigon")
 
         // JNR - Jazz Nation Radio 108.5
         addSong("APRILINPARIS", "April in Paris", "Count Basie")

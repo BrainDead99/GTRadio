@@ -114,9 +114,10 @@ class GtaIvRpfArchive(
             oldCachePurged = true
             try {
                 File(context.cacheDir, "gta4_rpf_tracks").deleteRecursively()
+                File(context.cacheDir, "gta4_rpf_tracks_v2").deleteRecursively()
             } catch (_: Exception) {}
         }
-        return File(context.cacheDir, "gta4_rpf_tracks_v2").apply { mkdirs() }
+        return File(context.cacheDir, "gta4_rpf_tracks_v3").apply { mkdirs() }
     }
 
     @Synchronized
@@ -417,6 +418,35 @@ class GtaIvRpfArchive(
         }
     }
 
+    private fun readHeaderAdpcmState(
+        fullHdr: ByteBuffer,
+        chTableOffset: Int,
+        numChannels: Int,
+        channelIdx: Int,
+        chunkIndex: Int
+    ): AdpcmState? {
+        if (chunkIndex <= 0 || channelIdx >= numChannels) return AdpcmState(0, 0)
+        val wihPos = chTableOffset + channelIdx * 16
+        if (wihPos + 16 > fullHdr.limit()) return null
+        val wihOffset = fullHdr.getLong(wihPos).toInt()
+        val wihSize = fullHdr.getInt(wihPos + 12)
+        val baseAfterWih = chTableOffset + numChannels * 16
+        val wiStart = baseAfterWih + wihOffset
+        if (wihSize <= 56 || wiStart + 56 > fullHdr.limit()) return null
+
+        val offsetToStates = fullHdr.getLong(wiStart + 32).toInt().let { if (it in 32..128) it else 56 }
+        val numStates = fullHdr.getInt(wiStart + 52)
+        if (numStates <= 0) return null
+
+        val stateIdx = (chunkIndex - 1).coerceIn(0, numStates - 1)
+        val statePos = wiStart + offsetToStates + stateIdx * 3
+        if (statePos + 3 > fullHdr.limit()) return null
+
+        val valprev = fullHdr.getShort(statePos).toInt()
+        val index = (fullHdr.get(statePos + 2).toInt() and 0xFF).coerceIn(0, 88)
+        return AdpcmState(valprev, index)
+    }
+
     private fun decodeMultiCToWav(
         ch: FileChannel,
         entry: GtaIvRpfEntry,
@@ -424,22 +454,25 @@ class GtaIvRpfArchive(
         startBlock: Int = 0,
         maxBlocks: Int = Int.MAX_VALUE
     ) {
-        val hdrBuf = ByteBuffer.allocate(512).order(ByteOrder.LITTLE_ENDIAN)
-        if (readFully(ch, hdrBuf, entry.offset) < 128) return
+        val probeBuf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
+        if (readFully(ch, probeBuf, entry.offset) < 64) return
 
-        val numBlocks = hdrBuf.getInt(8)
-        val blockSize = hdrBuf.getInt(12)
-        // Byte 20 is u32[5] (chTblOff = 48); fallback to byte 16 if byte 20 is 0
-        val rawChOff20 = hdrBuf.getInt(20)
-        val rawChOff16 = hdrBuf.getInt(16)
+        val numBlocks = probeBuf.getInt(8)
+        val blockSize = probeBuf.getInt(12)
+        val rawChOff20 = probeBuf.getInt(20)
+        val rawChOff16 = probeBuf.getInt(16)
         val chTableOffset = if (rawChOff20 in 16..256) rawChOff20 else if (rawChOff16 in 16..256) rawChOff16 else 48
-        val numChannels = hdrBuf.getInt(36)
-        val headerSize = hdrBuf.getInt(44)
+        val numChannels = probeBuf.getInt(36)
+        val headerSize = probeBuf.getInt(44)
 
         if (numBlocks <= 0 || blockSize <= 2048 || numChannels <= 0 || headerSize <= 0) return
 
+        val hdrReadSize = headerSize.coerceIn(128, 262144)
+        val hdrBuf = ByteBuffer.allocate(hdrReadSize).order(ByteOrder.LITTLE_ENDIAN)
+        if (readFully(ch, hdrBuf, entry.offset) < 128) return
+
         val detailOffset = chTableOffset + (numChannels * 16)
-        var sampleRate = if (detailOffset + 28 <= 512) (hdrBuf.getShort(detailOffset + 24).toInt() and 0xFFFF) else 32000
+        var sampleRate = if (detailOffset + 28 <= hdrReadSize) (hdrBuf.getShort(detailOffset + 24).toInt() and 0xFFFF) else 32000
         if (sampleRate !in 16000..48000) sampleRate = 32000
 
         val firstBlock = startBlock.coerceIn(0, numBlocks - 1)
@@ -449,6 +482,7 @@ class GtaIvRpfArchive(
         val outChannels = if (numChannels >= 2) 2 else 1
         val blockHeaderBuf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
         var computedTotalSamples = 0
+        var firstBlockStartSample = 0
         for (b in firstBlock until endBlockExclusive) {
             val blockStart = entry.offset + headerSize.toLong() + (b.toLong() * blockSize.toLong())
             if (blockStart + 2048L > entry.offset + entry.size) break
@@ -456,6 +490,12 @@ class GtaIvRpfArchive(
             readFully(ch, blockHeaderBuf, blockStart)
             val tblOff = blockHeaderBuf.getLong(0).toInt().coerceIn(16, 64)
             val samplesInBlk = blockHeaderBuf.getInt(tblOff + 12)
+            if (b == firstBlock) {
+                val sampleTblOff = tblOff + outChannels * 16
+                if (sampleTblOff + 4 <= 128) {
+                    firstBlockStartSample = blockHeaderBuf.getInt(sampleTblOff).coerceAtLeast(0)
+                }
+            }
             if (samplesInBlk > 0) computedTotalSamples += samplesInBlk
         }
 
@@ -463,8 +503,17 @@ class GtaIvRpfArchive(
 
         val totalPcmBytes = computedTotalSamples * outChannels * 2
         val prevState = chunkStates["${entry.name}_$firstBlock"]
-        val leftState = if (prevState != null) AdpcmState(prevState[0], prevState[1]) else AdpcmState()
-        val rightState = if (prevState != null) AdpcmState(prevState[2], prevState[3]) else AdpcmState()
+        val startChunkIdx = if (firstBlockStartSample > 0) (firstBlockStartSample / 4096) else (firstBlock * (if (outChannels == 2) 123 else 247))
+        val leftState = if (prevState != null) {
+            AdpcmState(prevState[0], prevState[1])
+        } else {
+            readHeaderAdpcmState(hdrBuf, chTableOffset, numChannels, 0, startChunkIdx) ?: AdpcmState()
+        }
+        val rightState = if (prevState != null) {
+            AdpcmState(prevState[2], prevState[3])
+        } else {
+            readHeaderAdpcmState(hdrBuf, chTableOffset, numChannels, 1, startChunkIdx) ?: AdpcmState()
+        }
 
         val blockBytes = ByteArray(blockSize)
         val pcmOutBuf = ByteArray(32768)
