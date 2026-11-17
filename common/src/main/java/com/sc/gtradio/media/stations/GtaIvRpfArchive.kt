@@ -264,7 +264,7 @@ class GtaIvRpfArchive(
 
             val absDataOffset = bankEntry.offset + headerSize.toLong() + sampleDataRelOffset
             if (numSamples16Bit > 0 && absDataOffset < bankEntry.offset + bankEntry.size) {
-                bankSubTracks[subKey] = GtaIvBankSubTrack(
+                val subObj = GtaIvBankSubTrack(
                     parentEntryName = bankEntry.name,
                     subName = subKey,
                     dataOffsetInRpf = absDataOffset,
@@ -273,6 +273,10 @@ class GtaIvRpfArchive(
                     sampleRate = sampleRate,
                     isCompressed = isCompressed
                 )
+                bankSubTracks["${bankEntry.name.uppercase()}#$subKey"] = subObj
+                if (!bankEntry.name.uppercase().startsWith("DJ_")) {
+                    bankSubTracks[subKey] = subObj
+                }
             }
         }
     }

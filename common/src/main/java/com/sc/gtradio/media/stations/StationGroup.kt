@@ -37,7 +37,10 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     var isGtaIvRpfGroup: Boolean = false
         private set
     private val gtaIvStationArchives = HashMap<String, GtaIvRpfArchive>()
+    private val gtaIvStationKeys = HashMap<String, String>()
     private var gtaIvExtraTracksArchive: GtaIvRpfArchive? = null
+    private var gtaIvEp1SfxArchive: GtaIvRpfArchive? = null
+    private var gtaIvEp2SfxArchive: GtaIvRpfArchive? = null
     private var gtaIvAdvertsArchive: GtaIvRpfArchive? = null
     private var gtaIvNewsArchive: GtaIvRpfArchive? = null
     private var gtaIvWeatherArchive: GtaIvRpfArchive? = null
@@ -308,7 +311,9 @@ init {
         GtaIvMetadataRepository.ensureLoaded(context)
         isGtaIvRpfGroup = true
         generation = 3
-        val isEflc = stationRpfFiles.any { it.name.lowercase() in setOf("radio_vcfm.rpf", "radio_ramjamfm.rpf", "radio_meditation.rpf") } || folderDoc.name?.uppercase()?.contains("EFLC") == true
+        val isEflc = stationRpfFiles.any { it.name.lowercase() in setOf("radio_vcfm.rpf", "radio_ramjamfm.rpf", "radio_meditation.rpf") } ||
+            allFiles.any { it.name.lowercase() in setOf("ep1_sfx.rpf", "ep2_sfx.rpf") } ||
+            folderDoc.name?.uppercase()?.contains("EFLC") == true
         groupName = if (isEflc) "GTA: Episodes from Liberty City (RPF Audio)" else "GTA IV (RPF Audio)"
         mediaId = UUID.randomUUID().toString()
 
@@ -322,18 +327,48 @@ init {
             if (f.isDirectory) continue
             when (f.name.lowercase()) {
                 "radio_extratracks.rpf" -> gtaIvExtraTracksArchive = GtaIvRpfArchive(context, f.name, f.uri)
+                "ep1_sfx.rpf" -> gtaIvEp1SfxArchive = GtaIvRpfArchive(context, f.name, f.uri)
+                "ep2_sfx.rpf" -> gtaIvEp2SfxArchive = GtaIvRpfArchive(context, f.name, f.uri)
                 "radio_adverts.rpf" -> gtaIvAdvertsArchive = GtaIvRpfArchive(context, f.name, f.uri)
                 "radio_news.rpf" -> gtaIvNewsArchive = GtaIvRpfArchive(context, f.name, f.uri)
                 "radio_weather.rpf" -> gtaIvWeatherArchive = GtaIvRpfArchive(context, f.name, f.uri)
             }
         }
 
-        val sortedStations = stationRpfFiles.sortedBy {
-            GtaIvMetadataRepository.stationNamesByRpf[it.name.lowercase()] ?: it.name
+        data class PendingRpfStation(val stationKey: String, val displayName: String, val archive: GtaIvRpfArchive)
+        val pendingStations = ArrayList<PendingRpfStation>()
+        val presentDisplayNames = HashSet<String>()
+
+        for (stFile in stationRpfFiles) {
+            val stKey = stFile.name.lowercase()
+            val stDisplayName = GtaIvMetadataRepository.stationNamesByRpf[stKey] ?: stFile.name
+            val arch = GtaIvRpfArchive(context, stFile.name, stFile.uri)
+            pendingStations.add(PendingRpfStation(stKey, stDisplayName, arch))
+            presentDisplayNames.add(stDisplayName)
         }
 
-        for (stFile in sortedStations) {
-            val stDisplayName = GtaIvMetadataRepository.stationNamesByRpf[stFile.name.lowercase()] ?: stFile.name
+        if (isEflc && gtaIvEp1SfxArchive != null) {
+            for ((vKey, vDisplayName) in GtaIvMetadataRepository.eflcVirtualStationsEp1) {
+                if (vDisplayName !in presentDisplayNames) {
+                    pendingStations.add(PendingRpfStation(vKey, vDisplayName, gtaIvEp1SfxArchive!!))
+                    presentDisplayNames.add(vDisplayName)
+                }
+            }
+        }
+
+        if (isEflc && gtaIvEp2SfxArchive != null) {
+            for ((vKey, vDisplayName) in GtaIvMetadataRepository.eflcVirtualStationsEp2) {
+                if (vDisplayName !in presentDisplayNames) {
+                    pendingStations.add(PendingRpfStation(vKey, vDisplayName, gtaIvEp2SfxArchive!!))
+                    presentDisplayNames.add(vDisplayName)
+                }
+            }
+        }
+
+        pendingStations.sortBy { it.displayName }
+
+        for (item in pendingStations) {
+            val stDisplayName = item.displayName
             val stMediaId = UUID.randomUUID().toString()
 
             val iconUri = themePack?.stationIconUris?.get(DynamicThemeManager.normalizeStationKey(stDisplayName))
@@ -350,9 +385,10 @@ init {
                 .build()
 
             stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
-            val arch = GtaIvRpfArchive(context, stFile.name, stFile.uri)
-            gtaIvStationArchives[stMediaId] = arch
-            gtaIvStationArchives[stDisplayName] = arch
+            gtaIvStationArchives[stMediaId] = item.archive
+            gtaIvStationArchives[stDisplayName] = item.archive
+            gtaIvStationKeys[stMediaId] = item.stationKey
+            gtaIvStationKeys[stDisplayName] = item.stationKey
         }
 
         if (stationList.isNotEmpty()) {
@@ -382,12 +418,18 @@ init {
         val arch = gtaIvStationArchives[stMediaId]
             ?: gtaIvStationArchives[titleKey]
             ?: gtaIvStationArchives.values.first()
+        val stKey = gtaIvStationKeys[stMediaId]
+            ?: gtaIvStationKeys[titleKey]
+            ?: arch.rpfName.lowercase()
         return GtaIvRpfRadioStation(
             stationGroupId = stationGroupId,
             mediaId = stMediaId,
             mediaItem = stMediaItem,
+            stationKey = stKey,
             stationArchive = arch,
             extraTracksArchive = gtaIvExtraTracksArchive,
+            ep1SfxArchive = gtaIvEp1SfxArchive,
+            ep2SfxArchive = gtaIvEp2SfxArchive,
             advertsArchive = gtaIvAdvertsArchive,
             newsArchive = gtaIvNewsArchive,
             weatherArchive = gtaIvWeatherArchive,

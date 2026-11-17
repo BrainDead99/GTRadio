@@ -30,12 +30,20 @@ data class GtaIvSongItem(
     val introNames: List<String> = emptyList()
 )
 
+data class GtaIvClipRef(
+    val archive: GtaIvRpfArchive,
+    val trackKey: String
+)
+
 @UnstableApi class GtaIvRpfRadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
     override val mediaItem: MediaBrowserCompat.MediaItem,
+    private val stationKey: String,
     private val stationArchive: GtaIvRpfArchive,
     private val extraTracksArchive: GtaIvRpfArchive?,
+    private val ep1SfxArchive: GtaIvRpfArchive?,
+    private val ep2SfxArchive: GtaIvRpfArchive?,
     private val advertsArchive: GtaIvRpfArchive?,
     private val newsArchive: GtaIvRpfArchive?,
     private val weatherArchive: GtaIvRpfArchive?,
@@ -62,22 +70,22 @@ data class GtaIvSongItem(
     private var initialized = false
     private var isTalkRadio = false
 
-    private val idQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
-    private val soloQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
-    private val generalDjQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
-    private val morningDjList = ArrayList<String>()
-    private val afternoonDjList = ArrayList<String>()
-    private val eveningDjList = ArrayList<String>()
-    private val nightDjList = ArrayList<String>()
-    private val timeOfDayDjQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
+    private val idQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val soloQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val generalDjQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val morningDjList = ArrayList<GtaIvClipRef>()
+    private val afternoonDjList = ArrayList<GtaIvClipRef>()
+    private val eveningDjList = ArrayList<GtaIvClipRef>()
+    private val nightDjList = ArrayList<GtaIvClipRef>()
+    private val timeOfDayDjQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
 
-    private val toAdQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
-    private val toNewsQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
-    private val toWeatherQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
+    private val toAdQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val toNewsQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val toWeatherQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
 
-    private val advertQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
-    private val newsQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
-    private val weatherQueue = RandomizedDualHeadQueue<String>(emptyList(), rng)
+    private val advertQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val newsQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val weatherQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
     private val songQueue = RandomizedDualHeadQueue<GtaIvSongItem>(emptyList(), rng)
 
     private var _playing = false
@@ -99,71 +107,165 @@ data class GtaIvSongItem(
     private var stoppedPositionMs: Long = 0L
     private val durationCache = HashMap<Uri, Long>()
 
+    private fun materializeClip(keyOrScoped: String): Uri? {
+        stationArchive.materializeAudioUri(keyOrScoped)?.let { return it }
+        ep1SfxArchive?.materializeAudioUri(keyOrScoped)?.let { return it }
+        ep2SfxArchive?.materializeAudioUri(keyOrScoped)?.let { return it }
+        extraTracksArchive?.materializeAudioUri(keyOrScoped)?.let { return it }
+        return null
+    }
+
     @Synchronized
     private fun ensureStationIndexed() {
         if (initialized) return
         initialized = true
 
-        val rpfLower = stationArchive.rpfName.lowercase()
-        isTalkRadio = rpfLower.contains("wktt") || rpfLower.contains("plr") || rpfLower.contains("lazlow")
+        val keyLower = stationKey.lowercase()
+        isTalkRadio = keyLower.contains("wktt") || keyLower.contains("plr") || keyLower.contains("lazlow")
 
-        val ids = ArrayList<String>()
-        val solos = ArrayList<String>()
-        val generals = ArrayList<String>()
-        val toAds = ArrayList<String>()
-        val toNews = ArrayList<String>()
-        val toWeather = ArrayList<String>()
+        val ids = ArrayList<GtaIvClipRef>()
+        val solos = ArrayList<GtaIvClipRef>()
+        val generals = ArrayList<GtaIvClipRef>()
+        val toAds = ArrayList<GtaIvClipRef>()
+        val toNews = ArrayList<GtaIvClipRef>()
+        val toWeather = ArrayList<GtaIvClipRef>()
         val introMap = HashMap<String, MutableList<String>>()
+        val songItems = ArrayList<GtaIvSongItem>()
 
-        for (sub in stationArchive.getBankSubTracks()) {
-            val sName = sub.subName.uppercase()
-            when {
-                sName.startsWith("MORNING_") -> morningDjList.add(sName)
-                sName.startsWith("AFTERNOON_") -> afternoonDjList.add(sName)
-                sName.startsWith("EVENING_") -> eveningDjList.add(sName)
-                sName.startsWith("NIGHT_") -> nightDjList.add(sName)
-                sName.startsWith("TO_AD") -> toAds.add(sName)
-                sName.startsWith("TO_NEWS") -> toNews.add(sName)
-                sName.startsWith("TO_WEATHER") -> toWeather.add(sName)
-                sub.parentEntryName == "GENERAL" || sName.startsWith("GENERAL") -> generals.add(sName)
-                sub.parentEntryName == "INTRO" -> {
-                    val baseSong = sName.replace(Regex("_\\d+$"), "")
-                    introMap.getOrPut(baseSong) { ArrayList() }.add(sName)
+        val isDedicatedStationRpf = !stationArchive.rpfName.uppercase().startsWith("EP")
+        if (isDedicatedStationRpf) {
+            for (sub in stationArchive.getBankSubTracks()) {
+                val pName = sub.parentEntryName.uppercase()
+                val sName = sub.subName.uppercase()
+                val ref = GtaIvClipRef(stationArchive, "$pName#$sName")
+                when {
+                    sName.startsWith("MORNING_") -> morningDjList.add(ref)
+                    sName.startsWith("AFTERNOON_") -> afternoonDjList.add(ref)
+                    sName.startsWith("EVENING_") -> eveningDjList.add(ref)
+                    sName.startsWith("NIGHT_") -> nightDjList.add(ref)
+                    sName.startsWith("TO_AD") -> toAds.add(ref)
+                    sName.startsWith("TO_NEWS") -> toNews.add(ref)
+                    sName.startsWith("TO_WEATHER") -> toWeather.add(ref)
+                    pName == "GENERAL" || sName.startsWith("GENERAL") -> generals.add(ref)
+                    pName == "INTRO" -> {
+                        val baseSong = sName.replace(Regex("_\\d+$"), "")
+                        introMap.getOrPut(baseSong) { ArrayList() }.add("$pName#$sName")
+                    }
+                }
+            }
+
+            for (entry in stationArchive.getFileEntries()) {
+                if (entry.isWaveBank) continue
+                val eName = entry.name.uppercase()
+                if (eName in setOf("TIME", "GENERAL", "INTRO", "TO", "NULLTRACK")) continue
+                val ref = GtaIvClipRef(stationArchive, eName)
+                when {
+                    eName.startsWith("ID_") -> ids.add(ref)
+                    eName.startsWith("SOLO_") -> solos.add(ref)
+                    eName.startsWith("MORNING_") -> morningDjList.add(ref)
+                    eName.startsWith("AFTERNOON_") -> afternoonDjList.add(ref)
+                    eName.startsWith("EVENING_") -> eveningDjList.add(ref)
+                    eName.startsWith("NIGHT_") -> nightDjList.add(ref)
+                    eName.startsWith("TO_AD") -> toAds.add(ref)
+                    eName.startsWith("TO_NEWS") -> toNews.add(ref)
+                    eName.startsWith("TO_WEATHER") -> toWeather.add(ref)
+                    else -> {
+                        val intros = introMap[eName] ?: emptyList()
+                        songItems.add(GtaIvSongItem(stationArchive, eName, intros))
+                    }
                 }
             }
         }
 
-        val songItems = ArrayList<GtaIvSongItem>()
-        for (entry in stationArchive.getFileEntries()) {
-            if (entry.isWaveBank) continue
-            val eName = entry.name.uppercase()
-            when {
-                eName.startsWith("ID_") -> ids.add(eName)
-                eName.startsWith("SOLO_") -> solos.add(eName)
-                eName.startsWith("MORNING_") -> morningDjList.add(eName)
-                eName.startsWith("AFTERNOON_") -> afternoonDjList.add(eName)
-                eName.startsWith("EVENING_") -> eveningDjList.add(eName)
-                eName.startsWith("NIGHT_") -> nightDjList.add(eName)
-                eName.startsWith("TO_AD") -> toAds.add(eName)
-                eName.startsWith("TO_NEWS") -> toNews.add(eName)
-                eName.startsWith("TO_WEATHER") -> toWeather.add(eName)
-                else -> {
-                    val intros = introMap[eName] ?: emptyList()
-                    songItems.add(GtaIvSongItem(stationArchive, eName, intros))
+        // Helper to index DLC DJ banks and Solo clips from EP1_SFX.rpf or EP2_SFX.rpf
+        fun indexDlcDjAssets(dlcArch: GtaIvRpfArchive?, djBankPrefix: String, soloPrefix: String) {
+            if (dlcArch == null) return
+            for (sub in dlcArch.getBankSubTracks()) {
+                val pName = sub.parentEntryName.uppercase()
+                if (!pName.startsWith(djBankPrefix)) continue
+                val sName = sub.subName.uppercase()
+                val scopedKey = "$pName#$sName"
+                val ref = GtaIvClipRef(dlcArch, scopedKey)
+                when {
+                    pName.endsWith("_TIME") -> {
+                        when {
+                            sName.startsWith("MORNING_") -> morningDjList.add(ref)
+                            sName.startsWith("AFTERNOON_") -> afternoonDjList.add(ref)
+                            sName.startsWith("EVENING_") -> eveningDjList.add(ref)
+                            sName.startsWith("NIGHT_") -> nightDjList.add(ref)
+                        }
+                    }
+                    pName.endsWith("_TO") -> {
+                        when {
+                            sName.startsWith("TO_AD") -> toAds.add(ref)
+                            sName.startsWith("TO_NEWS") -> toNews.add(ref)
+                            sName.startsWith("TO_WEATHER") -> toWeather.add(ref)
+                        }
+                    }
+                    pName.endsWith("_GENERAL") -> generals.add(ref)
+                    pName.endsWith("_INTRO") -> {
+                        val baseSong = sName.replace(Regex("_\\d+$"), "")
+                        introMap.getOrPut(baseSong) { ArrayList() }.add(scopedKey)
+                    }
                 }
             }
+            for (entry in dlcArch.getFileEntries()) {
+                if (!entry.isWaveBank && entry.name.uppercase().startsWith(soloPrefix)) {
+                    solos.add(GtaIvClipRef(dlcArch, entry.name.uppercase()))
+                }
+            }
+        }
+
+        when {
+            keyLower.contains("liberty_rock") -> indexDlcDjAssets(ep1SfxArchive, "DJ_LIBERTY_ROCK_", "LIBERTY_ROCK_SOLO_")
+            keyLower.contains("dance_rock") -> indexDlcDjAssets(ep1SfxArchive, "DJ_DANCE_ROCK_", "DANCE_ROCK_SOLO_")
+            keyLower.contains("k109") -> indexDlcDjAssets(ep2SfxArchive, "DJ_K109_THE_STUDIO_", "K109_THE_STUDIO_SOLO_")
         }
 
         if (extraTracksArchive != null) {
             val extraSet = when {
-                rpfLower.contains("beat_95") -> GtaIvMetadataRepository.beatExtraTracks
-                rpfLower.contains("bobby_konders") -> GtaIvMetadataRepository.massiveBExtraTracks
-                rpfLower.contains("dance_mix") -> GtaIvMetadataRepository.electroChocExtraTracks
+                keyLower.contains("beat_95") -> GtaIvMetadataRepository.beatExtraTracks
+                keyLower.contains("bobby_konders") -> GtaIvMetadataRepository.massiveBExtraTracks
+                keyLower.contains("dance_mix") -> GtaIvMetadataRepository.electroChocExtraTracks
+                keyLower.contains("ramjam") -> GtaIvMetadataRepository.ramJamExtraTracks
                 else -> emptySet()
             }
             for (extraName in extraSet) {
                 if (extraTracksArchive.hasEntry(extraName)) {
-                    songItems.add(GtaIvSongItem(extraTracksArchive, extraName, emptyList()))
+                    songItems.add(GtaIvSongItem(extraTracksArchive, extraName, introMap[extraName] ?: emptyList()))
+                }
+            }
+        }
+
+        if (ep1SfxArchive != null) {
+            val ep1Set = when {
+                keyLower.contains("liberty_rock") -> GtaIvMetadataRepository.eflcLibertyRockEp1Tracks
+                keyLower.contains("dance_rock") -> GtaIvMetadataRepository.eflcRadioBrokerEp1Tracks
+                keyLower.contains("hardcore") || keyLower == "eflc_lchc" -> GtaIvMetadataRepository.eflcLchcEp1Tracks
+                keyLower.contains("beat_95") || keyLower == "eflc_beat" -> GtaIvMetadataRepository.eflcBeatEp1Tracks
+                keyLower.contains("wktt") -> GtaIvMetadataRepository.eflcWkttEp1Tracks
+                else -> emptySet()
+            }
+            for (tName in ep1Set) {
+                if (ep1SfxArchive.hasEntry(tName)) {
+                    songItems.add(GtaIvSongItem(ep1SfxArchive, tName, introMap[tName] ?: emptyList()))
+                }
+            }
+        }
+
+        if (ep2SfxArchive != null) {
+            val ep2Set = when {
+                keyLower.contains("k109") -> GtaIvMetadataRepository.eflcK109Ep2Tracks
+                keyLower.contains("dance_mix") || keyLower == "eflc_electro_choc" -> GtaIvMetadataRepository.eflcElectroChocEp2Tracks
+                keyLower.contains("vladivostok") || keyLower == "eflc_vladivostok" -> GtaIvMetadataRepository.eflcVladivostokEp2Tracks
+                keyLower.contains("san_juan") || keyLower == "eflc_san_juan" -> GtaIvMetadataRepository.eflcSanJuanEp2Tracks
+                keyLower.contains("wktt") -> GtaIvMetadataRepository.eflcWkttEp2Tracks
+                keyLower.contains("lazlow") -> GtaIvMetadataRepository.eflcIntegrityEp2Tracks
+                else -> emptySet()
+            }
+            for (tName in ep2Set) {
+                if (ep2SfxArchive.hasEntry(tName)) {
+                    songItems.add(GtaIvSongItem(ep2SfxArchive, tName, introMap[tName] ?: emptyList()))
                 }
             }
         }
@@ -177,14 +279,32 @@ data class GtaIvSongItem(
         songQueue.reset(songItems)
         rebuildTimeOfDayQueue()
 
-        advertsArchive?.let { arch ->
-            advertQueue.reset(arch.getFileEntries().filter { !it.isWaveBank }.map { it.name })
+        val allAdverts = ArrayList<GtaIvClipRef>()
+        advertsArchive?.getFileEntries()?.filter { !it.isWaveBank }?.forEach {
+            allAdverts.add(GtaIvClipRef(advertsArchive, it.name))
         }
-        newsArchive?.let { arch ->
-            newsQueue.reset(arch.getFileEntries().filter { !it.isWaveBank }.map { it.name })
+        ep1SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("AD0") }?.forEach {
+            allAdverts.add(GtaIvClipRef(ep1SfxArchive, it.name))
         }
+        ep2SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("AD1") }?.forEach {
+            allAdverts.add(GtaIvClipRef(ep2SfxArchive, it.name))
+        }
+        advertQueue.reset(allAdverts)
+
+        val allNews = ArrayList<GtaIvClipRef>()
+        newsArchive?.getFileEntries()?.filter { !it.isWaveBank }?.forEach {
+            allNews.add(GtaIvClipRef(newsArchive, it.name))
+        }
+        ep1SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("NEWS_") }?.forEach {
+            allNews.add(GtaIvClipRef(ep1SfxArchive, it.name))
+        }
+        ep2SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("NEWS_MONO_") }?.forEach {
+            allNews.add(GtaIvClipRef(ep2SfxArchive, it.name))
+        }
+        newsQueue.reset(allNews)
+
         weatherArchive?.let { arch ->
-            weatherQueue.reset(arch.getFileEntries().filter { !it.isWaveBank }.map { it.name })
+            weatherQueue.reset(arch.getFileEntries().filter { !it.isWaveBank }.map { GtaIvClipRef(arch, it.name) })
         }
     }
 
@@ -275,13 +395,14 @@ data class GtaIvSongItem(
             return
         }
 
+        val maxYear = if (groupTitle.uppercase().contains("EPISODES") || groupTitle.uppercase().contains("EFLC")) 2009 else 2008
         var art: Bitmap? = stationLogo
         if (isAlbumArtEnabled()) {
             val cached = SaMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
             if (cached != null) {
                 art = cached
             } else {
-                SaMetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, 2008) {
+                SaMetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
                     mainHandler.post {
                         if (_playing && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
                             val newArt = SaMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
@@ -524,11 +645,11 @@ data class GtaIvSongItem(
         } else {
             idQueue.isNotEmpty()
         }
-        val trackName = if (useId && idQueue.isNotEmpty()) idQueue.next()
+        val ref = if (useId && idQueue.isNotEmpty()) idQueue.next()
         else if (soloQueue.isNotEmpty()) soloQueue.next()
         else return false
 
-        val uri = stationArchive.materializeAudioUri(trackName) ?: return false
+        val uri = ref.archive.materializeAudioUri(ref.trackKey) ?: return false
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongItem = null
@@ -544,11 +665,11 @@ data class GtaIvSongItem(
         if (getHourBucket() != activeHourBucket) rebuildTimeOfDayQueue()
 
         val useTod = timeOfDayDjQueue.isNotEmpty() && (generalDjQueue.isEmpty() || rng.nextInt(100) < 35)
-        val trackName = if (useTod) timeOfDayDjQueue.next()
+        val ref = if (useTod) timeOfDayDjQueue.next()
         else if (generalDjQueue.isNotEmpty()) generalDjQueue.next()
         else return false
 
-        val uri = stationArchive.materializeAudioUri(trackName) ?: return false
+        val uri = ref.archive.materializeAudioUri(ref.trackKey) ?: return false
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongItem = null
@@ -558,13 +679,14 @@ data class GtaIvSongItem(
 
     private fun prepareWeatherSegment(): Boolean {
         lastSegment = RadioSegmentType.WeatherReport
-        val wArch = weatherArchive ?: return false
         if (!weatherChatterEnabled || weatherQueue.isEmpty()) return false
-        val wUri = wArch.materializeAudioUri(weatherQueue.next()) ?: return false
+        val wRef = weatherQueue.next()
+        val wUri = wRef.archive.materializeAudioUri(wRef.trackKey) ?: return false
 
         val list = ArrayList<Uri>(2)
         if (toWeatherQueue.isNotEmpty() && rng.nextBoolean()) {
-            stationArchive.materializeAudioUri(toWeatherQueue.next())?.let { list.add(it) }
+            val toRef = toWeatherQueue.next()
+            toRef.archive.materializeAudioUri(toRef.trackKey)?.let { list.add(it) }
         }
         list.add(wUri)
         consecutiveSongs = 0
@@ -576,17 +698,19 @@ data class GtaIvSongItem(
 
     private fun prepareAdvertOrNewsSegment(): Boolean {
         songsSinceLastBreak = 0
-        val canAd = adsEnabled && advertsArchive != null && advertQueue.isNotEmpty()
-        val canNews = newsReportsEnabled && newsArchive != null && newsQueue.isNotEmpty()
+        val canAd = adsEnabled && advertQueue.isNotEmpty()
+        val canNews = newsReportsEnabled && newsQueue.isNotEmpty()
         if (!canAd && !canNews) return false
 
         val playAd = if (canAd && canNews) (rng.nextInt(10) < 7) else canAd
         if (playAd) {
             lastSegment = RadioSegmentType.Commercial
-            val adUri = advertsArchive!!.materializeAudioUri(advertQueue.next()) ?: return false
+            val adRef = advertQueue.next()
+            val adUri = adRef.archive.materializeAudioUri(adRef.trackKey) ?: return false
             val list = ArrayList<Uri>(2)
             if (toAdQueue.isNotEmpty() && rng.nextBoolean()) {
-                stationArchive.materializeAudioUri(toAdQueue.next())?.let { list.add(it) }
+                val toRef = toAdQueue.next()
+                toRef.archive.materializeAudioUri(toRef.trackKey)?.let { list.add(it) }
             }
             list.add(adUri)
             consecutiveSongs = 0
@@ -596,10 +720,12 @@ data class GtaIvSongItem(
             return true
         } else {
             lastSegment = RadioSegmentType.NewsReport
-            val newsUri = newsArchive!!.materializeAudioUri(newsQueue.next()) ?: return false
+            val newsRef = newsQueue.next()
+            val newsUri = newsRef.archive.materializeAudioUri(newsRef.trackKey) ?: return false
             val list = ArrayList<Uri>(2)
             if (toNewsQueue.isNotEmpty() && rng.nextBoolean()) {
-                stationArchive.materializeAudioUri(toNewsQueue.next())?.let { list.add(it) }
+                val toRef = toNewsQueue.next()
+                toRef.archive.materializeAudioUri(toRef.trackKey)?.let { list.add(it) }
             }
             list.add(newsUri)
             consecutiveSongs = 0
@@ -643,7 +769,7 @@ data class GtaIvSongItem(
         val list = ArrayList<Uri>(2)
         if (item.introNames.isNotEmpty() && (requireDjIntro || rng.nextInt(100) < 60)) {
             val chosenIntro = item.introNames[rng.nextInt(item.introNames.size)]
-            stationArchive.materializeAudioUri(chosenIntro)?.let { list.add(it) }
+            materializeClip(chosenIntro)?.let { list.add(it) }
         }
         list.add(mainUri)
 
