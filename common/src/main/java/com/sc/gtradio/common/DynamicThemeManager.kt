@@ -84,15 +84,9 @@ object DynamicThemeManager {
 
     @Synchronized
     fun findNoisePackForSeries(context: Context, seriesName: String?): DynamicThemePack? {
-        val exact = findThemeForSeries(context, seriesName ?: "")
-        if (exact != null && exact.noiseSoundUris.isNotEmpty()) {
-            return exact
-        }
-        val saFallback = findThemeForSeries(context, "GTA San Andreas")
-        if (saFallback != null && saFallback.noiseSoundUris.isNotEmpty()) {
-            return saFallback
-        }
-        return findThemeForSeries(context, "GTA IV")?.takeIf { it.noiseSoundUris.isNotEmpty() }
+        if (seriesName.isNullOrBlank()) return null
+        val exact = findThemeForSeries(context, seriesName)
+        return if (exact != null && exact.noiseSoundUris.isNotEmpty()) exact else null
     }
 
     fun findThemeForSeries(context: Context, seriesGroupName: String): DynamicThemePack? {
