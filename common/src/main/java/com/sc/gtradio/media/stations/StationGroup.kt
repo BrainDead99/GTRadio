@@ -216,7 +216,7 @@ init {
             val stDisplayName = info?.displayName ?: stFile.name
             val stMediaId = UUID.randomUUID().toString()
 
-            val iconUri = themePack?.stationIconUris?.get(DynamicThemeManager.normalizeStationKey(stDisplayName))
+            val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
             val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
 
             val meta = MediaMetadataCompat.Builder()
@@ -371,7 +371,7 @@ init {
             val stDisplayName = item.displayName
             val stMediaId = UUID.randomUUID().toString()
 
-            val iconUri = themePack?.stationIconUris?.get(DynamicThemeManager.normalizeStationKey(stDisplayName))
+            val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
             val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
 
             val meta = MediaMetadataCompat.Builder()
@@ -510,7 +510,7 @@ init {
             val mediaId = "${folderDoc.uri}#SA_RAW#$code"
 
             val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
-            val iconUri = themePack?.stationIconUris?.get(DynamicThemeManager.normalizeStationKey(stName))
+            val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stName) }
             val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512)
             val metadata = MediaMetadataCompat.Builder()
                 .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)

@@ -139,11 +139,28 @@ object DynamicThemeManager {
     }
 
     fun normalizeStationKey(raw: String): String {
-        val base = raw.lowercase()
-            .substringBeforeLast(".")
+        val base = raw.lowercase().trim()
+            .replace(Regex("\\.(png|jpg|jpeg|webp|bmp|gif|svg)$"), "")
             .replace(Regex("(_on_icon|_off_icon|_icon|_on|_off|logo|radio_)"), "")
             .replace(Regex("[^a-z0-9]"), "")
-        return stationAliases[base] ?: base
+        stationAliases[base]?.let { return it }
+        val noTrailingDigits = base.replace(Regex("[0-9]+$"), "")
+        if (noTrailingDigits.isNotBlank()) {
+            stationAliases[noTrailingDigits]?.let { return it }
+        }
+        return base
+    }
+
+    fun resolveStationIconUri(iconMap: Map<String, Uri>, stationName: String): Uri? {
+        if (iconMap.isEmpty()) return null
+        val norm = normalizeStationKey(stationName)
+        iconMap[norm]?.let { return it }
+        for ((k, u) in iconMap) {
+            if (k.length >= 3 && (norm.contains(k) || k.contains(norm))) {
+                return u
+            }
+        }
+        return null
     }
 
     fun findNoisePackForSeries(context: Context, seriesName: String?): DynamicThemePack? {

@@ -41,12 +41,28 @@ class RadioList : Fragment() {
     private var _binding: FragmentRadiolistBinding? = null
     private var musicServiceConnection: MusicServiceConnection? = null
 
+    private data class StripSlot(
+        val item: MediaBrowserCompat.MediaItem,
+        val mediaId: String,
+        val imageView: ImageView
+    )
+
+    companion object {
+        private const val REPEAT_CYCLES = 11
+        private const val MIDDLE_CYCLE = REPEAT_CYCLES / 2
+    }
+
     private var activeThemePack: DynamicThemePack? = null
     private var loadedStations: List<MediaBrowserCompat.MediaItem> = emptyList()
     private val stationIconViews = HashMap<String, ImageView>()
+    private val gta4StripSlots = ArrayList<StripSlot>()
+    private val gta4ViewsByMediaId = HashMap<String, MutableList<ImageView>>()
     private val stationOnBitmaps = HashMap<String, Bitmap?>()
     private val stationOffBitmaps = HashMap<String, Bitmap?>()
     private var lastAutoScrolledMediaId: String = ""
+
+    private var gta4ItemSpanPx: Int = 0
+    private var gta4CycleWidthPx: Int = 0
 
     private var selectedStationTitle: String = ""
     private var centeredMediaId: String = ""
@@ -68,12 +84,14 @@ class RadioList : Fragment() {
         if (!isGta4Style(pack)) return@Runnable
 
         isUserScrollingStrip = false
-        val targetItem = findClosestCenteredStation() ?: return@Runnable
-        val targetId = targetItem.mediaId ?: return@Runnable
-        centeredMediaId = targetId
-        selectedStationTitle = targetItem.description.title?.toString() ?: ""
+        recenterInfiniteScrollIfNeeded()
 
-        scrollIconToCenter(targetId, smooth = true)
+        val slot = findClosestCenteredSlot() ?: return@Runnable
+        val targetId = slot.mediaId
+        centeredMediaId = targetId
+        selectedStationTitle = slot.item.description.title?.toString() ?: ""
+
+        scrollSlotToCenter(slot, smooth = true)
 
         val nowPlayingId = currentMetadata.description.mediaId ?: ""
         if (!currentPlaybackState.isPlaying || targetId != nowPlayingId) {
@@ -146,29 +164,62 @@ class RadioList : Fragment() {
         playAction()
     }
 
-    private fun findClosestCenteredStation(): MediaBrowserCompat.MediaItem? {
-        if (_binding == null || loadedStations.isEmpty()) return null
+    private fun recenterInfiniteScrollIfNeeded() {
+        if (_binding == null || gta4CycleWidthPx <= 0) return
+        val scrollView = binding.themeGta4IconScroll
+        val curX = scrollView.scrollX
+        val curCycle = curX / gta4CycleWidthPx
+        if (curCycle < 2 || curCycle > REPEAT_CYCLES - 3) {
+            val deltaCycles = MIDDLE_CYCLE - curCycle
+            val newX = (curX + deltaCycles * gta4CycleWidthPx).coerceAtLeast(0)
+            isProgrammaticScroll = true
+            scrollView.scrollTo(newX, 0)
+            isProgrammaticScroll = false
+        }
+    }
+
+    private fun findClosestCenteredSlot(): StripSlot? {
+        if (_binding == null || gta4StripSlots.isEmpty()) return null
         val scrollView = binding.themeGta4IconScroll
         val viewportCenter = scrollView.scrollX + (scrollView.width / 2)
-        var bestItem: MediaBrowserCompat.MediaItem? = null
+        var bestSlot: StripSlot? = null
         var bestDist = Int.MAX_VALUE
 
-        for (item in loadedStations) {
-            val mId = item.mediaId ?: continue
-            val iv = stationIconViews[mId] ?: continue
+        for (slot in gta4StripSlots) {
+            val iv = slot.imageView
             val childCenter = (iv.left + iv.right) / 2
             val dist = abs(childCenter - viewportCenter)
             if (dist < bestDist) {
                 bestDist = dist
-                bestItem = item
+                bestSlot = slot
             }
         }
-        return bestItem
+        return bestSlot
     }
 
-    private fun scrollIconToCenter(mediaId: String, smooth: Boolean = true) {
-        if (_binding == null || mediaId.isBlank()) return
-        val iv = stationIconViews[mediaId] ?: return
+    private fun findClosestSlotForMediaId(mediaId: String): StripSlot? {
+        if (_binding == null || mediaId.isBlank() || gta4StripSlots.isEmpty()) return null
+        val scrollView = binding.themeGta4IconScroll
+        val viewportCenter = scrollView.scrollX + (scrollView.width / 2)
+        var bestSlot: StripSlot? = null
+        var bestDist = Int.MAX_VALUE
+
+        for (slot in gta4StripSlots) {
+            if (slot.mediaId != mediaId) continue
+            val iv = slot.imageView
+            val childCenter = (iv.left + iv.right) / 2
+            val dist = abs(childCenter - viewportCenter)
+            if (dist < bestDist) {
+                bestDist = dist
+                bestSlot = slot
+            }
+        }
+        return bestSlot
+    }
+
+    private fun scrollSlotToCenter(slot: StripSlot, smooth: Boolean = true) {
+        if (_binding == null) return
+        val iv = slot.imageView
         val scrollView = binding.themeGta4IconScroll
         scrollView.post {
             if (_binding == null) return@post
@@ -179,12 +230,22 @@ class RadioList : Fragment() {
             } else {
                 scrollView.scrollTo(targetX, 0)
             }
-            scrollHandler.postDelayed({ isProgrammaticScroll = false }, 220L)
+            scrollHandler.postDelayed({
+                isProgrammaticScroll = false
+                recenterInfiniteScrollIfNeeded()
+            }, 240L)
         }
     }
 
-    private fun onGta4IconTapped(clickedItem: MediaBrowserCompat.MediaItem) {
-        val clickedId = clickedItem.mediaId ?: return
+    private fun scrollIconToCenter(mediaId: String, smooth: Boolean = true) {
+        if (_binding == null || mediaId.isBlank()) return
+        val slot = findClosestSlotForMediaId(mediaId) ?: return
+        scrollSlotToCenter(slot, smooth)
+    }
+
+    private fun onGta4SlotTapped(slot: StripSlot) {
+        val clickedItem = slot.item
+        val clickedId = slot.mediaId
         val transportControls = musicServiceConnection?.transportControls
         val activeMediaId = currentMetadata.description.mediaId ?: ""
         val currentCenterId = centeredMediaId.ifBlank { activeMediaId }
@@ -192,11 +253,10 @@ class RadioList : Fragment() {
         scrollHandler.removeCallbacks(scrollSnapRunnable)
         isUserScrollingStrip = false
 
-        // If user taps the centered active radio station, toggle playback Off / On
         if (clickedId == currentCenterId || clickedId == activeMediaId) {
             centeredMediaId = clickedId
             selectedStationTitle = clickedItem.description.title?.toString() ?: ""
-            scrollIconToCenter(clickedId, smooth = true)
+            scrollSlotToCenter(slot, smooth = true)
             if (currentPlaybackState.isPlaying && clickedId == activeMediaId) {
                 DynamicThemeManager.stopTuningNoise()
                 musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
@@ -206,11 +266,10 @@ class RadioList : Fragment() {
                 startStationWithTuningNoise { transportControls?.playFromMediaId(clickedId, null) }
             }
         } else {
-            // If user taps a side icon, scroll it to center and play it
             centeredMediaId = clickedId
             selectedStationTitle = clickedItem.description.title?.toString() ?: ""
             lastAutoScrolledMediaId = clickedId
-            scrollIconToCenter(clickedId, smooth = true)
+            scrollSlotToCenter(slot, smooth = true)
             startStationWithTuningNoise { transportControls?.playFromMediaId(clickedId, null) }
         }
         updateDynamicThemePlaybackUi()
@@ -219,8 +278,11 @@ class RadioList : Fragment() {
     private fun onStationClicked(clickedItem: MediaBrowserCompat.MediaItem) {
         val pack = activeThemePack
         if (pack != null && isGta4Style(pack)) {
-            onGta4IconTapped(clickedItem)
-            return
+            val slot = findClosestSlotForMediaId(clickedItem.mediaId ?: "")
+            if (slot != null) {
+                onGta4SlotTapped(slot)
+                return
+            }
         }
 
         val nowPlaying = musicServiceConnection?.nowPlaying?.value
@@ -293,7 +355,12 @@ class RadioList : Fragment() {
 
         binding.themeGta4IconScroll.setOnTouchListener { _, event ->
             when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE -> {
+                MotionEvent.ACTION_DOWN -> {
+                    isUserScrollingStrip = true
+                    scrollHandler.removeCallbacks(scrollSnapRunnable)
+                    recenterInfiniteScrollIfNeeded()
+                }
+                MotionEvent.ACTION_MOVE -> {
                     isUserScrollingStrip = true
                     scrollHandler.removeCallbacks(scrollSnapRunnable)
                 }
@@ -311,23 +378,33 @@ class RadioList : Fragment() {
             if (!isGta4Style(pack)) return@addOnScrollChangedListener
 
             if (isUserScrollingStrip) {
-                val centerItem = findClosestCenteredStation()
-                if (centerItem != null) {
-                    val cId = centerItem.mediaId ?: ""
-                    val cTitle = centerItem.description.title?.toString() ?: ""
+                val centerSlot = findClosestCenteredSlot()
+                if (centerSlot != null) {
+                    val cId = centerSlot.mediaId
+                    val cTitle = centerSlot.item.description.title?.toString() ?: ""
                     if (cId != centeredMediaId) {
                         centeredMediaId = cId
                         selectedStationTitle = cTitle
                         binding.themeGta4ActiveStationName.text = cTitle
-                        for ((mId, iv) in stationIconViews) {
-                            val highlight = currentPlaybackState.isPlaying && mId == centeredMediaId
-                            val bmp = if (highlight) stationOnBitmaps[mId] else stationOffBitmaps[mId]
-                            if (bmp != null) iv.setImageBitmap(bmp)
-                        }
+                        updateGta4IconsHighlight(if (currentPlaybackState.isPlaying) centeredMediaId else "")
                     }
                 }
                 scrollHandler.removeCallbacks(scrollSnapRunnable)
                 scrollHandler.postDelayed(scrollSnapRunnable, 150L)
+            }
+        }
+    }
+
+    private fun updateGta4IconsHighlight(activeId: String) {
+        val pack = activeThemePack ?: return
+        val hasOffIcons = pack.stationOffIconUris.isNotEmpty()
+        for ((mId, views) in gta4ViewsByMediaId) {
+            val isThisActive = activeId.isNotBlank() && mId == activeId
+            val bmp = if (isThisActive) stationOnBitmaps[mId] else stationOffBitmaps[mId]
+            val alphaVal = if (isThisActive || hasOffIcons) 1.0f else 0.28f
+            for (iv in views) {
+                if (bmp != null) iv.setImageBitmap(bmp)
+                iv.alpha = alphaVal
             }
         }
     }
@@ -449,62 +526,64 @@ class RadioList : Fragment() {
         binding.themeIconRow2.removeAllViews()
         binding.themeGta4IconRow.removeAllViews()
         stationIconViews.clear()
+        gta4StripSlots.clear()
+        gta4ViewsByMediaId.clear()
         stationOnBitmaps.clear()
         stationOffBitmaps.clear()
 
         val density = resources.displayMetrics.density
         val iconSizePx = ((if (gta4Mode) 64 else 52) * density).roundToInt()
         val marginPx = ((if (gta4Mode) 4 else 3) * density).roundToInt()
+        gta4ItemSpanPx = iconSizePx + (marginPx * 2)
+        gta4CycleWidthPx = children.size * gta4ItemSpanPx
 
-        children.forEachIndexed { idx, item ->
+        for (item in children) {
+            val mId = item.mediaId ?: continue
             val stTitle = item.description.title?.toString() ?: ""
-            val normKey = DynamicThemeManager.normalizeStationKey(stTitle)
-            val onUri = pack.stationIconUris[normKey]
-            val offUri = pack.stationOffIconUris[normKey]
+            val onUri = DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, stTitle)
+            val offUri = DynamicThemeManager.resolveStationIconUri(pack.stationOffIconUris, stTitle)
 
             val onBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), onUri, 256)
                 ?: item.description.iconBitmap
             val offBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), offUri, 256)
                 ?: onBmp
 
-            val iv = ImageView(requireContext()).apply {
-                layoutParams = LinearLayout.LayoutParams(iconSizePx, iconSizePx).apply {
-                    setMargins(marginPx, marginPx, marginPx, marginPx)
-                }
-                scaleType = ImageView.ScaleType.FIT_CENTER
-                val initialBmp = if (gta4Mode) offBmp else onBmp
-                if (initialBmp != null) {
-                    setImageBitmap(initialBmp)
-                } else {
-                    setImageResource(R.drawable.outline_radio_24)
-                }
-                alpha = if (gta4Mode && offUri != null) 1.0f else 0.28f
-                setOnClickListener { onStationClicked(item) }
-            }
-
-            val mId = item.mediaId
-            if (mId != null) {
-                stationIconViews[mId] = iv
-                stationOnBitmaps[mId] = onBmp
-                stationOffBitmaps[mId] = offBmp
-            }
-
-            if (gta4Mode) {
-                binding.themeGta4IconRow.addView(iv)
-            } else {
-                if (idx < 6) {
-                    binding.themeIconRow1.addView(iv)
-                } else {
-                    binding.themeIconRow2.addView(iv)
-                }
-            }
+            stationOnBitmaps[mId] = onBmp
+            stationOffBitmaps[mId] = offBmp
         }
 
-        if (gta4Mode) {
-            val itemSpanPx = iconSizePx + (marginPx * 2)
+        if (gta4Mode && children.isNotEmpty()) {
+            val hasOffIcons = pack.stationOffIconUris.isNotEmpty()
+            for (cycle in 0 until REPEAT_CYCLES) {
+                for (item in children) {
+                    val mId = item.mediaId ?: continue
+                    val offBmp = stationOffBitmaps[mId]
+                    val iv = ImageView(requireContext()).apply {
+                        layoutParams = LinearLayout.LayoutParams(iconSizePx, iconSizePx).apply {
+                            setMargins(marginPx, marginPx, marginPx, marginPx)
+                        }
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        if (offBmp != null) {
+                            setImageBitmap(offBmp)
+                        } else {
+                            setImageResource(R.drawable.outline_radio_24)
+                        }
+                        alpha = if (hasOffIcons) 1.0f else 0.28f
+                    }
+                    val slot = StripSlot(item, mId, iv)
+                    iv.setOnClickListener { onGta4SlotTapped(slot) }
+                    gta4StripSlots.add(slot)
+                    gta4ViewsByMediaId.getOrPut(mId) { ArrayList() }.add(iv)
+                    if (cycle == MIDDLE_CYCLE) {
+                        stationIconViews[mId] = iv
+                    }
+                    binding.themeGta4IconRow.addView(iv)
+                }
+            }
+
             binding.themeGta4IconScroll.post {
                 if (_binding == null) return@post
-                val sidePad = ((binding.themeGta4IconScroll.width - itemSpanPx) / 2).coerceAtLeast(0)
+                val sidePad = ((binding.themeGta4IconScroll.width - gta4ItemSpanPx) / 2).coerceAtLeast(0)
                 binding.themeGta4IconScroll.setPadding(0, 0, 0, 0)
                 binding.themeGta4IconRow.setPadding(sidePad, 0, sidePad, 0)
                 val initialId = centeredMediaId.ifBlank {
@@ -512,7 +591,37 @@ class RadioList : Fragment() {
                 }
                 if (initialId.isNotBlank()) {
                     centeredMediaId = initialId
-                    scrollIconToCenter(initialId, smooth = false)
+                    val middleIv = stationIconViews[initialId]
+                    if (middleIv != null) {
+                        val targetX = ((middleIv.left + middleIv.right) / 2 - (binding.themeGta4IconScroll.width / 2)).coerceAtLeast(0)
+                        isProgrammaticScroll = true
+                        binding.themeGta4IconScroll.scrollTo(targetX, 0)
+                        isProgrammaticScroll = false
+                    }
+                }
+            }
+        } else {
+            children.forEachIndexed { idx, item ->
+                val mId = item.mediaId ?: return@forEachIndexed
+                val onBmp = stationOnBitmaps[mId]
+                val iv = ImageView(requireContext()).apply {
+                    layoutParams = LinearLayout.LayoutParams(iconSizePx, iconSizePx).apply {
+                        setMargins(marginPx, marginPx, marginPx, marginPx)
+                    }
+                    scaleType = ImageView.ScaleType.FIT_CENTER
+                    if (onBmp != null) {
+                        setImageBitmap(onBmp)
+                    } else {
+                        setImageResource(R.drawable.outline_radio_24)
+                    }
+                    alpha = 0.28f
+                    setOnClickListener { onStationClicked(item) }
+                }
+                stationIconViews[mId] = iv
+                if (idx < 6) {
+                    binding.themeIconRow1.addView(iv)
+                } else {
+                    binding.themeIconRow2.addView(iv)
                 }
             }
         }
@@ -569,15 +678,8 @@ class RadioList : Fragment() {
             binding.themeGta4ActiveStationName.text = displayStationTitle
             binding.themeGta4ActiveStationName.setTextColor(statusColor)
 
-            val highlightedId = if (isUserScrollingStrip) centeredMediaId else activeMediaId
-            for ((mediaId, iv) in stationIconViews) {
-                val isThisActive = isPlaying && mediaId == highlightedId
-                val bmp = if (isThisActive) stationOnBitmaps[mediaId] else stationOffBitmaps[mediaId]
-                if (bmp != null) {
-                    iv.setImageBitmap(bmp)
-                }
-                iv.alpha = if (isThisActive || pack.stationOffIconUris.isNotEmpty()) 1.0f else 0.28f
-            }
+            val highlightedId = if (isPlaying) (if (isUserScrollingStrip) centeredMediaId else activeMediaId) else ""
+            updateGta4IconsHighlight(highlightedId)
 
             if (!isUserScrollingStrip && selectedMediaId.isNotBlank() && selectedMediaId != lastAutoScrolledMediaId) {
                 lastAutoScrolledMediaId = selectedMediaId
@@ -608,9 +710,14 @@ class RadioList : Fragment() {
                     binding.themeSongAlbum.text = ""
                 }
 
-                val artBmp = currentMetadata.description.iconBitmap ?: stationOnBitmaps[selectedMediaId]
-                if (artBmp != null) {
-                    binding.themeSongArt.setImageBitmap(artBmp)
+                val artBmp = stationOnBitmaps[selectedMediaId] ?: currentMetadata.description.iconBitmap
+                val songArtBmp = if (isSongOrShow && currentMetadata.description.iconBitmap != null) {
+                    currentMetadata.description.iconBitmap
+                } else {
+                    artBmp
+                }
+                if (songArtBmp != null) {
+                    binding.themeSongArt.setImageBitmap(songArtBmp)
                 } else {
                     binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
                 }
