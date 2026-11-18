@@ -271,8 +271,7 @@ object DynamicThemeManager {
         } catch (_: Exception) { "" }
         if (jsonText.isBlank()) return null
 
-        val cleanJson = if (jsonText.trim().endsWith("}")) jsonText else (jsonText.trim() + "
-}")
+        val cleanJson = if (jsonText.trim().endsWith("}")) jsonText else (jsonText.trim() + "}")
         val obj = try { JSONObject(cleanJson) } catch (_: Exception) { JSONObject() }
 
         val seriesName = obj.optString("seriesName", folderName)
