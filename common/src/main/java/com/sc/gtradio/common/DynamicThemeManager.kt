@@ -134,6 +134,10 @@ object DynamicThemeManager {
         invalidateCache()
     }
 
+    fun forceRescan(context: Context? = null) {
+        invalidateCache()
+    }
+
     fun normalizeStationKey(raw: String): String {
         val base = raw.lowercase()
             .substringBeforeLast(".")
