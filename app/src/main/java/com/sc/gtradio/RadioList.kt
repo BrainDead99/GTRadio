@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.database.ContentObserver
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
@@ -40,6 +41,10 @@ class RadioList : Fragment() {
     private var activeThemePack: DynamicThemePack? = null
     private var loadedStations: List<MediaBrowserCompat.MediaItem> = emptyList()
     private val stationIconViews = HashMap<String, ImageView>()
+    private val stationOnBitmaps = HashMap<String, Bitmap?>()
+    private val stationOffBitmaps = HashMap<String, Bitmap?>()
+    private var lastAutoScrolledMediaId: String = ""
+
     private var selectedStationTitle: String = ""
     private var currentPlaybackState: PlaybackStateCompat = EMPTY_PLAYBACK_STATE
     private var currentMetadata: MediaMetadataCompat = NOTHING_PLAYING
@@ -102,8 +107,11 @@ class RadioList : Fragment() {
 
     private val binding get() = _binding!!
 
+    private fun isGta4Style(pack: DynamicThemePack): Boolean {
+        return pack.layoutStyle.equals("gta4", ignoreCase = true) || pack.stationOffIconUris.isNotEmpty()
+    }
+
     private fun startStationWithTuningNoise(playAction: () -> Unit) {
-        // Tuning noise and stream muting are now handled globally inside GTRadioMusicService
         playAction()
     }
 
@@ -128,6 +136,25 @@ class RadioList : Fragment() {
         updateDynamicThemePlaybackUi()
     }
 
+    private fun toggleRadioPower() {
+        val transportControls = musicServiceConnection?.transportControls
+        if (currentPlaybackState.isPlaying) {
+            DynamicThemeManager.stopTuningNoise()
+            musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
+            transportControls?.stop()
+        } else {
+            val firstOrSelected = loadedStations.find {
+                it.description.title?.toString().equals(selectedStationTitle, ignoreCase = true)
+            } ?: loadedStations.firstOrNull()
+            if (currentMetadata.description.mediaId.isNullOrBlank() && firstOrSelected != null) {
+                selectedStationTitle = firstOrSelected.description.title?.toString() ?: ""
+                startStationWithTuningNoise { transportControls?.playFromMediaId(firstOrSelected.mediaId, null) }
+            } else {
+                startStationWithTuningNoise { transportControls?.play() }
+            }
+        }
+    }
+
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         stationGroupId = arguments?.getString("stationGroupId") ?: ""
         if (musicServiceConnection == null) {
@@ -149,24 +176,8 @@ class RadioList : Fragment() {
 
         setupVolumeControls()
 
-        binding.themeRadioState.setOnClickListener {
-            val transportControls = musicServiceConnection?.transportControls
-            if (currentPlaybackState.isPlaying) {
-                DynamicThemeManager.stopTuningNoise()
-                musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
-                transportControls?.stop()
-            } else {
-                val firstOrSelected = loadedStations.find {
-                    it.description.title?.toString().equals(selectedStationTitle, ignoreCase = true)
-                } ?: loadedStations.firstOrNull()
-                if (currentMetadata.description.mediaId.isNullOrBlank() && firstOrSelected != null) {
-                    selectedStationTitle = firstOrSelected.description.title?.toString() ?: ""
-                    startStationWithTuningNoise { transportControls?.playFromMediaId(firstOrSelected.mediaId, null) }
-                } else {
-                    startStationWithTuningNoise { transportControls?.play() }
-                }
-            }
-        }
+        binding.themeRadioState.setOnClickListener { toggleRadioPower() }
+        binding.themeGta4RadioState.setOnClickListener { toggleRadioPower() }
     }
 
     private fun setupVolumeControls() {
@@ -177,14 +188,19 @@ class RadioList : Fragment() {
             val curSys = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
             val bars = ((curSys.toFloat() / maxSys.toFloat()) * binding.themeVolumeBar.maxBars).roundToInt()
             binding.themeVolumeBar.currentBars = bars
+            binding.themeGta4VolumeBar.currentBars = bars
         }
         syncBarsFromSystem()
 
-        binding.themeVolumeBar.onVolumeBarsChanged = { bars, maxBars ->
+        val onVolumeChanged: (Int, Int) -> Unit = { bars, maxBars ->
             val maxSys = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
             val targetVol = ((bars.toFloat() / maxBars.toFloat()) * maxSys).roundToInt().coerceIn(0, maxSys)
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+            binding.themeVolumeBar.currentBars = bars
+            binding.themeGta4VolumeBar.currentBars = bars
         }
+        binding.themeVolumeBar.onVolumeBarsChanged = onVolumeChanged
+        binding.themeGta4VolumeBar.onVolumeBarsChanged = onVolumeChanged
 
         val obs = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
@@ -212,7 +228,11 @@ class RadioList : Fragment() {
         binding.dynamicThemeRoot.visibility = View.VISIBLE
         (activity as? MainActivity)?.setFullscreenThemeMode(true)
 
-        // Apply Title & Colors
+        val gta4Mode = isGta4Style(pack)
+        binding.themeControlsBlock.visibility = if (gta4Mode) View.GONE else View.VISIBLE
+        binding.themeGta4ControlsBlock.visibility = if (gta4Mode) View.VISIBLE else View.GONE
+
+        // Apply Header Title & Font
         binding.themeHeaderTitle.text = pack.headerTitle
         binding.themeHeaderTitle.setTextColor(pack.headerColor)
         pack.headerTypeface?.let { binding.themeHeaderTitle.typeface = it }
@@ -226,21 +246,34 @@ class RadioList : Fragment() {
             binding.themeRadioState,
             binding.themeVolumeLabel,
             binding.themeRadioStationLabel,
-            binding.themeActiveStationName
+            binding.themeActiveStationName,
+            binding.themeGta4RadioLabel,
+            binding.themeGta4RadioState,
+            binding.themeGta4VolumeLabel,
+            binding.themeGta4StationLabel,
+            binding.themeGta4ActiveStationName
         )
         pack.bodyTypeface?.let { tf ->
             bodyViews.forEach { it.typeface = tf }
         }
 
-        binding.themeNowPlayingLabel.setTextColor(pack.activeTextColor)
-        binding.themeSongTitle.setTextColor(pack.headerColor)
-        binding.themeSongArtist.setTextColor(pack.activeTextColor)
-        binding.themeSongAlbum.setTextColor(pack.labelColor)
-        binding.themeRadioLabel.setTextColor(pack.labelColor)
-        binding.themeVolumeLabel.setTextColor(pack.labelColor)
-        binding.themeRadioStationLabel.setTextColor(pack.labelColor)
-        binding.themeActiveStationName.setTextColor(pack.labelColor)
+        binding.themeVolumeBar.continuousMode = false
         binding.themeVolumeBar.activeBarColor = pack.volumeBarColor
+
+        binding.themeGta4VolumeBar.continuousMode = true
+        binding.themeGta4VolumeBar.activeBarColor = pack.volumeBarColor
+        binding.themeGta4VolumeBar.inactiveBarColor = Color.parseColor("#3B3B3B")
+
+        if (!gta4Mode) {
+            binding.themeNowPlayingLabel.setTextColor(pack.activeTextColor)
+            binding.themeSongTitle.setTextColor(pack.headerColor)
+            binding.themeSongArtist.setTextColor(pack.activeTextColor)
+            binding.themeSongAlbum.setTextColor(pack.labelColor)
+            binding.themeRadioLabel.setTextColor(pack.labelColor)
+            binding.themeVolumeLabel.setTextColor(pack.labelColor)
+            binding.themeRadioStationLabel.setTextColor(pack.labelColor)
+            binding.themeActiveStationName.setTextColor(pack.labelColor)
+        }
 
         // Setup Initial Background & Start Crossfade Cycle
         bgHandler.removeCallbacks(bgCycleRunnable)
@@ -259,43 +292,59 @@ class RadioList : Fragment() {
             }
         }
 
-        // Build 2-Row Station Icon Grid (6 top row, remaining 5 bottom row)
+        // Build Station Icons
         binding.themeIconRow1.removeAllViews()
         binding.themeIconRow2.removeAllViews()
+        binding.themeGta4IconRow.removeAllViews()
         stationIconViews.clear()
+        stationOnBitmaps.clear()
+        stationOffBitmaps.clear()
 
         val density = resources.displayMetrics.density
-        val iconSizePx = (52 * density).roundToInt()
-        val marginPx = (3 * density).roundToInt()
+        val iconSizePx = ((if (gta4Mode) 64 else 52) * density).roundToInt()
+        val marginPx = ((if (gta4Mode) 4 else 3) * density).roundToInt()
 
         children.forEachIndexed { idx, item ->
             val stTitle = item.description.title?.toString() ?: ""
             val normKey = DynamicThemeManager.normalizeStationKey(stTitle)
-            val iconUri = pack.stationIconUris[normKey]
-            val bmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), iconUri, 256)
+            val onUri = pack.stationIconUris[normKey]
+            val offUri = pack.stationOffIconUris[normKey]
+
+            val onBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), onUri, 256)
                 ?: item.description.iconBitmap
+            val offBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), offUri, 256)
+                ?: onBmp
 
             val iv = ImageView(requireContext()).apply {
                 layoutParams = LinearLayout.LayoutParams(iconSizePx, iconSizePx).apply {
                     setMargins(marginPx, marginPx, marginPx, marginPx)
                 }
                 scaleType = ImageView.ScaleType.FIT_CENTER
-                if (bmp != null) {
-                    setImageBitmap(bmp)
+                val initialBmp = if (gta4Mode) offBmp else onBmp
+                if (initialBmp != null) {
+                    setImageBitmap(initialBmp)
                 } else {
                     setImageResource(R.drawable.outline_radio_24)
                 }
-                alpha = 0.28f
+                alpha = if (gta4Mode && offUri != null) 1.0f else 0.28f
                 setOnClickListener { onStationClicked(item) }
             }
 
-            if (item.mediaId != null) {
-                stationIconViews[item.mediaId!!] = iv
+            val mId = item.mediaId
+            if (mId != null) {
+                stationIconViews[mId] = iv
+                stationOnBitmaps[mId] = onBmp
+                stationOffBitmaps[mId] = offBmp
             }
-            if (idx < 6) {
-                binding.themeIconRow1.addView(iv)
+
+            if (gta4Mode) {
+                binding.themeGta4IconRow.addView(iv)
             } else {
-                binding.themeIconRow2.addView(iv)
+                if (idx < 6) {
+                    binding.themeIconRow1.addView(iv)
+                } else {
+                    binding.themeIconRow2.addView(iv)
+                }
             }
         }
 
@@ -309,15 +358,103 @@ class RadioList : Fragment() {
         val pack = activeThemePack ?: return
         if (_binding == null) return
 
+        val gta4Mode = isGta4Style(pack)
         val isPlaying = currentPlaybackState.isPlaying
-        binding.themeRadioState.text = if (isPlaying) "ON" else "OFF"
-        binding.themeRadioState.setTextColor(if (isPlaying) pack.activeTextColor else pack.labelColor)
-
         val activeMediaId = currentMetadata.description.mediaId ?: ""
         val activeStationFromMeta = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_WRITER)
             ?: loadedStations.find { it.mediaId == activeMediaId }?.description?.title?.toString()
             ?: selectedStationTitle
 
+        if (gta4Mode) {
+            val statusColor = if (isPlaying) pack.activeTextColor else pack.labelColor
+            binding.themeNowPlayingGroup.visibility = View.VISIBLE
+            binding.themeNowPlayingLabel.setTextColor(statusColor)
+
+            binding.themeGta4RadioLabel.setTextColor(statusColor)
+            binding.themeGta4RadioState.text = if (isPlaying) "On" else "Off"
+            binding.themeGta4RadioState.setTextColor(statusColor)
+            binding.themeGta4VolumeLabel.setTextColor(statusColor)
+            binding.themeGta4StationLabel.setTextColor(statusColor)
+            binding.themeGta4ActiveStationName.text = activeStationFromMeta
+            binding.themeGta4ActiveStationName.setTextColor(statusColor)
+
+            val selectedItem = loadedStations.find { it.mediaId == activeMediaId }
+                ?: loadedStations.find { it.description.title?.toString().equals(activeStationFromMeta, ignoreCase = true) }
+                ?: loadedStations.firstOrNull()
+            val selectedMediaId = selectedItem?.mediaId ?: ""
+
+            for ((mediaId, iv) in stationIconViews) {
+                val isThisActive = isPlaying && mediaId == activeMediaId
+                val bmp = if (isThisActive) stationOnBitmaps[mediaId] else stationOffBitmaps[mediaId]
+                if (bmp != null) {
+                    iv.setImageBitmap(bmp)
+                }
+                iv.alpha = if (isThisActive || pack.stationOffIconUris.isNotEmpty()) 1.0f else 0.28f
+            }
+
+            if (selectedMediaId.isNotBlank() && selectedMediaId != lastAutoScrolledMediaId) {
+                lastAutoScrolledMediaId = selectedMediaId
+                stationIconViews[selectedMediaId]?.let { targetIv ->
+                    binding.themeGta4IconScroll.post {
+                        if (_binding != null) {
+                            val scrollX = (targetIv.left - (binding.themeGta4IconScroll.width / 2) + (targetIv.width / 2)).coerceAtLeast(0)
+                            binding.themeGta4IconScroll.smoothScrollTo(scrollX, 0)
+                        }
+                    }
+                }
+            }
+
+            val isSongOrShow = isPlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
+                currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
+
+            if (isPlaying) {
+                binding.themeSongTitle.setTextColor(pack.activeTextColor)
+                binding.themeSongArtist.setTextColor(pack.activeTextColor)
+                binding.themeSongAlbum.setTextColor(pack.activeTextColor)
+
+                if (isSongOrShow && activeMediaId.isNotBlank()) {
+                    val songTitle = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: ""
+                    val cleanArtist = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ARTIST) ?: ""
+                    val cleanAlbum = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST) ?: ""
+
+                    binding.themeSongTitle.text = songTitle.uppercase()
+                    binding.themeSongArtist.text = cleanArtist.uppercase()
+                    binding.themeSongAlbum.visibility = View.VISIBLE
+                    binding.themeSongAlbum.text = cleanAlbum.uppercase()
+                } else {
+                    binding.themeSongTitle.text = activeStationFromMeta.uppercase()
+                    binding.themeSongArtist.text = ""
+                    binding.themeSongAlbum.visibility = View.VISIBLE
+                    binding.themeSongAlbum.text = ""
+                }
+
+                val artBmp = currentMetadata.description.iconBitmap ?: stationOnBitmaps[selectedMediaId]
+                if (artBmp != null) {
+                    binding.themeSongArt.setImageBitmap(artBmp)
+                } else {
+                    binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
+                }
+                binding.themeSongArt.alpha = 1.0f
+            } else {
+                // Radio Off state: show dimmed station icon in NOW PLAYING box and clear text without shifting layout
+                val offArtBmp = stationOnBitmaps[selectedMediaId] ?: stationOffBitmaps[selectedMediaId]
+                if (offArtBmp != null) {
+                    binding.themeSongArt.setImageBitmap(offArtBmp)
+                } else {
+                    binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
+                }
+                binding.themeSongArt.alpha = 0.45f
+                binding.themeSongTitle.text = ""
+                binding.themeSongArtist.text = ""
+                binding.themeSongAlbum.visibility = View.VISIBLE
+                binding.themeSongAlbum.text = ""
+            }
+            return
+        }
+
+        // Standard GTA San Andreas Dynamic Theme UI
+        binding.themeRadioState.text = if (isPlaying) "ON" else "OFF"
+        binding.themeRadioState.setTextColor(if (isPlaying) pack.activeTextColor else pack.labelColor)
         binding.themeActiveStationName.text = activeStationFromMeta.uppercase()
 
         for ((mediaId, iv) in stationIconViews) {
@@ -325,9 +462,11 @@ class RadioList : Fragment() {
             iv.alpha = if (isThisActive) 1.0f else 0.28f
         }
 
-        val isSongOrShow = isPlaying && !DynamicThemeManager.isPlayingTuningNoise() && currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
+        val isSongOrShow = isPlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
+            currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
         if (isSongOrShow && activeMediaId.isNotBlank()) {
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
+            binding.themeSongArt.alpha = 1.0f
             val songTitle = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: ""
             val cleanArtist = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ARTIST) ?: ""
             val cleanAlbum = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST) ?: ""

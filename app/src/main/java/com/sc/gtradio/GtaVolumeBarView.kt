@@ -22,6 +22,12 @@ class GtaVolumeBarView @JvmOverloads constructor(
             invalidate()
         }
 
+    var continuousMode: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
     var activeBarColor: Int = Color.parseColor("#B8CFE6")
         set(value) {
             field = value
@@ -45,6 +51,22 @@ class GtaVolumeBarView @JvmOverloads constructor(
         val w = width.toFloat()
         val h = height.toFloat()
         if (w <= 0f || h <= 0f) return
+
+        if (continuousMode) {
+            val barH = (h * 0.48f).coerceAtLeast(8f)
+            val top = (h - barH) / 2f
+            val bottom = top + barH
+
+            barPaint.color = inactiveBarColor
+            canvas.drawRect(0f, top, w, bottom, barPaint)
+
+            val fillRatio = (currentBars.toFloat() / maxBars.toFloat()).coerceIn(0f, 1f)
+            if (fillRatio > 0f) {
+                barPaint.color = activeBarColor
+                canvas.drawRect(0f, top, w * fillRatio, bottom, barPaint)
+            }
+            return
+        }
 
         val totalSlots = maxBars * 2 - 1
         val barWidth = w / totalSlots.toFloat()

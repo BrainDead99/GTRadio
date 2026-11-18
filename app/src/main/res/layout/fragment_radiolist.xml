@@ -30,7 +30,7 @@
             tools:layout="@layout/fragment_nowplaying" />
     </androidx.constraintlayout.widget.ConstraintLayout>
 
-    <!-- Fullscreen Dynamic Theme Layout (gtaradio.net + Mockup layout) -->
+    <!-- Fullscreen Dynamic Theme Layout -->
     <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/dynamicThemeRoot"
         android:layout_width="match_parent"
@@ -53,33 +53,33 @@
             android:scaleType="centerCrop"
             tools:ignore="ContentDescription" />
 
-        <!-- Series Header Title (e.g. San Andreas Radio) -->
+        <!-- Series Header Title (e.g. San Andreas Radio / Liberty City Radio) -->
         <TextView
             android:id="@+id/themeHeaderTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="20dp"
+            android:layout_marginStart="24dp"
             android:layout_marginTop="36dp"
             android:layout_marginEnd="16dp"
             android:shadowColor="#CC000000"
             android:shadowDx="2"
             android:shadowDy="2"
             android:shadowRadius="4"
-            android:text="San Andreas Radio"
-            android:textColor="#D0E2F2"
-            android:textSize="33sp"
+            android:text="Liberty City Radio"
+            android:textColor="#D49A2A"
+            android:textSize="32sp"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent" />
 
-        <!-- Top-Left NOW PLAYING Metadata Block (Visible only during Songs & WCTR Shows) -->
+        <!-- Top-Left NOW PLAYING Metadata Block -->
         <LinearLayout
             android:id="@+id/themeNowPlayingGroup"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
-            android:layout_marginStart="20dp"
-            android:layout_marginTop="12dp"
-            android:layout_marginEnd="20dp"
+            android:layout_marginStart="24dp"
+            android:layout_marginTop="22dp"
+            android:layout_marginEnd="24dp"
             android:orientation="vertical"
             android:visibility="invisible"
             app:layout_constraintEnd_toEndOf="parent"
@@ -90,20 +90,20 @@
                 android:id="@+id/themeNowPlayingLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:letterSpacing="0.08"
+                android:letterSpacing="0.04"
                 android:text="NOW PLAYING"
-                android:textColor="#B8CFE6"
-                android:textSize="16sp"
+                android:textColor="#D49A2A"
+                android:textSize="18sp"
                 android:textStyle="bold" />
 
             <ImageView
                 android:id="@+id/themeSongArt"
-                android:layout_width="122dp"
-                android:layout_height="122dp"
-                android:layout_marginTop="6dp"
-                android:layout_marginBottom="8dp"
-                android:background="#141414"
-                android:scaleType="centerCrop"
+                android:layout_width="132dp"
+                android:layout_height="132dp"
+                android:layout_marginTop="10dp"
+                android:layout_marginBottom="12dp"
+                android:background="#0A0A0A"
+                android:scaleType="fitCenter"
                 tools:ignore="ContentDescription" />
 
             <TextView
@@ -111,10 +111,10 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:ellipsize="end"
-                android:letterSpacing="0.05"
+                android:letterSpacing="0.03"
                 android:maxLines="1"
-                android:textColor="#D0E2F2"
-                android:textSize="13sp"
+                android:textColor="#D49A2A"
+                android:textSize="14sp"
                 android:textStyle="bold"
                 tools:text="KILLING IN THE NAME" />
 
@@ -122,28 +122,28 @@
                 android:id="@+id/themeSongArtist"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="6dp"
                 android:ellipsize="end"
-                android:letterSpacing="0.05"
+                android:letterSpacing="0.03"
                 android:maxLines="1"
-                android:textColor="#B8CFE6"
-                android:textSize="12sp"
+                android:textColor="#D49A2A"
+                android:textSize="13sp"
                 tools:text="RAGE AGAINST THE MACHINE" />
 
             <TextView
                 android:id="@+id/themeSongAlbum"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
+                android:layout_marginTop="6dp"
                 android:ellipsize="end"
-                android:letterSpacing="0.05"
+                android:letterSpacing="0.03"
                 android:maxLines="1"
-                android:textColor="#8FA8BF"
-                android:textSize="12sp"
+                android:textColor="#D49A2A"
+                android:textSize="13sp"
                 tools:text="RAGE AGAINST THE MACHINE" />
         </LinearLayout>
 
-        <!-- Lower Centered Radio Controls & 2-Row Icon Grid -->
+        <!-- GTA San Andreas Centered Radio Controls & 2-Row Icon Grid -->
         <LinearLayout
             android:id="@+id/themeControlsBlock"
             android:layout_width="match_parent"
@@ -198,7 +198,6 @@
                 android:layout_height="22dp"
                 android:layout_marginTop="6dp" />
 
-            <!-- Station Icons Row 1 (6 stations) -->
             <LinearLayout
                 android:id="@+id/themeIconRow1"
                 android:layout_width="match_parent"
@@ -208,7 +207,6 @@
                 android:gravity="center"
                 android:orientation="horizontal" />
 
-            <!-- Station Icons Row 2 (5 stations) -->
             <LinearLayout
                 android:id="@+id/themeIconRow2"
                 android:layout_width="match_parent"
@@ -239,6 +237,120 @@
                 android:textColor="#6E849B"
                 android:textSize="15sp"
                 android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- GTA IV Left-Aligned Two-Column Pause Menu Controls & Horizontal Scrolling Station Strip -->
+        <LinearLayout
+            android:id="@+id/themeGta4ControlsBlock"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:orientation="vertical"
+            android:visibility="gone"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/themeNowPlayingGroup">
+
+            <!-- Row 1: Radio | On/Off -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="24dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/themeGta4RadioLabel"
+                    android:layout_width="152dp"
+                    android:layout_height="wrap_content"
+                    android:text="Radio"
+                    android:textColor="#D49A2A"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/themeGta4RadioState"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingVertical="2dp"
+                    android:paddingEnd="16dp"
+                    android:text="Off"
+                    android:textColor="#8E8E8E"
+                    android:textSize="18sp" />
+            </LinearLayout>
+
+            <!-- Row 2: Audio Level | Continuous Horizontal Bar -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="24dp"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/themeGta4VolumeLabel"
+                    android:layout_width="152dp"
+                    android:layout_height="wrap_content"
+                    android:text="Audio Level"
+                    android:textColor="#D49A2A"
+                    android:textSize="18sp" />
+
+                <com.sc.gtradio.GtaVolumeBarView
+                    android:id="@+id/themeGta4VolumeBar"
+                    android:layout_width="150dp"
+                    android:layout_height="18dp" />
+            </LinearLayout>
+
+            <!-- Row 3: Radio Station | Station Name -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="24dp"
+                android:layout_marginTop="10dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/themeGta4StationLabel"
+                    android:layout_width="152dp"
+                    android:layout_height="wrap_content"
+                    android:text="Radio Station"
+                    android:textColor="#D49A2A"
+                    android:textSize="18sp" />
+
+                <TextView
+                    android:id="@+id/themeGta4ActiveStationName"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:maxLines="1"
+                    android:text=""
+                    android:textColor="#D49A2A"
+                    android:textSize="18sp" />
+            </LinearLayout>
+
+            <!-- Horizontal Scrolling Station Icons Row -->
+            <HorizontalScrollView
+                android:id="@+id/themeGta4IconScroll"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:clipToPadding="false"
+                android:paddingHorizontal="20dp"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/themeGta4IconRow"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal" />
+            </HorizontalScrollView>
+
         </LinearLayout>
 
     </androidx.constraintlayout.widget.ConstraintLayout>

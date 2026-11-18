@@ -13,7 +13,6 @@ import android.os.Looper
 import androidx.documentfile.provider.DocumentFile
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
-import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -30,303 +29,400 @@ data class DynamicThemePack(
     val volumeBarColor: Int,
     val headerTypeface: Typeface?,
     val bodyTypeface: Typeface?,
-    val groupLogoUri: Uri?,
     val portraitBgUris: List<Uri>,
     val landscapeBgUris: List<Uri>,
+    val groupLogoUri: Uri?,
     val stationIconUris: Map<String, Uri>,
-    val noiseSoundUris: List<Uri>,
-    val selectSoundUris: List<Uri>
+    val stationOffIconUris: Map<String, Uri> = emptyMap(),
+    val noiseSoundUris: List<Uri> = emptyList(),
+    val layoutStyle: String = "gtasa"
 )
 
 object DynamicThemeManager {
     private val packCache = HashMap<String, DynamicThemePack>()
-    private var lastScannedRootUri: String = ""
+    private val bitmapCache = HashMap<String, Bitmap>()
+    private var scannedPacks: List<DynamicThemePack>? = null
+    private var lastThemeUriString: String? = null
+
     private var noisePlayer: MediaPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var noiseCheckRunnable: Runnable? = null
     private val rng = Random()
-    private var isNoiseLooping = false
-    private var activeNoiseList: List<Uri> = emptyList()
 
-    private val stationKeyAliases = mapOf(
-        "BOUNCE" to "BOUNCEFM",
-        "BOUNCEFM" to "BOUNCEFM",
-        "CSR" to "CSR",
-        "CSR1039" to "CSR",
-        "KDST" to "KDST",
-        "KJAH" to "KJAH",
-        "KJAHWEST" to "KJAH",
-        "KROSE" to "KROSE",
-        "MASTERSOUNDS" to "MASTERSOUNDS",
-        "MASTERSOUNDS983" to "MASTERSOUNDS",
-        "PLAYBACK" to "PLAYBACKFM",
-        "PLAYBACKFM" to "PLAYBACKFM",
-        "RADIOX" to "RADIOX",
-        "RLS" to "RADIOLOSSANTOS",
-        "RADIOLOSSANTOS" to "RADIOLOSSANTOS",
-        "SFUR" to "SFUR",
-        "WCTR" to "WCTR"
+    private val stationAliases = mapOf(
+        // GTA San Andreas
+        "bounce" to "bouncefm",
+        "bouncefm" to "bouncefm",
+        "csr" to "csr",
+        "csr1039" to "csr",
+        "kdst" to "kdst",
+        "kjah" to "kjah",
+        "kjahwest" to "kjah",
+        "krose" to "krose",
+        "mastersounds" to "mastersounds",
+        "mastersounds983" to "mastersounds",
+        "playback" to "playbackfm",
+        "playbackfm" to "playbackfm",
+        "rls" to "radiolossantos",
+        "radiolossantos" to "radiolossantos",
+        "radiox" to "radiox",
+        "sfur" to "sfur",
+        "wctr" to "wctr",
+        // GTA IV & EFLC
+        "classics1041" to "theclassics",
+        "classics" to "theclassics",
+        "theclassics" to "theclassics",
+        "electrochoc" to "electrochoc",
+        "fusionfm" to "fusionfm",
+        "fusion" to "fusionfm",
+        "if99internationalfunk" to "if99",
+        "internationalfunk" to "if99",
+        "if99" to "if99",
+        "integrity20" to "integrity",
+        "integrity" to "integrity",
+        "jnrjazznationradio1085" to "jnr",
+        "jazznationradio1085" to "jnr",
+        "jazznationradio" to "jnr",
+        "jnr" to "jnr",
+        "k109thestudio" to "k109",
+        "k109" to "k109",
+        "libertycityhardcore" to "lchc",
+        "lchc" to "lchc",
+        "libertyrockradio978" to "libertyrock",
+        "libertyrockradio" to "libertyrock",
+        "libertyrock" to "libertyrock",
+        "massivebsoundsystem969" to "massiveb",
+        "massivebsoundsystem" to "massiveb",
+        "massiveb" to "massiveb",
+        "publiclibertyradio" to "plr",
+        "plr" to "plr",
+        "radiobroker" to "radiobroker",
+        "broker" to "radiobroker",
+        "sanjuansounds" to "sanjuansounds",
+        "sanjuan" to "sanjuansounds",
+        "thebeat1027" to "thebeat",
+        "thebeat" to "thebeat",
+        "thejourney" to "thejourney",
+        "journey" to "thejourney",
+        "thevibe988" to "thevibe",
+        "thevibe" to "thevibe",
+        "tuffgongradio" to "tuffgong",
+        "tuffgong" to "tuffgong",
+        "vladivostokfm" to "vladivostok",
+        "vladivostok" to "vladivostok",
+        "wktttalkradio" to "wktt",
+        "wktt" to "wktt",
+        "vicecityfm" to "vcfm",
+        "vcfm" to "vcfm",
+        "ramjamfm" to "ramjamfm",
+        "ramjam" to "ramjamfm",
+        "selfactualizationfm" to "selfactualizationfm",
+        "meditation" to "selfactualizationfm"
     )
-
-    fun normalizeStationKey(name: String): String {
-        val raw = name.uppercase()
-            .removeSuffix(".PNG")
-            .removeSuffix(".JPG")
-            .removeSuffix("_ICON")
-            .removePrefix("RADIO_")
-            .replace(Regex("[^A-Z0-9]"), "")
-        return stationKeyAliases[raw] ?: raw
-    }
 
     fun isDynamicThemeEnabled(context: Context): Boolean {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        return prefs.getBoolean("enable_dynamic_theme_ui", true)
+        return prefs.getBoolean("dynamic_theme_enabled", true)
     }
 
-    @Synchronized
+    fun invalidateCache() {
+        packCache.clear()
+        scannedPacks = null
+    }
+
+    fun clearCache() {
+        invalidateCache()
+    }
+
+    fun normalizeStationKey(raw: String): String {
+        val base = raw.lowercase()
+            .substringBeforeLast(".")
+            .replace(Regex("(_on_icon|_off_icon|_icon|_on|_off|logo|radio_)"), "")
+            .replace(Regex("[^a-z0-9]"), "")
+        return stationAliases[base] ?: base
+    }
+
     fun findNoisePackForSeries(context: Context, seriesName: String?): DynamicThemePack? {
         if (seriesName.isNullOrBlank()) return null
         val exact = findThemeForSeries(context, seriesName)
         return if (exact != null && exact.noiseSoundUris.isNotEmpty()) exact else null
     }
 
-    fun findThemeForSeries(context: Context, seriesGroupName: String): DynamicThemePack? {
-        if (!isDynamicThemeEnabled(context) || seriesGroupName.isBlank()) return null
-        ensureThemesScanned(context)
+    fun findThemeForSeries(context: Context, seriesName: String, libraryRootDoc: DocumentFile? = null): DynamicThemePack? {
+        if (seriesName.isBlank() || !isDynamicThemeEnabled(context)) return null
 
-        val normTarget = seriesGroupName.uppercase()
-        for ((key, pack) in packCache) {
-            if (normTarget.contains(key) || key.contains(normTarget) ||
-                (normTarget.contains("SAN ANDREAS") && key.contains("SAN ANDREAS"))
-            ) {
-                return pack
-            }
-        }
-        return null
-    }
-
-    @Synchronized
-    fun forceRescan(context: Context) {
-        lastScannedRootUri = ""
-        packCache.clear()
-        ensureThemesScanned(context)
-    }
-
-    @Synchronized
-    fun ensureThemesScanned(context: Context) {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        val themeUriStr = prefs.getString("dynamic_theme_uri", "") ?: ""
-        val libUriStr = prefs.getString("radio_folders_uri", "") ?: ""
-        val combinedKey = "$themeUriStr|$libUriStr"
-        if (combinedKey == lastScannedRootUri && packCache.isNotEmpty()) return
-        lastScannedRootUri = combinedKey
-        packCache.clear()
-
-        // 1. Check explicit Dynamic Theme URI if user selected one in Settings
-        if (themeUriStr.isNotBlank()) {
-            try {
-                val doc = DocumentFile.fromTreeUri(context, Uri.parse(themeUriStr))
-                if (doc != null && doc.isDirectory) {
-                    scanThemeRootDoc(context, doc)
-                }
-            } catch (e: Exception) {
-                GTRadioLogger.log("DynamicThemeManager: Error scanning explicit theme URI", e)
-            }
+        val currentThemeUri = prefs.getString("dynamic_theme_uri", "") ?: ""
+        if (currentThemeUri != lastThemeUriString) {
+            invalidateCache()
+            lastThemeUriString = currentThemeUri
         }
 
-        // 2. Check inside Library URI for a "Dynamic Theme" folder
-        if (packCache.isEmpty() && libUriStr.isNotBlank()) {
-            try {
-                val libDoc = DocumentFile.fromTreeUri(context, Uri.parse(libUriStr))
-                if (libDoc != null && libDoc.isDirectory) {
-                    val dtDoc = findDynamicThemeFolder(libDoc, depth = 0)
-                    if (dtDoc != null) {
-                        scanThemeRootDoc(context, dtDoc)
-                    }
-                }
-            } catch (e: Exception) {
-                GTRadioLogger.log("DynamicThemeManager: Error scanning library URI for Dynamic Theme", e)
-            }
-        }
+        packCache[seriesName]?.let { return it }
 
-        // 3. Fallback: check standard direct sdcard paths if accessible
-        if (packCache.isEmpty()) {
-            val candidates = listOf(
-                File("/sdcard/GTRadio/Dynamic Theme"),
-                File("/sdcard/GTA SA RADIO PROJECT/GTRadio/Dynamic Theme")
-            )
-            for (dir in candidates) {
-                if (dir.exists() && dir.isDirectory) {
-                    val doc = DocumentFile.fromFile(dir)
-                    scanThemeRootDoc(context, doc)
-                    if (packCache.isNotEmpty()) break
-                }
-            }
+        val packs = scannedPacks ?: scanAllThemePacks(context, libraryRootDoc).also { scannedPacks = it }
+        val matched = packs.firstOrNull { matchesSeries(seriesName, it.seriesName) }
+        if (matched != null) {
+            packCache[seriesName] = matched
         }
+        return matched
     }
 
-    private fun findDynamicThemeFolder(dir: DocumentFile, depth: Int): DocumentFile? {
-        if (depth > 2) return null
-        val name = (dir.name ?: "").trim()
-        if (name.equals("Dynamic Theme", ignoreCase = true)) return dir
-        val subDirs = try { dir.listFiles().filter { it.isDirectory } } catch (_: Exception) { emptyList() }
-        for (sub in subDirs) {
-            if ((sub.name ?: "").trim().equals("Dynamic Theme", ignoreCase = true)) return sub
-        }
-        for (sub in subDirs) {
-            val found = findDynamicThemeFolder(sub, depth + 1)
-            if (found != null) return found
-        }
-        return null
+    private fun matchesSeries(groupSeriesName: String, packSeriesName: String): Boolean {
+        val g = groupSeriesName.uppercase()
+        val p = packSeriesName.uppercase()
+        val gNorm = g.replace(Regex("[^A-Z0-9]"), "")
+        val pNorm = p.replace(Regex("[^A-Z0-9]"), "")
+        if (gNorm == pNorm) return true
+
+        val gIsSa = g.contains("SAN ANDREAS") || g.contains("GTA SA") || gNorm.contains("GTASA")
+        val pIsSa = p.contains("SAN ANDREAS") || p.contains("GTA SA") || pNorm.contains("GTASA")
+        if (gIsSa && pIsSa) return true
+
+        val gIsEflc = g.contains("EPISODES") || g.contains("EFLC") || g.contains("TLAD") || g.contains("TBOGT")
+        val pIsEflc = p.contains("EPISODES") || p.contains("EFLC") || p.contains("TLAD") || p.contains("TBOGT")
+        if (gIsEflc || pIsEflc) return gIsEflc && pIsEflc
+
+        val gIsIv = g.contains("GTA IV") || g.contains("GTA 4") || gNorm.contains("GTAIV")
+        val pIsIv = p.contains("GTA IV") || p.contains("GTA 4") || pNorm.contains("GTAIV")
+        if (gIsIv && pIsIv) return true
+
+        val gIsVcs = g.contains("VICE CITY STORIES") || g.contains("VCS")
+        val pIsVcs = p.contains("VICE CITY STORIES") || p.contains("VCS")
+        if (gIsVcs || pIsVcs) return gIsVcs && pIsVcs
+
+        val gIsVc = g.contains("VICE CITY") || g.contains("GTA VC")
+        val pIsVc = p.contains("VICE CITY") || p.contains("GTA VC")
+        if (gIsVc && pIsVc) return true
+
+        val gIsLcs = g.contains("LIBERTY CITY STORIES") || g.contains("LCS")
+        val pIsLcs = p.contains("LIBERTY CITY STORIES") || p.contains("LCS")
+        if (gIsLcs || pIsLcs) return gIsLcs && pIsLcs
+
+        val gIs3 = g.contains("GTA III") || g.contains("GTA 3")
+        val pIs3 = p.contains("GTA III") || p.contains("GTA 3")
+        if (gIs3 && pIs3) return true
+
+        return false
     }
 
-    private fun scanThemeRootDoc(context: Context, dtRoot: DocumentFile) {
-        val children = try { dtRoot.listFiles().filter { it.isDirectory } } catch (_: Exception) { emptyList() }
-        // If user selected the series folder directly (e.g. "GTA San Andreas"), load it directly
-        val hasDirectAssets = children.any {
-            val n = (it.name ?: "").lowercase()
-            n == "background" || n == "font" || n == "icon" || n == "sounds"
-        }
-        if (hasDirectAssets) {
-            loadSeriesThemePack(context, dtRoot)?.let { packCache[it.seriesName.uppercase()] = it }
-            return
-        }
+    private fun scanAllThemePacks(context: Context, libraryRootDoc: DocumentFile?): List<DynamicThemePack> {
+        val results = ArrayList<DynamicThemePack>()
+        val seenNames = HashSet<String>()
+        val roots = findDynamicThemeRoots(context, libraryRootDoc)
 
-        for (seriesDir in children) {
-            loadSeriesThemePack(context, seriesDir)?.let { pack ->
-                packCache[pack.seriesName.uppercase()] = pack
-                GTRadioLogger.log("DynamicThemeManager: Loaded theme pack '${pack.seriesName}' (icons=${pack.stationIconUris.size}, bgP=${pack.portraitBgUris.size}, sounds=${pack.noiseSoundUris.size})")
+        for (root in roots) {
+            val children = try { root.listFiles() } catch (_: Exception) { emptyArray() }
+            for (dir in children) {
+                if (!dir.isDirectory) continue
+                val dName = dir.name ?: continue
+                if (dName.startsWith(".") || dName.equals("HD Radio Icons", ignoreCase = true)) continue
+                if (!seenNames.add(dName.uppercase())) continue
+                loadSingleThemePack(context, dir)?.let { results.add(it) }
             }
         }
+        return results
     }
 
-    private fun loadSeriesThemePack(context: Context, seriesDir: DocumentFile): DynamicThemePack? {
-        val folderName = seriesDir.name ?: return null
-        val files = try { seriesDir.listSimpleFiles(context) } catch (_: Exception) { emptyArray() }
+    private fun findDynamicThemeRoots(context: Context, libraryRootDoc: DocumentFile?): List<DocumentFile> {
+        val list = ArrayList<DocumentFile>()
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
 
-        var headerTitle = if (folderName.uppercase().contains("SAN ANDREAS")) "San Andreas Radio" else "$folderName Radio"
-        var bgIntervalMs = 8000L
-        var bgFadeMs = 1000L
-        var headerColor = Color.parseColor("#D0E2F2")
-        var labelColor = Color.parseColor("#6E849B")
-        var activeTextColor = Color.parseColor("#B8CFE6")
-        var volumeBarColor = Color.parseColor("#B8CFE6")
-        var headerFontName = "diploma.ttf"
-        var bodyFontName = "BankGothic Bold.ttf"
-
-        // Read or auto-create theme.json
-        val configInfo = files.find { !it.isDirectory && it.name.equals("theme.json", ignoreCase = true) }
-        if (configInfo != null) {
+        val customUri = prefs.getString("dynamic_theme_uri", "") ?: ""
+        if (customUri.isNotBlank()) {
             try {
-                val jsonTxt = context.contentResolver.openInputStream(configInfo.uri)?.bufferedReader()?.use { it.readText() } ?: ""
-                if (jsonTxt.isNotBlank()) {
-                    val obj = JSONObject(jsonTxt)
-                    headerTitle = obj.optString("headerTitle", headerTitle)
-                    bgIntervalMs = (obj.optLong("backgroundIntervalSeconds", 8L) * 1000L).coerceAtLeast(3000L)
-                    bgFadeMs = obj.optLong("backgroundFadeMs", 1000L).coerceAtLeast(200L)
-                    headerFontName = obj.optString("headerFont", headerFontName)
-                    bodyFontName = obj.optString("bodyFont", bodyFontName)
-                    headerColor = runCatching { Color.parseColor(obj.optString("headerColor", "#D0E2F2")) }.getOrDefault(headerColor)
-                    labelColor = runCatching { Color.parseColor(obj.optString("labelColor", "#6E849B")) }.getOrDefault(labelColor)
-                    activeTextColor = runCatching { Color.parseColor(obj.optString("activeTextColor", "#B8CFE6")) }.getOrDefault(activeTextColor)
-                    volumeBarColor = runCatching { Color.parseColor(obj.optString("volumeBarColor", "#B8CFE6")) }.getOrDefault(volumeBarColor)
-                }
-            } catch (e: Exception) {
-                GTRadioLogger.log("DynamicThemeManager: Failed parsing theme.json in $folderName", e)
-            }
-        } else {
-            // Try to auto-generate default theme.json for user convenience
-            try {
-                val newDoc = seriesDir.createFile("application/json", "theme.json")
-                if (newDoc != null) {
-                    val defaultJson = JSONObject().apply {
-                        put("seriesName", folderName)
-                        put("headerTitle", headerTitle)
-                        put("backgroundIntervalSeconds", 8)
-                        put("backgroundFadeMs", 1000)
-                        put("headerFont", "diploma.ttf")
-                        put("bodyFont", "BankGothic Bold.ttf")
-                        put("headerColor", "#D0E2F2")
-                        put("labelColor", "#6E849B")
-                        put("activeTextColor", "#B8CFE6")
-                        put("volumeBarColor", "#B8CFE6")
-                    }
-                    context.contentResolver.openOutputStream(newDoc.uri)?.use {
-                        it.write(defaultJson.toString(2).toByteArray())
-                    }
+                DocumentFile.fromTreeUri(context, Uri.parse(customUri))?.let { doc ->
+                    list.add(doc)
+                    doc.findFile("Dynamic Theme")?.let { if (it.isDirectory) list.add(it) }
                 }
             } catch (_: Exception) {}
         }
 
-        val groupLogoUri = files.find { !it.isDirectory && it.name.lowercase().startsWith("logo.") }?.uri
+        val sdPaths = listOf(
+            "/storage/emulated/0/GTRadio/Dynamic Theme",
+            "/sdcard/GTRadio/Dynamic Theme"
+        )
+        for (p in sdPaths) {
+            try {
+                val f = File(p)
+                if (f.exists() && f.isDirectory && f.canRead()) {
+                    list.add(DocumentFile.fromFile(f))
+                }
+            } catch (_: Exception) {}
+        }
 
-        var headerTf: Typeface? = null
-        var bodyTf: Typeface? = null
+        if (libraryRootDoc != null) {
+            try {
+                libraryRootDoc.findFile("Dynamic Theme")?.let { if (it.isDirectory) list.add(it) }
+            } catch (_: Exception) {}
+        }
+
+        return list
+    }
+
+    private fun loadSingleThemePack(context: Context, themeDir: DocumentFile): DynamicThemePack? {
+        val folderName = themeDir.name ?: return null
+        val simpleChildren = try { themeDir.listSimpleFiles(context) } catch (_: Exception) { emptyArray() }
+        val jsonInfo = simpleChildren.firstOrNull { !it.isDirectory && it.name.equals("theme.json", ignoreCase = true) }
+            ?: return null
+
+        val jsonText = try {
+            context.contentResolver.openInputStream(jsonInfo.uri)?.bufferedReader()?.use { it.readText() } ?: ""
+        } catch (_: Exception) { "" }
+        if (jsonText.isBlank()) return null
+
+        val cleanJson = if (jsonText.trim().endsWith("}")) jsonText else (jsonText.trim() + "
+}")
+        val obj = try { JSONObject(cleanJson) } catch (_: Exception) { JSONObject() }
+
+        val seriesName = obj.optString("seriesName", folderName)
+        val isGta4Folder = seriesName.uppercase().contains("GTA IV") || folderName.uppercase().contains("GTA IV")
+        val defaultHeaderTitle = if (isGta4Folder) "Liberty City Radio" else "$folderName Radio"
+        var headerTitle = obj.optString("headerTitle", defaultHeaderTitle)
+        if (isGta4Folder && headerTitle.equals("GTA IV Radio", ignoreCase = true)) {
+            headerTitle = "Liberty City Radio"
+        }
+
+        val bgIntervalSec = obj.optLong("backgroundIntervalSeconds", obj.optLong("backgroundIntervalSec", 8L)).coerceAtLeast(2L)
+        val bgFadeMs = obj.optLong("backgroundFadeMs", obj.optLong("crossfadeDurationMs", 1000L)).coerceAtLeast(150L)
+
+        var headerFontName = obj.optString("headerFont", obj.optString("headerFontFile", if (isGta4Folder) "din1451alt G.ttf" else "diploma.ttf"))
+        var bodyFontName = obj.optString("bodyFont", obj.optString("uiFontFile", if (isGta4Folder) "din1451alt.ttf" else "BankGothic Bold.ttf"))
+        if (isGta4Folder && headerFontName.equals("diploma.ttf", ignoreCase = true)) {
+            headerFontName = "din1451alt G.ttf"
+            bodyFontName = "din1451alt.ttf"
+        }
+
+        val defaultGold = "#D49A2A"
+        val defaultGrey = "#8E8E8E"
+        val headerColorHex = obj.optString("headerColor", obj.optString("headerTextColor", if (isGta4Folder) defaultGold else "#D0E2F2"))
+        val labelColorHex = obj.optString("labelColor", obj.optString("labelTextColor", if (isGta4Folder) defaultGrey else "#6E849B"))
+        val activeColorHex = obj.optString("activeTextColor", obj.optString("valueTextColor", if (isGta4Folder) defaultGold else "#B8CFE6"))
+        val volColorHex = obj.optString("volumeBarColor", obj.optString("volumeActiveColor", if (isGta4Folder) "#9E9E9E" else "#B8CFE6"))
+
+        val headerColor = parseColorSafe(if (isGta4Folder && headerColorHex == "#D0E2F2") defaultGold else headerColorHex, Color.parseColor("#D0E2F2"))
+        val labelColor = parseColorSafe(if (isGta4Folder && labelColorHex == "#6E849B") defaultGrey else labelColorHex, Color.parseColor("#6E849B"))
+        val activeTextColor = parseColorSafe(if (isGta4Folder && activeColorHex == "#B8CFE6") defaultGold else activeColorHex, Color.parseColor("#B8CFE6"))
+        val volumeBarColor = parseColorSafe(if (isGta4Folder && volColorHex == "#B8CFE6") "#9E9E9E" else volColorHex, Color.parseColor("#B8CFE6"))
+
         val portraitBgs = ArrayList<Uri>()
         val landscapeBgs = ArrayList<Uri>()
-        val stationIcons = HashMap<String, Uri>()
-        val noiseSounds = ArrayList<Uri>()
-        val selectSounds = ArrayList<Uri>()
+        val onIcons = HashMap<String, Uri>()
+        val offIcons = HashMap<String, Uri>()
+        val noiseUris = ArrayList<Uri>()
+        var groupLogoUri: Uri? = null
+        var headerTf: Typeface? = null
+        var bodyTf: Typeface? = null
 
-        val subDirs = try { seriesDir.listFiles().filter { it.isDirectory } } catch (_: Exception) { emptyList() }
+        for (c in simpleChildren) {
+            if (!c.isDirectory && c.name.lowercase().startsWith("logo.")) {
+                groupLogoUri = c.uri
+            }
+        }
+
+        val subDirs = try { themeDir.listFiles().filter { it.isDirectory } } catch (_: Exception) { emptyList() }
         for (sub in subDirs) {
-            when ((sub.name ?: "").lowercase().trim()) {
-                "font", "fonts" -> {
-                    val fontFiles = try { sub.listSimpleFiles(context) } catch (_: Exception) { emptyArray() }
-                    for (ff in fontFiles) {
-                        if (ff.isDirectory) continue
-                        val lower = ff.name.lowercase()
-                        if (lower.equals(headerFontName.lowercase(), ignoreCase = true) || lower.contains("diploma")) {
-                            headerTf = loadTypefaceFromUri(context, ff.uri, "hdr_${ff.name}")
-                        } else if (lower.equals(bodyFontName.lowercase(), ignoreCase = true) || lower.contains("bankgothic")) {
-                            bodyTf = loadTypefaceFromUri(context, ff.uri, "body_${ff.name}")
-                        }
-                    }
-                }
+            when (sub.name?.lowercase()) {
                 "background", "backgrounds" -> {
-                    val bgSubDirs = try { sub.listFiles().filter { it.isDirectory } } catch (_: Exception) { emptyList() }
-                    for (bSub in bgSubDirs) {
-                        val bName = (bSub.name ?: "").lowercase().trim()
-                        val imgs = try {
-                            bSub.listSimpleFiles(context)
-                                .filter { !it.isDirectory && (it.name.lowercase().endsWith(".png") || it.name.lowercase().endsWith(".jpg") || it.name.lowercase().endsWith(".jpeg")) }
-                                .sortedBy { it.name.lowercase() }
-                                .map { it.uri }
-                        } catch (_: Exception) { emptyList() }
-
-                        if (bName == "portrait" || bName == "potrait") {
-                            portraitBgs.addAll(imgs)
-                        } else if (bName == "landscape") {
-                            landscapeBgs.addAll(imgs)
+                    for (bgSub in sub.listFiles()) {
+                        if (!bgSub.isDirectory) continue
+                        when (bgSub.name?.lowercase()) {
+                            "portrait", "potrait" -> {
+                                bgSub.listSimpleFiles(context)
+                                    .filter { !it.isDirectory && !it.name.startsWith(".") }
+                                    .sortedBy { it.name.lowercase() }
+                                    .forEach { portraitBgs.add(it.uri) }
+                            }
+                            "landscape" -> {
+                                bgSub.listSimpleFiles(context)
+                                    .filter { !it.isDirectory && !it.name.startsWith(".") }
+                                    .sortedBy { it.name.lowercase() }
+                                    .forEach { landscapeBgs.add(it.uri) }
+                            }
                         }
                     }
                 }
                 "icon", "icons" -> {
-                    val iconFiles = try { sub.listSimpleFiles(context) } catch (_: Exception) { emptyArray() }
-                    for (ic in iconFiles) {
-                        if (ic.isDirectory) continue
-                        val key = normalizeStationKey(ic.name)
-                        stationIcons[key] = ic.uri
-                    }
-                }
-                "sounds", "sound" -> {
-                    val sndFiles = try { sub.listSimpleFiles(context) } catch (_: Exception) { emptyArray() }
-                    for (sf in sndFiles.sortedBy { it.name.lowercase() }) {
-                        if (sf.isDirectory) continue
-                        val lower = sf.name.lowercase()
-                        if (lower.contains("noise")) {
-                            noiseSounds.add(sf.uri)
-                        } else if (lower.contains("select")) {
-                            selectSounds.add(sf.uri)
+                    // 1. Check flat icons in icon/
+                    for (ic in sub.listSimpleFiles(context)) {
+                        if (!ic.isDirectory && !ic.name.startsWith(".")) {
+                            val key = normalizeStationKey(ic.name)
+                            onIcons[key] = ic.uri
                         }
                     }
+                    // 2. Check icon/on and icon/off subdirectories
+                    for (icSub in sub.listFiles()) {
+                        if (!icSub.isDirectory) continue
+                        val subLower = icSub.name?.lowercase() ?: ""
+                        if (subLower == "on") {
+                            for (ic in icSub.listSimpleFiles(context)) {
+                                if (!ic.isDirectory && !ic.name.startsWith(".")) {
+                                    onIcons[normalizeStationKey(ic.name)] = ic.uri
+                                }
+                            }
+                        } else if (subLower == "off") {
+                            for (ic in icSub.listSimpleFiles(context)) {
+                                if (!ic.isDirectory && !ic.name.startsWith(".")) {
+                                    offIcons[normalizeStationKey(ic.name)] = ic.uri
+                                }
+                            }
+                        }
+                    }
+                }
+                "font", "fonts" -> {
+                    val fontCacheDir = File(context.cacheDir, "theme_fonts_${folderName.hashCode()}").apply { mkdirs() }
+                    val fontFiles = sub.listSimpleFiles(context).filter { !it.isDirectory && it.name.lowercase().endsWith(".ttf") }
+                    for (ff in fontFiles) {
+                        val cachedFile = copyUriToCache(context, ff.uri, File(fontCacheDir, ff.name)) ?: continue
+                        try {
+                            val tf = Typeface.createFromFile(cachedFile)
+                            val fLower = ff.name.lowercase()
+                            if (ff.name.equals(headerFontName, ignoreCase = true) ||
+                                (isGta4Folder && fLower.contains("din") && fLower.contains("g.ttf")) ||
+                                (!isGta4Folder && fLower.contains("diploma"))
+                            ) {
+                                headerTf = tf
+                            }
+                            if (ff.name.equals(bodyFontName, ignoreCase = true) ||
+                                (isGta4Folder && fLower == "din1451alt.ttf") ||
+                                (!isGta4Folder && fLower.contains("bankgothic"))
+                            ) {
+                                bodyTf = tf
+                            }
+                        } catch (_: Exception) {}
+                    }
+                    if (headerTf == null && bodyTf != null) headerTf = bodyTf
+                    if (bodyTf == null && headerTf != null) bodyTf = headerTf
+                }
+                "sounds", "sound" -> {
+                    sub.listSimpleFiles(context)
+                        .filter { !it.isDirectory && !it.name.startsWith(".") }
+                        .sortedBy { it.name.lowercase() }
+                        .forEach { snd ->
+                            val sLower = snd.name.lowercase()
+                            if (sLower.contains("noise") || sLower.contains("static") || sLower.endsWith(".wav") || sLower.endsWith(".mp3") || sLower.endsWith(".ogg")) {
+                                noiseUris.add(snd.uri)
+                            }
+                        }
                 }
             }
         }
 
+        if (onIcons.isEmpty() && offIcons.isNotEmpty()) {
+            onIcons.putAll(offIcons)
+        }
+
+        val layoutStyle = obj.optString(
+            "layoutStyle",
+            if (isGta4Folder || offIcons.isNotEmpty()) "gta4" else "gtasa"
+        )
+
+        GTRadioLogger.log("DynamicThemeManager: Loaded theme pack '$seriesName' (style=$layoutStyle, onIcons=${onIcons.size}, offIcons=${offIcons.size}, bgP=${portraitBgs.size}, sounds=${noiseUris.size})")
+
         return DynamicThemePack(
-            seriesName = folderName,
+            seriesName = seriesName,
             headerTitle = headerTitle,
-            bgIntervalMs = bgIntervalMs,
+            bgIntervalMs = bgIntervalSec * 1000L,
             bgFadeMs = bgFadeMs,
             headerColor = headerColor,
             labelColor = labelColor,
@@ -334,116 +430,53 @@ object DynamicThemeManager {
             volumeBarColor = volumeBarColor,
             headerTypeface = headerTf,
             bodyTypeface = bodyTf,
-            groupLogoUri = groupLogoUri,
             portraitBgUris = portraitBgs,
             landscapeBgUris = landscapeBgs,
-            stationIconUris = stationIcons,
-            noiseSoundUris = noiseSounds,
-            selectSoundUris = selectSounds
+            groupLogoUri = groupLogoUri,
+            stationIconUris = onIcons,
+            stationOffIconUris = offIcons,
+            noiseSoundUris = noiseUris,
+            layoutStyle = layoutStyle
         )
-    }
-
-    private fun loadTypefaceFromUri(context: Context, uri: Uri, cacheName: String): Typeface? {
-        return try {
-            val dir = File(context.cacheDir, "theme_fonts").apply { mkdirs() }
-            val outFile = File(dir, cacheName.replace(Regex("[^a-zA-Z0-9._-]"), "_"))
-            if (!outFile.exists() || outFile.length() == 0L) {
-                context.contentResolver.openInputStream(uri)?.use { input ->
-                    FileOutputStream(outFile).use { output -> input.copyTo(output) }
-                }
-            }
-            Typeface.createFromFile(outFile)
-        } catch (e: Exception) {
-            GTRadioLogger.log("DynamicThemeManager: Failed loading font $cacheName", e)
-            null
-        }
     }
 
     fun loadBitmap(context: Context, uri: Uri?, maxDim: Int = 1080): Bitmap? {
         if (uri == null) return null
+        val key = "${uri}_$maxDim"
+        synchronized(bitmapCache) {
+            bitmapCache[key]?.let { if (!it.isRecycled) return it }
+        }
         return try {
-            val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-            var sample = 1
-            while (opts.outWidth / sample > maxDim || opts.outHeight / sample > maxDim) {
-                sample *= 2
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val bytes = input.readBytes()
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+                var sample = 1
+                while (bounds.outWidth / sample > maxDim * 2 || bounds.outHeight / sample > maxDim * 2) {
+                    sample *= 2
+                }
+                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
+                if (bmp != null) {
+                    synchronized(bitmapCache) {
+                        if (bitmapCache.size > 45) bitmapCache.clear()
+                        bitmapCache[key] = bmp
+                    }
+                }
+                bmp
             }
-            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sample }
-            context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, decodeOpts) }
         } catch (_: Exception) {
             null
         }
     }
 
-    fun playTuningNoiseUntilReady(
-        context: Context,
-        pack: DynamicThemePack?,
-        isRadioReady: () -> Boolean,
-        onComplete: () -> Unit
-    ) {
-        val sounds = pack?.noiseSoundUris ?: emptyList()
-        if (!isDynamicThemeEnabled(context) || sounds.isEmpty()) {
-            onComplete()
-            return
-        }
-        stopTuningNoise()
-        isNoiseLooping = true
-        activeNoiseList = sounds
-        playNoiseCycle(context.applicationContext, isRadioReady, onComplete)
-    }
+    fun getBitmap(context: Context, uri: Uri?, maxDim: Int = 1080): Bitmap? = loadBitmap(context, uri, maxDim)
 
-    private fun playNoiseCycle(
-        appContext: Context,
-        isRadioReady: () -> Boolean,
-        onComplete: () -> Unit
-    ) {
-        if (!isNoiseLooping || activeNoiseList.isEmpty()) {
-            onComplete()
-            return
-        }
-        val uri = activeNoiseList[rng.nextInt(activeNoiseList.size)]
-        try {
-            noisePlayer?.release()
-            noisePlayer = MediaPlayer().apply {
-                setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .build()
-                )
-                setDataSource(appContext, uri)
-                setVolume(0.85f, 0.85f)
-                setOnCompletionListener {
-                    if (!isNoiseLooping) {
-                        onComplete()
-                    } else if (isRadioReady()) {
-                        // Noise finished its full clip and radio is ready: cut to live broadcast
-                        stopTuningNoise()
-                        onComplete()
-                    } else {
-                        // Radio is still loading: loop with a freshly picked random noise clip
-                        playNoiseCycle(appContext, isRadioReady, onComplete)
-                    }
-                }
-                setOnErrorListener { _, _, _ ->
-                    stopTuningNoise()
-                    onComplete()
-                    true
-                }
-                prepare()
-                start()
-            }
-        } catch (_: Exception) {
-            stopTuningNoise()
-            onComplete()
-        }
-    }
-
-    fun isPlayingTuningNoise(): Boolean = isNoiseLooping
+    fun isPlayingTuningNoise(): Boolean = noisePlayer != null
 
     fun stopTuningNoise() {
-        isNoiseLooping = false
-        mainHandler.removeCallbacksAndMessages(null)
+        noiseCheckRunnable?.let { mainHandler.removeCallbacks(it) }
+        noiseCheckRunnable = null
         try {
             noisePlayer?.stop()
         } catch (_: Exception) {}
@@ -451,5 +484,73 @@ object DynamicThemeManager {
             noisePlayer?.release()
         } catch (_: Exception) {}
         noisePlayer = null
+    }
+
+    fun playTuningNoiseUntilReady(
+        context: Context,
+        pack: DynamicThemePack,
+        isRadioReady: () -> Boolean,
+        onComplete: () -> Unit
+    ) {
+        stopTuningNoise()
+        if (pack.noiseSoundUris.isEmpty()) {
+            onComplete()
+            return
+        }
+
+        val chosenUri = pack.noiseSoundUris[rng.nextInt(pack.noiseSoundUris.size)]
+        val startTime = System.currentTimeMillis()
+        val minNoiseMs = 550L
+        val maxNoiseMs = 2800L
+
+        try {
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .build()
+            )
+            mp.setDataSource(context, chosenUri)
+            mp.isLooping = true
+            mp.setVolume(0.85f, 0.85f)
+            mp.setOnPreparedListener { it.start() }
+            mp.prepareAsync()
+            noisePlayer = mp
+        } catch (_: Exception) {
+            stopTuningNoise()
+            onComplete()
+            return
+        }
+
+        val checkTask = object : Runnable {
+            override fun run() {
+                val elapsed = System.currentTimeMillis() - startTime
+                if ((elapsed >= minNoiseMs && isRadioReady()) || elapsed >= maxNoiseMs) {
+                    stopTuningNoise()
+                    onComplete()
+                } else {
+                    mainHandler.postDelayed(this, 80L)
+                }
+            }
+        }
+        noiseCheckRunnable = checkTask
+        mainHandler.postDelayed(checkTask, 120L)
+    }
+
+    private fun copyUriToCache(context: Context, uri: Uri, dest: File): File? {
+        if (dest.exists() && dest.length() > 0L) return dest
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(dest).use { out -> input.copyTo(out) }
+            }
+            if (dest.exists() && dest.length() > 0L) dest else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun parseColorSafe(hex: String, fallback: Int): Int {
+        return try { Color.parseColor(hex.trim()) } catch (_: Exception) { fallback }
     }
 }
