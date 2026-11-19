@@ -10,7 +10,7 @@ import javax.crypto.spec.SecretKeySpec
  * This class NEVER hardcodes or bundles any raw Rockstar key bytes or decryption tables.
  * All keys must be provided or derived by the user at runtime.
  */
-data class GtaVKeySet(
+data class Rpf7KeySet(
     val aesKey: ByteArray,
     val lut: ByteArray,
     val ngKeys: Array<ByteArray>,
@@ -19,7 +19,7 @@ data class GtaVKeySet(
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
-        if (other !is GtaVKeySet) return false
+        if (other !is Rpf7KeySet) return false
         if (!aesKey.contentEquals(other.aesKey)) return false
         if (!lut.contentEquals(other.lut)) return false
         if (!ngKeys.contentDeepEquals(other.ngKeys)) return false
@@ -39,7 +39,7 @@ data class GtaVKeySet(
 }
 
 /**
- * Pure Kotlin cryptographic primitives for GTA V PC Legacy archives and audio.
+ * Pure Kotlin cryptographic primitives for RPF7 archives and audio.
  * Implements:
  * - Jenkins One-at-a-Time Hash
  * - .NET Knuth Subtractive PRNG (System.Random)
@@ -47,7 +47,7 @@ data class GtaVKeySet(
  * - 17-Round NG Block Cipher (RPF7 Table of Contents and encrypted resources)
  * - Rockstar RSXXTEA modified block cipher (AWC audio chunks and DJ voice banks)
  */
-object GtaVCrypto {
+object Rpf7Crypto {
 
     /**
      * Jenkins One-at-a-Time Hash matching GTA V PC / CodeWalker implementation.
@@ -278,7 +278,7 @@ object GtaVCrypto {
         firstBlockEncrypted: ByteArray,
         rpfName: String,
         fileSize: Long,
-        keys: GtaVKeySet
+        keys: Rpf7KeySet
     ): Int {
         if (firstBlockEncrypted.size < 16) return 0
         val formulaIndex = getNgKeyIndex(rpfName, fileSize)
@@ -314,7 +314,7 @@ object GtaVCrypto {
     /**
      * Decrypts [data] with the 17-round NG cipher using specific [keyIndex].
      */
-    fun decryptNGWithKeyIndex(data: ByteArray, keyIndex: Int, keys: GtaVKeySet): ByteArray {
+    fun decryptNGWithKeyIndex(data: ByteArray, keyIndex: Int, keys: Rpf7KeySet): ByteArray {
         val keyBytes = keys.ngKeys[keyIndex % keys.ngKeys.size]
         val subKeys = unpackNgSubKeys(keyBytes)
         val out = ByteArray(data.size)
@@ -333,7 +333,7 @@ object GtaVCrypto {
     /**
      * Decrypts [data] using RPF name and file size, automatically resolving the valid key index.
      */
-    fun decryptNG(data: ByteArray, rpfName: String, fileSize: Long, keys: GtaVKeySet): ByteArray {
+    fun decryptNG(data: ByteArray, rpfName: String, fileSize: Long, keys: Rpf7KeySet): ByteArray {
         val keyIdx = if (data.size >= 16) {
             findValidRpf7TocKeyIndex(data, rpfName, fileSize, keys)
         } else {

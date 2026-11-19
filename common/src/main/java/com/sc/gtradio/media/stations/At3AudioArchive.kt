@@ -167,8 +167,12 @@ class At3AudioArchive(
             val maxCacheBytes = 95L * 1024L * 1024L
             val allCached = ArrayList<File>()
             cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
-            File(context.cacheDir, "gta4_rpf_tracks_v2").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
             File(context.cacheDir, "gen2_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "rpf3_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "rpf7_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "gta4_rpf_tracks_v3").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "gta5_rpf_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "gta4_rpf_tracks_v2").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
             File(context.cacheDir, "sa_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
             File(context.cacheDir, "sa_raw_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
 

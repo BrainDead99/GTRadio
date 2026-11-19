@@ -6,7 +6,7 @@
 #include "minimp3.h"
 
 extern "C" JNIEXPORT jshortArray JNICALL
-Java_com_sc_gtradio_media_stations_GtaVMp3Decoder_nativeDecodeMonoMp3(
+Java_com_sc_gtradio_media_stations_NativeMp3Decoder_nativeDecodeMonoMp3(
         JNIEnv *env,
         jclass /* clazz */,
         jbyteArray mp3Data) {

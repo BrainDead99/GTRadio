@@ -14,7 +14,7 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-data class GtaVStationInfo(
+data class Rpf7StationInfo(
     val rpfName: String,
     val stationName: String,
     val djName: String,
@@ -22,7 +22,7 @@ data class GtaVStationInfo(
     val isContinuousMix: Boolean = false
 )
 
-data class GtaVTrackMeta(
+data class Rpf7TrackMeta(
     val internalName: String,
     val title: String,
     val artist: String,
@@ -30,47 +30,47 @@ data class GtaVTrackMeta(
     val isContinuousMix: Boolean = false
 )
 
-object GtaVMetadataRepository {
+object Rpf7MetadataRepository {
 
     private val albumNameCache = ConcurrentHashMap<String, String>()
     private val bgExecutor = Executors.newSingleThreadExecutor()
     private val remasterBanRegex = Regex("remaster|deluxe|expanded|anniversary|reissue|greatest hits|best of|anthology|edition|live", RegexOption.IGNORE_CASE)
     private val yearRegex = Regex("^(\\d{4})")
 
-    val stationInfoByRpf: Map<String, GtaVStationInfo> = linkedMapOf(
-        "radio_01_class_rock.rpf" to GtaVStationInfo("radio_01_class_rock.rpf", "Los Santos Rock Radio", "Kenny Loggins", isTalk = false, isContinuousMix = false),
-        "radio_02_pop.rpf" to GtaVStationInfo("radio_02_pop.rpf", "Non-Stop-Pop FM", "Cara Delevingne", isTalk = false, isContinuousMix = false),
-        "radio_03_hiphop_new.rpf" to GtaVStationInfo("radio_03_hiphop_new.rpf", "Radio Los Santos", "Big Boy", isTalk = false, isContinuousMix = false),
-        "radio_04_punk.rpf" to GtaVStationInfo("radio_04_punk.rpf", "Channel X", "Keith Morris", isTalk = false, isContinuousMix = false),
-        "radio_05_talk_01.rpf" to GtaVStationInfo("radio_05_talk_01.rpf", "West Coast Talk Radio", "WCTR Talk Radio", isTalk = true, isContinuousMix = false),
-        "radio_06_country.rpf" to GtaVStationInfo("radio_06_country.rpf", "Rebel Radio", "Jesco White", isTalk = false, isContinuousMix = false),
-        "radio_07_dance_01.rpf" to GtaVStationInfo("radio_07_dance_01.rpf", "Soulwax FM", "Soulwax", isTalk = false, isContinuousMix = true),
-        "radio_08_mexican.rpf" to GtaVStationInfo("radio_08_mexican.rpf", "East Los FM", "Don Cheto & Camilo Lara", isTalk = false, isContinuousMix = true),
-        "radio_09_hiphop_old.rpf" to GtaVStationInfo("radio_09_hiphop_old.rpf", "West Coast Classics", "DJ Pooh", isTalk = false, isContinuousMix = false),
-        "radio_11_talk_02.rpf" to GtaVStationInfo("radio_11_talk_02.rpf", "Blaine County Radio", "Blaine County Talk Radio", isTalk = true, isContinuousMix = false),
-        "radio_12_reggae.rpf" to GtaVStationInfo("radio_12_reggae.rpf", "Blue Ark", "Lee \"Scratch\" Perry", isTalk = false, isContinuousMix = false),
-        "radio_13_jazz.rpf" to GtaVStationInfo("radio_13_jazz.rpf", "Worldwide FM", "Gilles Peterson", isTalk = false, isContinuousMix = true),
-        "radio_14_dance_02.rpf" to GtaVStationInfo("radio_14_dance_02.rpf", "FlyLo FM", "Flying Lotus", isTalk = false, isContinuousMix = true),
-        "radio_15_motown.rpf" to GtaVStationInfo("radio_15_motown.rpf", "The Lowdown 91.1", "Pam Grier", isTalk = false, isContinuousMix = false),
-        "radio_16_silverlake.rpf" to GtaVStationInfo("radio_16_silverlake.rpf", "Radio Mirror Park", "Twin Shadow", isTalk = false, isContinuousMix = false),
-        "radio_17_funk.rpf" to GtaVStationInfo("radio_17_funk.rpf", "Space 103.2", "Bootsy Collins", isTalk = false, isContinuousMix = false),
-        "radio_18_90s_rock.rpf" to GtaVStationInfo("radio_18_90s_rock.rpf", "Vinewood Boulevard Radio", "Nate Williams & Stephen Pope", isTalk = false, isContinuousMix = false)
+    val stationInfoByRpf: Map<String, Rpf7StationInfo> = linkedMapOf(
+        "radio_01_class_rock.rpf" to Rpf7StationInfo("radio_01_class_rock.rpf", "Los Santos Rock Radio", "Kenny Loggins", isTalk = false, isContinuousMix = false),
+        "radio_02_pop.rpf" to Rpf7StationInfo("radio_02_pop.rpf", "Non-Stop-Pop FM", "Cara Delevingne", isTalk = false, isContinuousMix = false),
+        "radio_03_hiphop_new.rpf" to Rpf7StationInfo("radio_03_hiphop_new.rpf", "Radio Los Santos", "Big Boy", isTalk = false, isContinuousMix = false),
+        "radio_04_punk.rpf" to Rpf7StationInfo("radio_04_punk.rpf", "Channel X", "Keith Morris", isTalk = false, isContinuousMix = false),
+        "radio_05_talk_01.rpf" to Rpf7StationInfo("radio_05_talk_01.rpf", "West Coast Talk Radio", "WCTR Talk Radio", isTalk = true, isContinuousMix = false),
+        "radio_06_country.rpf" to Rpf7StationInfo("radio_06_country.rpf", "Rebel Radio", "Jesco White", isTalk = false, isContinuousMix = false),
+        "radio_07_dance_01.rpf" to Rpf7StationInfo("radio_07_dance_01.rpf", "Soulwax FM", "Soulwax", isTalk = false, isContinuousMix = true),
+        "radio_08_mexican.rpf" to Rpf7StationInfo("radio_08_mexican.rpf", "East Los FM", "Don Cheto & Camilo Lara", isTalk = false, isContinuousMix = true),
+        "radio_09_hiphop_old.rpf" to Rpf7StationInfo("radio_09_hiphop_old.rpf", "West Coast Classics", "DJ Pooh", isTalk = false, isContinuousMix = false),
+        "radio_11_talk_02.rpf" to Rpf7StationInfo("radio_11_talk_02.rpf", "Blaine County Radio", "Blaine County Talk Radio", isTalk = true, isContinuousMix = false),
+        "radio_12_reggae.rpf" to Rpf7StationInfo("radio_12_reggae.rpf", "Blue Ark", "Lee \"Scratch\" Perry", isTalk = false, isContinuousMix = false),
+        "radio_13_jazz.rpf" to Rpf7StationInfo("radio_13_jazz.rpf", "Worldwide FM", "Gilles Peterson", isTalk = false, isContinuousMix = true),
+        "radio_14_dance_02.rpf" to Rpf7StationInfo("radio_14_dance_02.rpf", "FlyLo FM", "Flying Lotus", isTalk = false, isContinuousMix = true),
+        "radio_15_motown.rpf" to Rpf7StationInfo("radio_15_motown.rpf", "The Lowdown 91.1", "Pam Grier", isTalk = false, isContinuousMix = false),
+        "radio_16_silverlake.rpf" to Rpf7StationInfo("radio_16_silverlake.rpf", "Radio Mirror Park", "Twin Shadow", isTalk = false, isContinuousMix = false),
+        "radio_17_funk.rpf" to Rpf7StationInfo("radio_17_funk.rpf", "Space 103.2", "Bootsy Collins", isTalk = false, isContinuousMix = false),
+        "radio_18_90s_rock.rpf" to Rpf7StationInfo("radio_18_90s_rock.rpf", "Vinewood Boulevard Radio", "Nate Williams & Stephen Pope", isTalk = false, isContinuousMix = false)
     )
 
-    private val trackMetaMap: Map<String, GtaVTrackMeta> = buildMap {
+    private val trackMetaMap: Map<String, Rpf7TrackMeta> = buildMap {
         fun song(key: String, title: String, artist: String) {
             val upper = key.uppercase(Locale.ROOT)
-            put(upper, GtaVTrackMeta(upper, title, artist, isTalkShow = false, isContinuousMix = false))
+            put(upper, Rpf7TrackMeta(upper, title, artist, isTalkShow = false, isContinuousMix = false))
         }
 
         fun talk(key: String, title: String, host: String) {
             val upper = key.uppercase(Locale.ROOT)
-            put(upper, GtaVTrackMeta(upper, title, host, isTalkShow = true, isContinuousMix = false))
+            put(upper, Rpf7TrackMeta(upper, title, host, isTalkShow = true, isContinuousMix = false))
         }
 
         fun mix(key: String, title: String, artist: String) {
             val upper = key.uppercase(Locale.ROOT)
-            put(upper, GtaVTrackMeta(upper, title, artist, isTalkShow = false, isContinuousMix = true))
+            put(upper, Rpf7TrackMeta(upper, title, artist, isTalkShow = false, isContinuousMix = true))
         }
 
         // ====================================================================
@@ -462,20 +462,20 @@ object GtaVMetadataRepository {
             .distinct()
     }
 
-    fun getStationInfo(rpfName: String): GtaVStationInfo? {
+    fun getStationInfo(rpfName: String): Rpf7StationInfo? {
         val lower = rpfName.lowercase(Locale.ROOT)
         return stationInfoByRpf[lower] ?: stationInfoByRpf["${lower}.rpf"]
     }
 
-    fun getTrackMeta(internalName: String, fallbackStationTitle: String = ""): GtaVTrackMeta {
+    fun getTrackMeta(internalName: String, fallbackStationTitle: String = ""): Rpf7TrackMeta {
         val cleanStem = internalName.removeSuffix(".awc").uppercase(Locale.ROOT)
         val direct = trackMetaMap[cleanStem]
         if (direct != null) return direct
 
         // Fallback: title-case formatting from snake_case
         val formattedTitle = formatSnakeCase(internalName)
-        val defaultArtist = fallbackStationTitle.ifBlank { "GTA V Radio" }
-        return GtaVTrackMeta(cleanStem, formattedTitle, defaultArtist, isTalkShow = false, isContinuousMix = false)
+        val defaultArtist = fallbackStationTitle.ifBlank { "Radio" }
+        return Rpf7TrackMeta(cleanStem, formattedTitle, defaultArtist, isTalkShow = false, isContinuousMix = false)
     }
 
     fun formatSnakeCase(name: String): String {
@@ -604,7 +604,7 @@ object GtaVMetadataRepository {
                 return true
             }
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaVMetadataRepository: iTunes art fetch error for $artist - $songTitle", e)
+            GTRadioLogger.log("Rpf7MetadataRepository: iTunes art fetch error for $artist - $songTitle", e)
         }
         return false
     }

@@ -24,29 +24,29 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.*
 
-data class GtaIvSongItem(
-    val archive: GtaIvRpfArchive,
+data class Rpf3SongItem(
+    val archive: Rpf3Archive,
     val trackName: String,
     val introNames: List<String> = emptyList()
 )
 
-data class GtaIvClipRef(
-    val archive: GtaIvRpfArchive,
+data class Rpf3ClipRef(
+    val archive: Rpf3Archive,
     val trackKey: String
 )
 
-@UnstableApi class GtaIvRpfRadioStation(
+@UnstableApi class Rpf3RadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
     override val mediaItem: MediaBrowserCompat.MediaItem,
     private val stationKey: String,
-    private val stationArchive: GtaIvRpfArchive,
-    private val extraTracksArchive: GtaIvRpfArchive?,
-    private val ep1SfxArchive: GtaIvRpfArchive?,
-    private val ep2SfxArchive: GtaIvRpfArchive?,
-    private val advertsArchive: GtaIvRpfArchive?,
-    private val newsArchive: GtaIvRpfArchive?,
-    private val weatherArchive: GtaIvRpfArchive?,
+    private val stationArchive: Rpf3Archive,
+    private val extraTracksArchive: Rpf3Archive?,
+    private val ep1SfxArchive: Rpf3Archive?,
+    private val ep2SfxArchive: Rpf3Archive?,
+    private val advertsArchive: Rpf3Archive?,
+    private val newsArchive: Rpf3Archive?,
+    private val weatherArchive: Rpf3Archive?,
     private val player: GTRadioPlayer,
     private val context: Context,
     override var adsEnabled: Boolean,
@@ -70,23 +70,23 @@ data class GtaIvClipRef(
     private var initialized = false
     private var isTalkRadio = false
 
-    private val idQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val soloQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val generalDjQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val morningDjList = ArrayList<GtaIvClipRef>()
-    private val afternoonDjList = ArrayList<GtaIvClipRef>()
-    private val eveningDjList = ArrayList<GtaIvClipRef>()
-    private val nightDjList = ArrayList<GtaIvClipRef>()
-    private val timeOfDayDjQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val idQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val soloQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val generalDjQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val morningDjList = ArrayList<Rpf3ClipRef>()
+    private val afternoonDjList = ArrayList<Rpf3ClipRef>()
+    private val eveningDjList = ArrayList<Rpf3ClipRef>()
+    private val nightDjList = ArrayList<Rpf3ClipRef>()
+    private val timeOfDayDjQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
 
-    private val toAdQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val toNewsQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val toWeatherQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
+    private val toAdQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val toNewsQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val toWeatherQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
 
-    private val advertQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val newsQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val weatherQueue = RandomizedDualHeadQueue<GtaIvClipRef>(emptyList(), rng)
-    private val songQueue = RandomizedDualHeadQueue<GtaIvSongItem>(emptyList(), rng)
+    private val advertQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val newsQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val weatherQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val songQueue = RandomizedDualHeadQueue<Rpf3SongItem>(emptyList(), rng)
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -97,7 +97,7 @@ data class GtaIvClipRef(
     private var activeListener: Player.Listener? = null
 
     private var currentSegmentUris: List<Uri> = emptyList()
-    private var currentSongItem: GtaIvSongItem? = null
+    private var currentSongItem: Rpf3SongItem? = null
     private var currentMultiChunkNextBlock: Int = 0
     private var currentMultiChunkTotalBlocks: Int = 0
     private var currentMultiChunksPlayedInRow: Int = 0
@@ -123,21 +123,21 @@ data class GtaIvClipRef(
         val keyLower = stationKey.lowercase()
         isTalkRadio = keyLower.contains("wktt") || keyLower.contains("plr") || keyLower.contains("lazlow")
 
-        val ids = ArrayList<GtaIvClipRef>()
-        val solos = ArrayList<GtaIvClipRef>()
-        val generals = ArrayList<GtaIvClipRef>()
-        val toAds = ArrayList<GtaIvClipRef>()
-        val toNews = ArrayList<GtaIvClipRef>()
-        val toWeather = ArrayList<GtaIvClipRef>()
+        val ids = ArrayList<Rpf3ClipRef>()
+        val solos = ArrayList<Rpf3ClipRef>()
+        val generals = ArrayList<Rpf3ClipRef>()
+        val toAds = ArrayList<Rpf3ClipRef>()
+        val toNews = ArrayList<Rpf3ClipRef>()
+        val toWeather = ArrayList<Rpf3ClipRef>()
         val introMap = HashMap<String, MutableList<String>>()
-        val songItems = ArrayList<GtaIvSongItem>()
+        val songItems = ArrayList<Rpf3SongItem>()
 
         val isDedicatedStationRpf = !stationArchive.rpfName.uppercase().startsWith("EP")
         if (isDedicatedStationRpf) {
             for (sub in stationArchive.getBankSubTracks()) {
                 val pName = sub.parentEntryName.uppercase()
                 val sName = sub.subName.uppercase()
-                val ref = GtaIvClipRef(stationArchive, "$pName#$sName")
+                val ref = Rpf3ClipRef(stationArchive, "$pName#$sName")
                 when {
                     sName.startsWith("MORNING_") -> morningDjList.add(ref)
                     sName.startsWith("AFTERNOON_") -> afternoonDjList.add(ref)
@@ -158,7 +158,7 @@ data class GtaIvClipRef(
                 if (entry.isWaveBank) continue
                 val eName = entry.name.uppercase()
                 if (eName in setOf("TIME", "GENERAL", "INTRO", "TO", "NULLTRACK")) continue
-                val ref = GtaIvClipRef(stationArchive, eName)
+                val ref = Rpf3ClipRef(stationArchive, eName)
                 when {
                     eName.startsWith("ID_") -> ids.add(ref)
                     eName.startsWith("SOLO_") -> solos.add(ref)
@@ -171,21 +171,21 @@ data class GtaIvClipRef(
                     eName.startsWith("TO_WEATHER") -> toWeather.add(ref)
                     else -> {
                         val intros = introMap[eName] ?: emptyList()
-                        songItems.add(GtaIvSongItem(stationArchive, eName, intros))
+                        songItems.add(Rpf3SongItem(stationArchive, eName, intros))
                     }
                 }
             }
         }
 
         // Helper to index DLC DJ banks and Solo clips from EP1_SFX.rpf or EP2_SFX.rpf
-        fun indexDlcDjAssets(dlcArch: GtaIvRpfArchive?, djBankPrefix: String, soloPrefix: String) {
+        fun indexDlcDjAssets(dlcArch: Rpf3Archive?, djBankPrefix: String, soloPrefix: String) {
             if (dlcArch == null) return
             for (sub in dlcArch.getBankSubTracks()) {
                 val pName = sub.parentEntryName.uppercase()
                 if (!pName.startsWith(djBankPrefix)) continue
                 val sName = sub.subName.uppercase()
                 val scopedKey = "$pName#$sName"
-                val ref = GtaIvClipRef(dlcArch, scopedKey)
+                val ref = Rpf3ClipRef(dlcArch, scopedKey)
                 when {
                     pName.endsWith("_TIME") -> {
                         when {
@@ -211,7 +211,7 @@ data class GtaIvClipRef(
             }
             for (entry in dlcArch.getFileEntries()) {
                 if (!entry.isWaveBank && entry.name.uppercase().startsWith(soloPrefix)) {
-                    solos.add(GtaIvClipRef(dlcArch, entry.name.uppercase()))
+                    solos.add(Rpf3ClipRef(dlcArch, entry.name.uppercase()))
                 }
             }
         }
@@ -224,48 +224,48 @@ data class GtaIvClipRef(
 
         if (extraTracksArchive != null) {
             val extraSet = when {
-                keyLower.contains("beat_95") -> GtaIvMetadataRepository.beatExtraTracks
-                keyLower.contains("bobby_konders") -> GtaIvMetadataRepository.massiveBExtraTracks
-                keyLower.contains("dance_mix") -> GtaIvMetadataRepository.electroChocExtraTracks
-                keyLower.contains("ramjam") -> GtaIvMetadataRepository.ramJamExtraTracks
+                keyLower.contains("beat_95") -> Rpf3MetadataRepository.beatExtraTracks
+                keyLower.contains("bobby_konders") -> Rpf3MetadataRepository.massiveBExtraTracks
+                keyLower.contains("dance_mix") -> Rpf3MetadataRepository.electroChocExtraTracks
+                keyLower.contains("ramjam") -> Rpf3MetadataRepository.ramJamExtraTracks
                 else -> emptySet()
             }
             for (extraName in extraSet) {
                 if (extraTracksArchive.hasEntry(extraName)) {
-                    songItems.add(GtaIvSongItem(extraTracksArchive, extraName, introMap[extraName] ?: emptyList()))
+                    songItems.add(Rpf3SongItem(extraTracksArchive, extraName, introMap[extraName] ?: emptyList()))
                 }
             }
         }
 
         if (ep1SfxArchive != null) {
             val ep1Set = when {
-                keyLower.contains("liberty_rock") -> GtaIvMetadataRepository.eflcLibertyRockEp1Tracks
-                keyLower.contains("dance_rock") -> GtaIvMetadataRepository.eflcRadioBrokerEp1Tracks
-                keyLower.contains("hardcore") || keyLower == "eflc_lchc" -> GtaIvMetadataRepository.eflcLchcEp1Tracks
-                keyLower.contains("beat_95") || keyLower == "eflc_beat" -> GtaIvMetadataRepository.eflcBeatEp1Tracks
-                keyLower.contains("wktt") -> GtaIvMetadataRepository.eflcWkttEp1Tracks
+                keyLower.contains("liberty_rock") -> Rpf3MetadataRepository.eflcLibertyRockEp1Tracks
+                keyLower.contains("dance_rock") -> Rpf3MetadataRepository.eflcRadioBrokerEp1Tracks
+                keyLower.contains("hardcore") || keyLower == "eflc_lchc" -> Rpf3MetadataRepository.eflcLchcEp1Tracks
+                keyLower.contains("beat_95") || keyLower == "eflc_beat" -> Rpf3MetadataRepository.eflcBeatEp1Tracks
+                keyLower.contains("wktt") -> Rpf3MetadataRepository.eflcWkttEp1Tracks
                 else -> emptySet()
             }
             for (tName in ep1Set) {
                 if (ep1SfxArchive.hasEntry(tName)) {
-                    songItems.add(GtaIvSongItem(ep1SfxArchive, tName, introMap[tName] ?: emptyList()))
+                    songItems.add(Rpf3SongItem(ep1SfxArchive, tName, introMap[tName] ?: emptyList()))
                 }
             }
         }
 
         if (ep2SfxArchive != null) {
             val ep2Set = when {
-                keyLower.contains("k109") -> GtaIvMetadataRepository.eflcK109Ep2Tracks
-                keyLower.contains("dance_mix") || keyLower == "eflc_electro_choc" -> GtaIvMetadataRepository.eflcElectroChocEp2Tracks
-                keyLower.contains("vladivostok") || keyLower == "eflc_vladivostok" -> GtaIvMetadataRepository.eflcVladivostokEp2Tracks
-                keyLower.contains("san_juan") || keyLower == "eflc_san_juan" -> GtaIvMetadataRepository.eflcSanJuanEp2Tracks
-                keyLower.contains("wktt") -> GtaIvMetadataRepository.eflcWkttEp2Tracks
-                keyLower.contains("lazlow") -> GtaIvMetadataRepository.eflcIntegrityEp2Tracks
+                keyLower.contains("k109") -> Rpf3MetadataRepository.eflcK109Ep2Tracks
+                keyLower.contains("dance_mix") || keyLower == "eflc_electro_choc" -> Rpf3MetadataRepository.eflcElectroChocEp2Tracks
+                keyLower.contains("vladivostok") || keyLower == "eflc_vladivostok" -> Rpf3MetadataRepository.eflcVladivostokEp2Tracks
+                keyLower.contains("san_juan") || keyLower == "eflc_san_juan" -> Rpf3MetadataRepository.eflcSanJuanEp2Tracks
+                keyLower.contains("wktt") -> Rpf3MetadataRepository.eflcWkttEp2Tracks
+                keyLower.contains("lazlow") -> Rpf3MetadataRepository.eflcIntegrityEp2Tracks
                 else -> emptySet()
             }
             for (tName in ep2Set) {
                 if (ep2SfxArchive.hasEntry(tName)) {
-                    songItems.add(GtaIvSongItem(ep2SfxArchive, tName, introMap[tName] ?: emptyList()))
+                    songItems.add(Rpf3SongItem(ep2SfxArchive, tName, introMap[tName] ?: emptyList()))
                 }
             }
         }
@@ -279,32 +279,32 @@ data class GtaIvClipRef(
         songQueue.reset(songItems)
         rebuildTimeOfDayQueue()
 
-        val allAdverts = ArrayList<GtaIvClipRef>()
+        val allAdverts = ArrayList<Rpf3ClipRef>()
         advertsArchive?.getFileEntries()?.filter { !it.isWaveBank }?.forEach {
-            allAdverts.add(GtaIvClipRef(advertsArchive, it.name))
+            allAdverts.add(Rpf3ClipRef(advertsArchive, it.name))
         }
         ep1SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("AD0") }?.forEach {
-            allAdverts.add(GtaIvClipRef(ep1SfxArchive, it.name))
+            allAdverts.add(Rpf3ClipRef(ep1SfxArchive, it.name))
         }
         ep2SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("AD1") }?.forEach {
-            allAdverts.add(GtaIvClipRef(ep2SfxArchive, it.name))
+            allAdverts.add(Rpf3ClipRef(ep2SfxArchive, it.name))
         }
         advertQueue.reset(allAdverts)
 
-        val allNews = ArrayList<GtaIvClipRef>()
+        val allNews = ArrayList<Rpf3ClipRef>()
         newsArchive?.getFileEntries()?.filter { !it.isWaveBank }?.forEach {
-            allNews.add(GtaIvClipRef(newsArchive, it.name))
+            allNews.add(Rpf3ClipRef(newsArchive, it.name))
         }
         ep1SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("NEWS_") }?.forEach {
-            allNews.add(GtaIvClipRef(ep1SfxArchive, it.name))
+            allNews.add(Rpf3ClipRef(ep1SfxArchive, it.name))
         }
         ep2SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("NEWS_MONO_") }?.forEach {
-            allNews.add(GtaIvClipRef(ep2SfxArchive, it.name))
+            allNews.add(Rpf3ClipRef(ep2SfxArchive, it.name))
         }
         newsQueue.reset(allNews)
 
         weatherArchive?.let { arch ->
-            weatherQueue.reset(arch.getFileEntries().filter { !it.isWaveBank }.map { GtaIvClipRef(arch, it.name) })
+            weatherQueue.reset(arch.getFileEntries().filter { !it.isWaveBank }.map { Rpf3ClipRef(arch, it.name) })
         }
     }
 
@@ -370,13 +370,13 @@ data class GtaIvClipRef(
         onMetadataChanged?.invoke(_currentMetadata)
     }
 
-    private fun applySongOrShowMetadata(item: GtaIvSongItem) {
+    private fun applySongOrShowMetadata(item: Rpf3SongItem) {
         if (!isMetadataEnabled()) {
             setStationOnlyMetadata()
             return
         }
 
-        val meta = GtaIvMetadataRepository.getTrackMeta(context, item.trackName, stationTitle)
+        val meta = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)
         val displayTitle = meta?.title ?: item.trackName.replace('_', ' ')
         val displayArtist = meta?.artist ?: stationTitle
         val isTalk = isTalkRadio || (meta?.isTalkShow == true)
@@ -480,7 +480,7 @@ data class GtaIvClipRef(
     }
 
     override fun play() {
-        GTRadioLogger.log("GtaIvRpfRadioStation[$stationTitle]: play() called")
+        GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: play() called")
         ensureStationIndexed()
         _playing = true
         player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
@@ -543,16 +543,16 @@ data class GtaIvClipRef(
         if (lastSegment == RadioSegmentType.Song && item != null &&
             currentMultiChunkNextBlock in 1 until currentMultiChunkTotalBlocks
         ) {
-            val isContinuousMix = GtaIvMetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow == true && !isTalkRadio
+            val isContinuousMix = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow == true && !isTalkRadio
             val maxChunksBeforeBreak = if (isContinuousMix) 3 else 100
             if (currentMultiChunksPlayedInRow < maxChunksBeforeBreak) {
                 val nextUri = item.archive.materializeAudioChunkUri(
                     item.trackName,
                     currentMultiChunkNextBlock,
-                    GtaIvRpfArchive.CHUNK_BLOCKS
+                    Rpf3Archive.CHUNK_BLOCKS
                 )
                 if (nextUri != null) {
-                    currentMultiChunkNextBlock += GtaIvRpfArchive.CHUNK_BLOCKS
+                    currentMultiChunkNextBlock += Rpf3Archive.CHUNK_BLOCKS
                     currentMultiChunksPlayedInRow += 1
                     currentSegmentUris = listOf(nextUri)
                     return true
@@ -745,19 +745,19 @@ data class GtaIvClipRef(
 
         val item = songQueue.next()
         val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
-        GTRadioLogger.log("GtaIvRpfRadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, intros=${item.introNames.size})")
+        GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, intros=${item.introNames.size})")
 
         val mainUri: Uri
-        if (totalBlocks > GtaIvRpfArchive.CHUNK_THRESHOLD_BLOCKS) {
-            val isContinuousMix = GtaIvMetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow == true && !isTalkRadio
-            val startBlk = if (isContinuousMix && totalBlocks > GtaIvRpfArchive.CHUNK_BLOCKS * 2) {
-                (rng.nextInt(totalBlocks / GtaIvRpfArchive.CHUNK_BLOCKS) * GtaIvRpfArchive.CHUNK_BLOCKS).coerceAtMost(totalBlocks - GtaIvRpfArchive.CHUNK_BLOCKS)
+        if (totalBlocks > Rpf3Archive.CHUNK_THRESHOLD_BLOCKS) {
+            val isContinuousMix = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow == true && !isTalkRadio
+            val startBlk = if (isContinuousMix && totalBlocks > Rpf3Archive.CHUNK_BLOCKS * 2) {
+                (rng.nextInt(totalBlocks / Rpf3Archive.CHUNK_BLOCKS) * Rpf3Archive.CHUNK_BLOCKS).coerceAtMost(totalBlocks - Rpf3Archive.CHUNK_BLOCKS)
             } else {
                 0
             }
-            mainUri = item.archive.materializeAudioChunkUri(item.trackName, startBlk, GtaIvRpfArchive.CHUNK_BLOCKS) ?: return false
+            mainUri = item.archive.materializeAudioChunkUri(item.trackName, startBlk, Rpf3Archive.CHUNK_BLOCKS) ?: return false
             currentMultiChunkTotalBlocks = totalBlocks
-            currentMultiChunkNextBlock = startBlk + GtaIvRpfArchive.CHUNK_BLOCKS
+            currentMultiChunkNextBlock = startBlk + Rpf3Archive.CHUNK_BLOCKS
             currentMultiChunksPlayedInRow = 1
         } else {
             mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false

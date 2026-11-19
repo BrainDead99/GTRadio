@@ -36,23 +36,23 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     private val gen1StationFiles = HashMap<String, SimpleFileInfo>()
     private var gen1GameCode: Int = 0
 
-    var isGtaIvRpfGroup: Boolean = false
+    var isRpf3Group: Boolean = false
         private set
-    private val gtaIvStationArchives = HashMap<String, GtaIvRpfArchive>()
-    private val gtaIvStationKeys = HashMap<String, String>()
-    private var gtaIvExtraTracksArchive: GtaIvRpfArchive? = null
-    private var gtaIvEp1SfxArchive: GtaIvRpfArchive? = null
-    private var gtaIvEp2SfxArchive: GtaIvRpfArchive? = null
-    private var gtaIvAdvertsArchive: GtaIvRpfArchive? = null
-    private var gtaIvNewsArchive: GtaIvRpfArchive? = null
-    private var gtaIvWeatherArchive: GtaIvRpfArchive? = null
+    private val rpf3StationArchives = HashMap<String, Rpf3Archive>()
+    private val rpf3StationKeys = HashMap<String, String>()
+    private var rpf3ExtraTracksArchive: Rpf3Archive? = null
+    private var rpf3Ep1SfxArchive: Rpf3Archive? = null
+    private var rpf3Ep2SfxArchive: Rpf3Archive? = null
+    private var rpf3AdvertsArchive: Rpf3Archive? = null
+    private var rpf3NewsArchive: Rpf3Archive? = null
+    private var rpf3WeatherArchive: Rpf3Archive? = null
 
-    var isGtaVRpfGroup: Boolean = false
+    var isRpf7Group: Boolean = false
         private set
-    private val gtaVStationArchives = HashMap<String, GtaVRpfArchive>()
-    private val gtaVStationKeys = HashMap<String, String>()
-    private var gtaVAdvertsArchive: GtaVRpfArchive? = null
-    private var gtaVNewsArchive: GtaVRpfArchive? = null
+    private val rpf7StationArchives = HashMap<String, Rpf7Archive>()
+    private val rpf7StationKeys = HashMap<String, String>()
+    private var rpf7AdvertsArchive: Rpf7Archive? = null
+    private var rpf7NewsArchive: Rpf7Archive? = null
     var mediaId: String = ""
     var isValid: Boolean = true
     var isGen2RawGroup: Boolean = false
@@ -127,13 +127,13 @@ init {
         } catch (e: Exception) {
             emptyArray()
         }
-        val detectedGtaVRpfFiles = detectGtaVRpfs(rpfScanFiles)
-        val detectedRpfFiles = if (detectedGtaVRpfFiles.isEmpty()) detectGtaIvRpfs(rpfScanFiles) else emptyList()
-        val detectedGen1Pair = if (detectedGtaVRpfFiles.isEmpty() && detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
-        if (detectedGtaVRpfFiles.isNotEmpty()) {
-            setupGtaVRpfGroup(rpfScanFiles, detectedGtaVRpfFiles)
+        val detectedRpf7Files = detectRpf7Rpfs(rpfScanFiles)
+        val detectedRpfFiles = if (detectedRpf7Files.isEmpty()) detectRpf3Rpfs(rpfScanFiles) else emptyList()
+        val detectedGen1Pair = if (detectedRpf7Files.isEmpty() && detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
+        if (detectedRpf7Files.isNotEmpty()) {
+            setupRpf7Group(rpfScanFiles, detectedRpf7Files)
         } else if (detectedRpfFiles.isNotEmpty()) {
-            setupGtaIvRpfGroup(rpfScanFiles, detectedRpfFiles)
+            setupRpf3Group(rpfScanFiles, detectedRpfFiles)
         } else if (detectedGen1Pair != null) {
             setupGen1RawGroup(rpfScanFiles, detectedGen1Pair.first, detectedGen1Pair.second)
         } else {
@@ -156,7 +156,7 @@ init {
         }
 
         mediaItem = getMediaItem(folderDoc, simpleFiles, groupName)
-        stationList = if (isGen2RawGroup || isGtaIvRpfGroup || isGen1RawGroup || isGtaVRpfGroup) {
+        stationList = if (isGen2RawGroup || isRpf3Group || isGen1RawGroup || isRpf7Group) {
             getGen2RawStationsList()
         } else {
             getStationsList(folderDoc)
@@ -310,23 +310,23 @@ init {
         )
     }
 
-    private fun detectGtaIvRpfs(files: Array<SimpleFileInfo>): List<SimpleFileInfo> {
-        val knownStationRpfs = GtaIvMetadataRepository.stationNamesByRpf.keys
+    private fun detectRpf3Rpfs(files: Array<SimpleFileInfo>): List<SimpleFileInfo> {
+        val knownStationRpfs = Rpf3MetadataRepository.stationNamesByRpf.keys
         val matched = files.filter { !it.isDirectory && knownStationRpfs.contains(it.name.lowercase()) }
         if (matched.isNotEmpty()) {
-            GTRadioLogger.log("detectGtaIvRpfs: Detected ${matched.size} GTA IV/EFLC RPF stations in '${folderDoc.name}'")
+            GTRadioLogger.log("detectRpf3Rpfs: Detected ${matched.size} GTA IV/EFLC RPF stations in '${folderDoc.name}'")
         }
         return matched
     }
 
-    private fun setupGtaIvRpfGroup(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
-        GtaIvMetadataRepository.ensureLoaded(context)
-        isGtaIvRpfGroup = true
+    private fun setupRpf3Group(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
+        Rpf3MetadataRepository.ensureLoaded(context)
+        isRpf3Group = true
         generation = 3
 
         // Automatic First-Startup Key Discovery for GTA IV / EFLC
-        if (!GtaIvKeyManager.isUnlocked(context)) {
-            tryAutoImportGtaIvKeys()
+        if (!Rpf3KeyManager.isUnlocked(context)) {
+            tryAutoImportRpf3Keys()
         }
         val isEflc = stationRpfFiles.any { it.name.lowercase() in setOf("radio_vcfm.rpf", "radio_ramjamfm.rpf", "radio_meditation.rpf") } ||
             allFiles.any { it.name.lowercase() in setOf("ep1_sfx.rpf", "ep2_sfx.rpf") } ||
@@ -343,40 +343,40 @@ init {
         for (f in allFiles) {
             if (f.isDirectory) continue
             when (f.name.lowercase()) {
-                "radio_extratracks.rpf" -> gtaIvExtraTracksArchive = GtaIvRpfArchive(context, f.name, f.uri)
-                "ep1_sfx.rpf" -> gtaIvEp1SfxArchive = GtaIvRpfArchive(context, f.name, f.uri)
-                "ep2_sfx.rpf" -> gtaIvEp2SfxArchive = GtaIvRpfArchive(context, f.name, f.uri)
-                "radio_adverts.rpf" -> gtaIvAdvertsArchive = GtaIvRpfArchive(context, f.name, f.uri)
-                "radio_news.rpf" -> gtaIvNewsArchive = GtaIvRpfArchive(context, f.name, f.uri)
-                "radio_weather.rpf" -> gtaIvWeatherArchive = GtaIvRpfArchive(context, f.name, f.uri)
+                "radio_extratracks.rpf" -> rpf3ExtraTracksArchive = Rpf3Archive(context, f.name, f.uri)
+                "ep1_sfx.rpf" -> rpf3Ep1SfxArchive = Rpf3Archive(context, f.name, f.uri)
+                "ep2_sfx.rpf" -> rpf3Ep2SfxArchive = Rpf3Archive(context, f.name, f.uri)
+                "radio_adverts.rpf" -> rpf3AdvertsArchive = Rpf3Archive(context, f.name, f.uri)
+                "radio_news.rpf" -> rpf3NewsArchive = Rpf3Archive(context, f.name, f.uri)
+                "radio_weather.rpf" -> rpf3WeatherArchive = Rpf3Archive(context, f.name, f.uri)
             }
         }
 
-        data class PendingRpfStation(val stationKey: String, val displayName: String, val archive: GtaIvRpfArchive)
+        data class PendingRpfStation(val stationKey: String, val displayName: String, val archive: Rpf3Archive)
         val pendingStations = ArrayList<PendingRpfStation>()
         val presentDisplayNames = HashSet<String>()
 
         for (stFile in stationRpfFiles) {
             val stKey = stFile.name.lowercase()
-            val stDisplayName = GtaIvMetadataRepository.stationNamesByRpf[stKey] ?: stFile.name
-            val arch = GtaIvRpfArchive(context, stFile.name, stFile.uri)
+            val stDisplayName = Rpf3MetadataRepository.stationNamesByRpf[stKey] ?: stFile.name
+            val arch = Rpf3Archive(context, stFile.name, stFile.uri)
             pendingStations.add(PendingRpfStation(stKey, stDisplayName, arch))
             presentDisplayNames.add(stDisplayName)
         }
 
-        if (isEflc && gtaIvEp1SfxArchive != null) {
-            for ((vKey, vDisplayName) in GtaIvMetadataRepository.eflcVirtualStationsEp1) {
+        if (isEflc && rpf3Ep1SfxArchive != null) {
+            for ((vKey, vDisplayName) in Rpf3MetadataRepository.eflcVirtualStationsEp1) {
                 if (vDisplayName !in presentDisplayNames) {
-                    pendingStations.add(PendingRpfStation(vKey, vDisplayName, gtaIvEp1SfxArchive!!))
+                    pendingStations.add(PendingRpfStation(vKey, vDisplayName, rpf3Ep1SfxArchive!!))
                     presentDisplayNames.add(vDisplayName)
                 }
             }
         }
 
-        if (isEflc && gtaIvEp2SfxArchive != null) {
-            for ((vKey, vDisplayName) in GtaIvMetadataRepository.eflcVirtualStationsEp2) {
+        if (isEflc && rpf3Ep2SfxArchive != null) {
+            for ((vKey, vDisplayName) in Rpf3MetadataRepository.eflcVirtualStationsEp2) {
                 if (vDisplayName !in presentDisplayNames) {
-                    pendingStations.add(PendingRpfStation(vKey, vDisplayName, gtaIvEp2SfxArchive!!))
+                    pendingStations.add(PendingRpfStation(vKey, vDisplayName, rpf3Ep2SfxArchive!!))
                     presentDisplayNames.add(vDisplayName)
                 }
             }
@@ -402,10 +402,10 @@ init {
                 .build()
 
             stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
-            gtaIvStationArchives[stMediaId] = item.archive
-            gtaIvStationArchives[stDisplayName] = item.archive
-            gtaIvStationKeys[stMediaId] = item.stationKey
-            gtaIvStationKeys[stDisplayName] = item.stationKey
+            rpf3StationArchives[stMediaId] = item.archive
+            rpf3StationArchives[stDisplayName] = item.archive
+            rpf3StationKeys[stMediaId] = item.stationKey
+            rpf3StationKeys[stDisplayName] = item.stationKey
         }
 
         if (stationList.isNotEmpty()) {
@@ -421,7 +421,7 @@ init {
         }
     }
 
-    fun createGtaIvRpfStation(
+    fun createRpf3Station(
         stationGroupId: String,
         stMediaId: String,
         stMediaItem: MediaBrowserCompat.MediaItem,
@@ -432,24 +432,24 @@ init {
         newsReportsEnabled: Boolean
     ): RadioStation {
         val titleKey = stMediaItem.description.title?.toString() ?: ""
-        val arch = gtaIvStationArchives[stMediaId]
-            ?: gtaIvStationArchives[titleKey]
-            ?: gtaIvStationArchives.values.first()
-        val stKey = gtaIvStationKeys[stMediaId]
-            ?: gtaIvStationKeys[titleKey]
+        val arch = rpf3StationArchives[stMediaId]
+            ?: rpf3StationArchives[titleKey]
+            ?: rpf3StationArchives.values.first()
+        val stKey = rpf3StationKeys[stMediaId]
+            ?: rpf3StationKeys[titleKey]
             ?: arch.rpfName.lowercase()
-        return GtaIvRpfRadioStation(
+        return Rpf3RadioStation(
             stationGroupId = stationGroupId,
             mediaId = stMediaId,
             mediaItem = stMediaItem,
             stationKey = stKey,
             stationArchive = arch,
-            extraTracksArchive = gtaIvExtraTracksArchive,
-            ep1SfxArchive = gtaIvEp1SfxArchive,
-            ep2SfxArchive = gtaIvEp2SfxArchive,
-            advertsArchive = gtaIvAdvertsArchive,
-            newsArchive = gtaIvNewsArchive,
-            weatherArchive = gtaIvWeatherArchive,
+            extraTracksArchive = rpf3ExtraTracksArchive,
+            ep1SfxArchive = rpf3Ep1SfxArchive,
+            ep2SfxArchive = rpf3Ep2SfxArchive,
+            advertsArchive = rpf3AdvertsArchive,
+            newsArchive = rpf3NewsArchive,
+            weatherArchive = rpf3WeatherArchive,
             player = player,
             context = ctx,
             adsEnabled = adsEnabled,
@@ -458,11 +458,11 @@ init {
         )
     }
 
-    private fun detectGtaVRpfs(files: Array<SimpleFileInfo>): List<SimpleFileInfo> {
-        val knownStationRpfs = GtaVMetadataRepository.stationInfoByRpf.keys
+    private fun detectRpf7Rpfs(files: Array<SimpleFileInfo>): List<SimpleFileInfo> {
+        val knownStationRpfs = Rpf7MetadataRepository.stationInfoByRpf.keys
         val matched = files.filter { !it.isDirectory && knownStationRpfs.contains(it.name.lowercase()) }
         if (matched.isNotEmpty()) {
-            GTRadioLogger.log("detectGtaVRpfs: Detected ${matched.size} GTA V RPF stations in '${folderDoc.name}'")
+            GTRadioLogger.log("detectRpf7Rpfs: Detected ${matched.size} GTA V RPF stations in '${folderDoc.name}'")
         }
         return matched
     }
@@ -495,8 +495,8 @@ init {
         return false
     }
 
-    private fun setupGtaVRpfGroup(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
-        isGtaVRpfGroup = true
+    private fun setupRpf7Group(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
+        isRpf7Group = true
         generation = 3
         val isEnhanced = detectIsEnhanced(allFiles, stationRpfFiles)
         groupName = if (isEnhanced) "GTA V Enhanced (RPF Audio)" else "GTA V (RPF Audio)"
@@ -504,7 +504,7 @@ init {
         mediaId = "$idPrefix${UUID.randomUUID()}"
 
         // Automatic First-Startup Key Discovery
-        if (!GtaVKeyManager.isUnlocked(context)) {
+        if (!Rpf7KeyManager.isUnlocked(context)) {
             tryAutoImportKeys()
         }
 
@@ -517,8 +517,8 @@ init {
         for (f in allFiles) {
             if (f.isDirectory) continue
             when (f.name.lowercase()) {
-                "radio_adverts.rpf" -> gtaVAdvertsArchive = GtaVRpfArchive(context, f.name, f.uri)
-                "radio_news.rpf" -> gtaVNewsArchive = GtaVRpfArchive(context, f.name, f.uri)
+                "radio_adverts.rpf" -> rpf7AdvertsArchive = Rpf7Archive(context, f.name, f.uri)
+                "radio_news.rpf" -> rpf7NewsArchive = Rpf7Archive(context, f.name, f.uri)
             }
         }
 
@@ -531,11 +531,11 @@ init {
 
         for (stFile in sortedStationFiles) {
             val stKey = stFile.name.lowercase()
-            val info = GtaVMetadataRepository.getStationInfo(stKey)
+            val info = Rpf7MetadataRepository.getStationInfo(stKey)
             val stDisplayName = info?.stationName ?: stFile.name
             val stMediaId = "$idPrefix${UUID.randomUUID()}"
 
-            val arch = GtaVRpfArchive(context, stFile.name, stFile.uri)
+            val arch = Rpf7Archive(context, stFile.name, stFile.uri)
 
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
             val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
@@ -551,10 +551,10 @@ init {
                 .build()
 
             stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
-            gtaVStationArchives[stMediaId] = arch
-            gtaVStationArchives[stDisplayName] = arch
-            gtaVStationKeys[stMediaId] = stKey
-            gtaVStationKeys[stDisplayName] = stKey
+            rpf7StationArchives[stMediaId] = arch
+            rpf7StationArchives[stDisplayName] = arch
+            rpf7StationKeys[stMediaId] = stKey
+            rpf7StationKeys[stDisplayName] = stKey
         }
 
         if (stationList.isNotEmpty()) {
@@ -570,7 +570,7 @@ init {
         }
     }
 
-    private fun tryAutoImportGtaIvKeys() {
+    private fun tryAutoImportRpf3Keys() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         // (a) Check saved Settings key folder URI
         val savedKeyUri = prefs.getString("game_key_folder_uri", null)
@@ -579,8 +579,8 @@ init {
             try {
                 DocumentFile.fromTreeUri(context, Uri.parse(savedKeyUri))?.let { keyDoc ->
                     if (keyDoc.isDirectory) {
-                        val res = GtaIvKeyManager.importFromFolder(context, keyDoc)
-                        if (res is GtaIvKeyManager.ImportResult.Success) {
+                        val res = Rpf3KeyManager.importFromFolder(context, keyDoc)
+                        if (res is Rpf3KeyManager.ImportResult.Success) {
                             GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from saved settings folder: ${keyDoc.uri}")
                             return
                         }
@@ -593,8 +593,8 @@ init {
 
         // (b) Check GTA IV / EFLC folder itself
         try {
-            val res = GtaIvKeyManager.importFromFolder(context, folderDoc)
-            if (res is GtaIvKeyManager.ImportResult.Success) {
+            val res = Rpf3KeyManager.importFromFolder(context, folderDoc)
+            if (res is Rpf3KeyManager.ImportResult.Success) {
                 GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from audio folder: ${folderDoc.uri}")
                 return
             }
@@ -606,15 +606,15 @@ init {
         try {
             folderDoc.parentFile?.let { p1 ->
                 if (p1.isDirectory) {
-                    val res1 = GtaIvKeyManager.importFromFolder(context, p1)
-                    if (res1 is GtaIvKeyManager.ImportResult.Success) {
+                    val res1 = Rpf3KeyManager.importFromFolder(context, p1)
+                    if (res1 is Rpf3KeyManager.ImportResult.Success) {
                         GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from parent folder: ${p1.uri}")
                         return
                     }
                     p1.parentFile?.let { p2 ->
                         if (p2.isDirectory) {
-                            val res2 = GtaIvKeyManager.importFromFolder(context, p2)
-                            if (res2 is GtaIvKeyManager.ImportResult.Success) {
+                            val res2 = Rpf3KeyManager.importFromFolder(context, p2)
+                            if (res2 is Rpf3KeyManager.ImportResult.Success) {
                                 GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from grandparent folder: ${p2.uri}")
                                 return
                             }
@@ -636,7 +636,7 @@ init {
             try {
                 DocumentFile.fromTreeUri(context, Uri.parse(savedKeyUri))?.let { keyDoc ->
                     if (keyDoc.isDirectory) {
-                        val res = GtaVKeyManager.importFromFolder(context, keyDoc, allowMagicDownload = true)
+                        val res = Rpf7KeyManager.importFromFolder(context, keyDoc, allowMagicDownload = true)
                         if (res is ImportResult.Success) {
                             GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from saved settings folder: ${keyDoc.uri}")
                             return
@@ -650,7 +650,7 @@ init {
 
         // (b) Check GTA V audio folder itself (e.g. where GTA5.exe or .dat files live alongside RADIO_*.rpf)
         try {
-            val res = GtaVKeyManager.importFromFolder(context, folderDoc, allowMagicDownload = true)
+            val res = Rpf7KeyManager.importFromFolder(context, folderDoc, allowMagicDownload = true)
             if (res is ImportResult.Success) {
                 GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from audio folder: ${folderDoc.uri}")
                 return
@@ -663,14 +663,14 @@ init {
         try {
             folderDoc.parentFile?.let { parentDoc ->
                 if (parentDoc.isDirectory) {
-                    val res = GtaVKeyManager.importFromFolder(context, parentDoc, allowMagicDownload = true)
+                    val res = Rpf7KeyManager.importFromFolder(context, parentDoc, allowMagicDownload = true)
                     if (res is ImportResult.Success) {
                         GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from parent folder: ${parentDoc.uri}")
                         return
                     }
                     parentDoc.parentFile?.let { grandDoc ->
                         if (grandDoc.isDirectory) {
-                            val res2 = GtaVKeyManager.importFromFolder(context, grandDoc, allowMagicDownload = true)
+                            val res2 = Rpf7KeyManager.importFromFolder(context, grandDoc, allowMagicDownload = true)
                             if (res2 is ImportResult.Success) {
                                 GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from grandparent folder: ${grandDoc.uri}")
                                 return
@@ -684,7 +684,7 @@ init {
         }
     }
 
-    fun createGtaVRpfStation(
+    fun createRpf7Station(
         stationGroupId: String,
         stMediaId: String,
         stMediaItem: MediaBrowserCompat.MediaItem,
@@ -695,20 +695,20 @@ init {
         newsReportsEnabled: Boolean
     ): RadioStation {
         val titleKey = stMediaItem.description.title?.toString() ?: ""
-        val arch = gtaVStationArchives[stMediaId]
-            ?: gtaVStationArchives[titleKey]
-            ?: gtaVStationArchives.values.first()
-        val stKey = gtaVStationKeys[stMediaId]
-            ?: gtaVStationKeys[titleKey]
+        val arch = rpf7StationArchives[stMediaId]
+            ?: rpf7StationArchives[titleKey]
+            ?: rpf7StationArchives.values.first()
+        val stKey = rpf7StationKeys[stMediaId]
+            ?: rpf7StationKeys[titleKey]
             ?: arch.rpfName.lowercase()
-        return GtaVRpfRadioStation(
+        return Rpf7RadioStation(
             stationGroupId = stationGroupId,
             mediaId = stMediaId,
             mediaItem = stMediaItem,
             stationKey = stKey,
             stationArchive = arch,
-            advertsArchive = gtaVAdvertsArchive,
-            newsArchive = gtaVNewsArchive,
+            advertsArchive = rpf7AdvertsArchive,
+            newsArchive = rpf7NewsArchive,
             player = player,
             context = ctx,
             adsEnabled = adsEnabled,

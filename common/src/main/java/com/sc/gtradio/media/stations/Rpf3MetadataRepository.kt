@@ -3,17 +3,17 @@ package com.sc.gtradio.media.stations
 import android.content.Context
 import com.sc.gtradio.common.GTRadioLogger
 
-data class GtaIvTrackMeta(
+data class Rpf3TrackMeta(
     val internalName: String,
     val title: String,
     val artist: String,
     val isTalkShow: Boolean = false
 )
 
-object GtaIvMetadataRepository {
+object Rpf3MetadataRepository {
     private var loaded = false
     private val hashToName = HashMap<Int, String>(80000)
-    private val trackMetaMap = HashMap<String, GtaIvTrackMeta>(600)
+    private val trackMetaMap = HashMap<String, Rpf3TrackMeta>(600)
 
     val stationNamesByRpf: Map<String, String> = linkedMapOf(
         "radio_afro_beat.rpf" to "IF99 - International Funk",
@@ -128,7 +128,7 @@ object GtaIvMetadataRepository {
         if (loaded) return
         loaded = true
         try {
-            context.assets.open("gta_iv_hashes.txt").bufferedReader().useLines { lines ->
+            context.assets.open("rpf3_hashes.txt").bufferedReader().useLines { lines ->
                 for (line in lines) {
                     val eq = line.indexOf('=')
                     if (eq > 0) {
@@ -140,9 +140,9 @@ object GtaIvMetadataRepository {
                     }
                 }
             }
-            GTRadioLogger.log("GtaIvMetadataRepository: Loaded ${hashToName.size} RPF hashes")
+            GTRadioLogger.log("Rpf3MetadataRepository: Loaded ${hashToName.size} RPF hashes")
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaIvMetadataRepository: Failed loading gta_iv_hashes.txt", e)
+            GTRadioLogger.log("Rpf3MetadataRepository: Failed loading rpf3_hashes.txt", e)
         }
         initTrackMetadata()
     }
@@ -152,14 +152,14 @@ object GtaIvMetadataRepository {
         return hashToName[hash] ?: String.format("0x%08X", hash)
     }
 
-    fun getTrackMeta(context: Context, rawTrackName: String, stationName: String = ""): GtaIvTrackMeta? {
+    fun getTrackMeta(context: Context, rawTrackName: String, stationName: String = ""): Rpf3TrackMeta? {
         ensureLoaded(context)
         val cleanKey = rawTrackName.uppercase().trim()
         if (cleanKey == "MAMA" && stationName.uppercase().contains("VLADIVOSTOK")) {
-            return GtaIvTrackMeta("MAMA", "Mama", "Basta")
+            return Rpf3TrackMeta("MAMA", "Mama", "Basta")
         }
         if (cleanKey == "COCAINE" && stationName.uppercase().contains("BROKER")) {
-            return GtaIvTrackMeta("COCAINE", "Cocaine", "Cheeseburger")
+            return Rpf3TrackMeta("COCAINE", "Cocaine", "Cheeseburger")
         }
         return trackMetaMap[cleanKey]
     }
@@ -173,11 +173,11 @@ object GtaIvMetadataRepository {
     }
 
     private fun addSong(key: String, title: String, artist: String) {
-        trackMetaMap[key.uppercase()] = GtaIvTrackMeta(key.uppercase(), title, artist, false)
+        trackMetaMap[key.uppercase()] = Rpf3TrackMeta(key.uppercase(), title, artist, false)
     }
 
     private fun addShow(key: String, title: String, host: String) {
-        trackMetaMap[key.uppercase()] = GtaIvTrackMeta(key.uppercase(), title, host, true)
+        trackMetaMap[key.uppercase()] = Rpf3TrackMeta(key.uppercase(), title, host, true)
     }
 
     private fun initTrackMetadata() {

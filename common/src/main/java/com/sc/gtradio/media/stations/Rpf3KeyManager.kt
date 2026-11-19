@@ -13,13 +13,13 @@ import java.security.MessageDigest
 import java.util.Locale
 
 /**
- * Thread-safe singleton managing GTA IV / EFLC's 32-byte RPF3 AES key privately inside internal storage.
+ * Thread-safe singleton managing Gen3 RPF3 32-byte AES key privately inside internal storage.
  *
  * STRICT LEGAL NOTICE:
- * This file NEVER contains, hardcodes, or bundles any raw Rockstar key bytes.
+ * This file NEVER contains, hardcodes, or bundles any raw proprietary key bytes.
  * Only the public SHA-1 verification hash is stored.
  */
-object GtaIvKeyManager {
+object Rpf3KeyManager {
 
     // Public verification SHA-1 hash (never store raw key bytes in code!)
     const val RPF3_AES_KEY_SHA1 = "DEA375EF1E6EF2223A1221C2C575C47BF17EFA5E"
@@ -54,25 +54,41 @@ object GtaIvKeyManager {
 
     /**
      * Retrieves the 32-byte RPF3 AES key, attempting to load from private storage if not in memory.
+     * Automatically migrates from legacy gta4_keys if present.
      */
     @Synchronized
     fun getKey(context: Context): ByteArray? {
         cachedKey?.let { return it }
 
-        val keyFile = File(context.filesDir, "gta4_keys/gta4_aes_key.dat")
+        val newDir = File(context.filesDir, "rpf3_keys")
+        val keyFile = File(newDir, "rpf3_aes_key.dat")
+
+        if (!keyFile.exists()) {
+            val legacyFile = File(context.filesDir, "gta4_keys/gta4_aes_key.dat")
+            if (legacyFile.exists() && legacyFile.length() == 32L) {
+                try {
+                    if (!newDir.exists()) newDir.mkdirs()
+                    legacyFile.copyTo(keyFile, overwrite = true)
+                    GTRadioLogger.log("Rpf3KeyManager: Migrated key from legacy gta4_keys to rpf3_keys")
+                } catch (e: Exception) {
+                    GTRadioLogger.log("Rpf3KeyManager: Failed migrating legacy key file", e)
+                }
+            }
+        }
+
         if (!keyFile.exists() || keyFile.length() != 32L) return null
 
         try {
             val bytes = keyFile.readBytes()
             if (bytes.size == 32 && sha1Hex(bytes).equals(RPF3_AES_KEY_SHA1, ignoreCase = true)) {
                 cachedKey = bytes
-                GTRadioLogger.log("GtaIvKeyManager: Successfully loaded key from private storage")
+                GTRadioLogger.log("Rpf3KeyManager: Successfully loaded key from private storage")
                 return bytes
             } else {
-                GTRadioLogger.log("GtaIvKeyManager: Private key file SHA-1 check failed")
+                GTRadioLogger.log("Rpf3KeyManager: Private key file SHA-1 check failed")
             }
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaIvKeyManager: Error reading private key file", e)
+            GTRadioLogger.log("Rpf3KeyManager: Error reading private key file", e)
         }
         return null
     }
@@ -90,13 +106,17 @@ object GtaIvKeyManager {
     }
 
     /**
-     * Clears in-memory key and deletes private storage key file.
+     * Clears in-memory key and deletes private storage key file (and legacy key file).
      */
     @Synchronized
     fun clearCachedKey(context: Context): Boolean {
         cachedKey = null
-        val keyFile = File(context.filesDir, "gta4_keys/gta4_aes_key.dat")
-        return if (keyFile.exists()) keyFile.delete() else true
+        val keyFile = File(context.filesDir, "rpf3_keys/rpf3_aes_key.dat")
+        val legacyKeyFile = File(context.filesDir, "gta4_keys/gta4_aes_key.dat")
+        var success = true
+        if (keyFile.exists() && !keyFile.delete()) success = false
+        if (legacyKeyFile.exists() && !legacyKeyFile.delete()) success = false
+        return success
     }
 
     /**
@@ -106,7 +126,7 @@ object GtaIvKeyManager {
      */
     @Synchronized
     fun importFromFolder(context: Context, folderDoc: DocumentFile): ImportResult {
-        GTRadioLogger.log("GtaIvKeyManager: Scanning folder for keys: ${folderDoc.name} (${folderDoc.uri})")
+        GTRadioLogger.log("Rpf3KeyManager: Scanning folder for keys: ${folderDoc.name} (${folderDoc.uri})")
 
         // 1. Try pre-extracted .dat file
         val datResult = tryImportDatFile(context, folderDoc)
@@ -188,14 +208,14 @@ object GtaIvKeyManager {
                         channel.read(candidateBuf)
                         val candidate = candidateBuf.array()
                         if (sha1Hex(candidate).equals(RPF3_AES_KEY_SHA1, ignoreCase = true)) {
-                            GTRadioLogger.log("GtaIvKeyManager: Key found at fast-path offset 0x${offset.toString(16).uppercase(Locale.ROOT)}")
+                            GTRadioLogger.log("Rpf3KeyManager: Key found at fast-path offset 0x${offset.toString(16).uppercase(Locale.ROOT)}")
                             return candidate
                         }
                     }
                 }
 
                 // Fallback: PE section table streaming
-                GTRadioLogger.log("GtaIvKeyManager: Fast-path miss; parsing PE sections...")
+                GTRadioLogger.log("Rpf3KeyManager: Fast-path miss; parsing PE sections...")
                 val sections = parsePeSections(channel)
                 // Scan .data first, then .rdata
                 val orderedSections = sections.sortedBy { sec ->
@@ -298,7 +318,7 @@ object GtaIvKeyManager {
             while (off <= maxOffset) {
                 if (sha1Hex(rawBytes, off, 32).equals(RPF3_AES_KEY_SHA1, ignoreCase = true)) {
                     val key = rawBytes.copyOfRange(off, off + 32)
-                    GTRadioLogger.log("GtaIvKeyManager: Key found in ${section.name} at 0x${(filePos + off).toString(16).uppercase(Locale.ROOT)} (4-byte aligned)")
+                    GTRadioLogger.log("Rpf3KeyManager: Key found in ${section.name} at 0x${(filePos + off).toString(16).uppercase(Locale.ROOT)} (4-byte aligned)")
                     return key
                 }
                 off += 4
@@ -326,7 +346,7 @@ object GtaIvKeyManager {
                 if (off % 4 != 0) { // Skip already tested 4-byte offsets
                     if (sha1Hex(rawBytes, off, 32).equals(RPF3_AES_KEY_SHA1, ignoreCase = true)) {
                         val key = rawBytes.copyOfRange(off, off + 32)
-                        GTRadioLogger.log("GtaIvKeyManager: Key found in ${section.name} at 0x${(filePos + off).toString(16).uppercase(Locale.ROOT)} (1-byte fallback)")
+                        GTRadioLogger.log("Rpf3KeyManager: Key found in ${section.name} at 0x${(filePos + off).toString(16).uppercase(Locale.ROOT)} (1-byte fallback)")
                         return key
                     }
                 }
@@ -340,11 +360,11 @@ object GtaIvKeyManager {
     }
 
     private fun saveKeyPrivately(context: Context, keyBytes: ByteArray) {
-        val keysDir = File(context.filesDir, "gta4_keys")
+        val keysDir = File(context.filesDir, "rpf3_keys")
         if (!keysDir.exists()) keysDir.mkdirs()
-        val keyFile = File(keysDir, "gta4_aes_key.dat")
+        val keyFile = File(keysDir, "rpf3_aes_key.dat")
         FileOutputStream(keyFile).use { it.write(keyBytes) }
-        GTRadioLogger.log("GtaIvKeyManager: Saved verified key to ${keyFile.absolutePath}")
+        GTRadioLogger.log("Rpf3KeyManager: Saved verified key to ${keyFile.absolutePath}")
     }
 
     private fun sha1Hex(data: ByteArray, offset: Int = 0, length: Int = data.size): String {

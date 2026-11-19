@@ -15,7 +15,7 @@ import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
-data class GtaIvRpfEntry(
+data class Rpf3Entry(
     val name: String,
     val offset: Long,
     val size: Long,
@@ -23,7 +23,7 @@ data class GtaIvRpfEntry(
     val numBlocks: Int = 1
 )
 
-data class GtaIvBankSubTrack(
+data class Rpf3BankSubTrack(
     val parentEntryName: String,
     val subName: String,
     val dataOffsetInRpf: Long,
@@ -33,13 +33,13 @@ data class GtaIvBankSubTrack(
     val isCompressed: Boolean
 )
 
-class GtaIvRpfArchive(
+class Rpf3Archive(
     private val context: Context,
     val rpfName: String,
     val sourceUri: Uri
 ) {
-    private val entries = LinkedHashMap<String, GtaIvRpfEntry>()
-    private val bankSubTracks = LinkedHashMap<String, GtaIvBankSubTrack>()
+    private val entries = LinkedHashMap<String, Rpf3Entry>()
+    private val bankSubTracks = LinkedHashMap<String, Rpf3BankSubTrack>()
     private val chunkStates = ConcurrentHashMap<String, IntArray>()
     private var indexed = false
 
@@ -113,34 +113,35 @@ class GtaIvRpfArchive(
             try {
                 File(context.cacheDir, "gta4_rpf_tracks").deleteRecursively()
                 File(context.cacheDir, "gta4_rpf_tracks_v2").deleteRecursively()
+                File(context.cacheDir, "gta4_rpf_tracks_v3").deleteRecursively()
             } catch (_: Exception) {}
         }
-        return File(context.cacheDir, "gta4_rpf_tracks_v3").apply { mkdirs() }
+        return File(context.cacheDir, "rpf3_tracks").apply { mkdirs() }
     }
 
     @Synchronized
     fun ensureIndexed() {
         if (indexed) return
         indexed = true
-        GtaIvMetadataRepository.ensureLoaded(context)
+        Rpf3MetadataRepository.ensureLoaded(context)
         try {
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 FileInputStream(pfd.fileDescriptor).channel.use { ch ->
                     indexRpf(ch)
                 }
             }
-            GTRadioLogger.log("GtaIvRpfArchive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
+            GTRadioLogger.log("Rpf3Archive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaIvRpfArchive[$rpfName]: Indexing failed", e)
+            GTRadioLogger.log("Rpf3Archive[$rpfName]: Indexing failed", e)
         }
     }
 
-    fun getFileEntries(): Collection<GtaIvRpfEntry> {
+    fun getFileEntries(): Collection<Rpf3Entry> {
         ensureIndexed()
         return entries.values
     }
 
-    fun getBankSubTracks(): Collection<GtaIvBankSubTrack> {
+    fun getBankSubTracks(): Collection<Rpf3BankSubTrack> {
         ensureIndexed()
         return bankSubTracks.values
     }
@@ -179,9 +180,9 @@ class GtaIvRpfArchive(
         var tocBytes = tocBuf.array()
 
         if (encryptedFlag != 0) {
-            val key = GtaIvKeyManager.getKey(context)
+            val key = Rpf3KeyManager.getKey(context)
             if (key == null) {
-                GTRadioLogger.log("GtaIvRpfArchive[$rpfName]: GTA IV/EFLC key is not loaded/unlocked; cannot decrypt TOC")
+                GTRadioLogger.log("Rpf3Archive[$rpfName]: RPF3 key is not loaded/unlocked; cannot decrypt TOC")
                 return
             }
             val cipher = Cipher.getInstance("AES/ECB/NoPadding")
@@ -207,7 +208,7 @@ class GtaIvRpfArchive(
             val fileSize = data1
             if (fileSize < 32L || fileOffset + fileSize > ch.size()) continue
 
-            val entryName = GtaIvMetadataRepository.resolveHash(context, nameHash).uppercase()
+            val entryName = Rpf3MetadataRepository.resolveHash(context, nameHash).uppercase()
             if (entryName == "NULLTRACK") continue
 
             probe16.clear()
@@ -217,7 +218,7 @@ class GtaIvRpfArchive(
             val isBank = (firstInt == 28 && secondInt == 0)
             val blocks = if (isBank) 1 else probe16.getInt(8).coerceAtLeast(1)
 
-            val entry = GtaIvRpfEntry(entryName, fileOffset, fileSize, isBank, blocks)
+            val entry = Rpf3Entry(entryName, fileOffset, fileSize, isBank, blocks)
             entries[entryName] = entry
 
             if (isBank) {
@@ -226,7 +227,7 @@ class GtaIvRpfArchive(
         }
     }
 
-    private fun indexSingleCBank(ch: FileChannel, bankEntry: GtaIvRpfEntry) {
+    private fun indexSingleCBank(ch: FileChannel, bankEntry: Rpf3Entry) {
         val hdr28 = ByteBuffer.allocate(28).order(ByteOrder.LITTLE_ENDIAN)
         if (readFully(ch, hdr28, bankEntry.offset) < 28) return
         val offsetWaveInfo = hdr28.getLong(0)
@@ -263,12 +264,12 @@ class GtaIvRpfArchive(
             val numStates = if (wihSize > 32 && readLen >= 56) wiBuf.getInt(52) else 1
             val isCompressed = (numStates > 0) || (numSamplesInBytes in 1 until numSamples16Bit)
 
-            val resolvedSubName = GtaIvMetadataRepository.resolveHash(context, if (wihHash != 0) wihHash else wiHash).uppercase()
+            val resolvedSubName = Rpf3MetadataRepository.resolveHash(context, if (wihHash != 0) wihHash else wiHash).uppercase()
             val subKey = if (resolvedSubName.startsWith("0X")) "${bankEntry.name}_$i" else resolvedSubName
 
             val absDataOffset = bankEntry.offset + headerSize.toLong() + sampleDataRelOffset
             if (numSamples16Bit > 0 && absDataOffset < bankEntry.offset + bankEntry.size) {
-                val subObj = GtaIvBankSubTrack(
+                val subObj = Rpf3BankSubTrack(
                     parentEntryName = bankEntry.name,
                     subName = subKey,
                     dataOffsetInRpf = absDataOffset,
@@ -329,7 +330,11 @@ class GtaIvRpfArchive(
             val maxCacheBytes = 95L * 1024L * 1024L
             val allCached = ArrayList<File>()
             cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "at3_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
             File(context.cacheDir, "gen2_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "rpf7_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "gta4_rpf_tracks_v3").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
+            File(context.cacheDir, "gta5_rpf_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
             File(context.cacheDir, "sa_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
             File(context.cacheDir, "sa_raw_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
 
@@ -375,14 +380,14 @@ class GtaIvRpfArchive(
                 return Uri.fromFile(outFile)
             }
         } catch (t: Throwable) {
-            GTRadioLogger.log("GtaIvRpfArchive[$rpfName]: Failed decoding $cleanKey (start=$startBlock)", Exception(t))
+            GTRadioLogger.log("Rpf3Archive[$rpfName]: Failed decoding $cleanKey (start=$startBlock)", Exception(t))
             tempFile.delete()
             outFile.delete()
         }
         return null
     }
 
-    private fun decodeBankSubTrackToWav(ch: FileChannel, sub: GtaIvBankSubTrack, outFile: File) {
+    private fun decodeBankSubTrackToWav(ch: FileChannel, sub: Rpf3BankSubTrack, outFile: File) {
         val totalSamples = sub.numSamples16Bit
         val pcmBytesLen = totalSamples * 2
         val byteCountToRead = if (sub.isCompressed) (totalSamples + 1) / 2 else pcmBytesLen
@@ -454,7 +459,7 @@ class GtaIvRpfArchive(
 
     private fun decodeMultiCToWav(
         ch: FileChannel,
-        entry: GtaIvRpfEntry,
+        entry: Rpf3Entry,
         outFile: File,
         startBlock: Int = 0,
         maxBlocks: Int = Int.MAX_VALUE

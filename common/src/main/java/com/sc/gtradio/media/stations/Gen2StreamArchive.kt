@@ -206,6 +206,11 @@ class Gen2StreamArchive(
         try {
             val allCached = ArrayList<File>()
             cacheDir.listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "at3_tracks").listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "rpf3_tracks").listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "rpf7_tracks").listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "gta4_rpf_tracks_v3").listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "gta5_rpf_tracks").listFiles()?.let { allCached.addAll(it) }
             File(context.cacheDir, "sa_stream_tracks").listFiles()?.let { allCached.addAll(it) }
             File(context.cacheDir, "sa_raw_tracks").listFiles()?.let { allCached.addAll(it) }
             if (allCached.size > 60) {

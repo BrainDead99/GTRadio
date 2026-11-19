@@ -22,23 +22,23 @@ import java.util.concurrent.TimeUnit
 import java.util.zip.Inflater
 
 /**
- * Result of importing GTA V keys.
+ * Result of importing RPF7 keys.
  */
 sealed class ImportResult {
-    data class Success(val keySet: GtaVKeySet, val source: String) : ImportResult()
+    data class Success(val keySet: Rpf7KeySet, val source: String) : ImportResult()
     data class Error(val message: String, val cause: Throwable? = null) : ImportResult()
     object MissingMagicDat : ImportResult()
     object NoKeysFound : ImportResult()
 }
 
 /**
- * Thread-safe singleton managing GTA V Legacy PC keys privately in internal storage.
+ * Thread-safe singleton managing RPF7 PC keys privately in internal storage.
  *
  * STRICT LEGAL NOTICE:
- * This file NEVER contains, hardcodes, or bundles any raw Rockstar key bytes or decryption tables.
+ * This file NEVER contains, hardcodes, or bundles any raw proprietary key bytes or decryption tables.
  * Only public SHA-1 verification hashes from open-source references (CodeWalker) are stored.
  */
-object GtaVKeyManager {
+object Rpf7KeyManager {
 
     // Public verification SHA-1 hashes (never store raw key bytes in code!)
     const val PC_AES_KEY_SHA1 = "a0796128a775720ac204d9819f68c172e3952c6d"
@@ -56,7 +56,7 @@ object GtaVKeyManager {
         "https://raw.githubusercontent.com/dexyfex/CodeWalker/master/CodeWalker.Core/Resources/magic.dat"
 
     @Volatile
-    private var cachedKeySet: GtaVKeySet? = null
+    private var cachedKeySet: Rpf7KeySet? = null
 
     /**
      * Checks if valid keys are currently loaded or available in private storage.
@@ -67,13 +67,13 @@ object GtaVKeyManager {
     }
 
     /**
-     * Retrieves the loaded [GtaVKeySet], or attempts to load from private storage.
+     * Retrieves the loaded [Rpf7KeySet], or attempts to load from private storage.
      */
     @Synchronized
-    fun getKeys(context: Context): GtaVKeySet? {
+    fun getKeys(context: Context): Rpf7KeySet? {
         cachedKeySet?.let { return it }
 
-        // Path A: Load from private cache in filesDir/gtav_keys/
+        // Path A: Load from private cache in filesDir/rpf7_keys/
         val keySet = loadFromPrivateCache(context)
         if (keySet != null) {
             cachedKeySet = keySet
@@ -85,11 +85,11 @@ object GtaVKeyManager {
     /**
      * Alias for [getKeys]. Ensures keys are loaded if available.
      */
-    fun ensureKeysLoaded(context: Context): GtaVKeySet? = getKeys(context)
+    fun ensureKeysLoaded(context: Context): Rpf7KeySet? = getKeys(context)
 
     /**
      * Imports keys from a user-selected folder:
-     * 1. Checks for pre-extracted CodeWalker .dat files (gtav_aes_key.dat, etc.)
+     * 1. Checks for pre-extracted CodeWalker .dat files (rpf7_aes_key.dat, gtav_aes_key.dat, etc.)
      * 2. Checks for GTA5.exe + magic.dat (deriving NG keys and decrypt tables)
      */
     @Synchronized
@@ -98,7 +98,7 @@ object GtaVKeyManager {
         folderDoc: DocumentFile,
         allowMagicDownload: Boolean = false
     ): ImportResult {
-        GTRadioLogger.log("GtaVKeyManager: Scanning folder for keys: ${folderDoc.name} (${folderDoc.uri})")
+        GTRadioLogger.log("Rpf7KeyManager: Scanning folder for keys: ${folderDoc.name} (${folderDoc.uri})")
 
         // 1. Try importing pre-extracted .dat files
         val datResult = tryImportDatFiles(context, folderDoc)
@@ -142,7 +142,7 @@ object GtaVKeyManager {
         return if (keys != null) {
             "Unlocked (101 NG keys, 272 decrypt tables, AWC key: ${if (keys.awcKey.isNotEmpty()) "Available" else "Missing"})"
         } else {
-            "Locked (GTA V keys not found or not imported)"
+            "Locked (RPF7 keys not found or not imported)"
         }
     }
 
@@ -152,23 +152,30 @@ object GtaVKeyManager {
     @Synchronized
     fun clearCachedKeys(context: Context): Boolean {
         cachedKeySet = null
-        val keysDir = File(context.filesDir, "gtav_keys")
-        if (!keysDir.exists()) return true
+        val keysDir = File(context.filesDir, "rpf7_keys")
+        val legacyKeysDir = File(context.filesDir, "gtav_keys")
         var allDeleted = true
-        keysDir.listFiles()?.forEach { f ->
-            if (!f.delete()) allDeleted = false
+        if (keysDir.exists()) {
+            keysDir.listFiles()?.forEach { f ->
+                if (!f.delete()) allDeleted = false
+            }
         }
-        GTRadioLogger.log("GtaVKeyManager: Cleared cached keys (success=$allDeleted)")
+        if (legacyKeysDir.exists()) {
+            legacyKeysDir.listFiles()?.forEach { f ->
+                if (!f.delete()) allDeleted = false
+            }
+        }
+        GTRadioLogger.log("Rpf7KeyManager: Cleared cached keys (success=$allDeleted)")
         return allDeleted
     }
 
     /**
-     * Helper to download CodeWalker's public magic.dat into filesDir/gtav_keys/magic.dat.
+     * Helper to download CodeWalker's public magic.dat into filesDir/rpf7_keys/magic.dat.
      * Only executed when explicitly triggered by user or setup.
      * Safely dispatches to a background executor if invoked from the main thread.
      */
     fun downloadPublicMagicDat(context: Context): File? {
-        val keysDir = File(context.filesDir, "gtav_keys")
+        val keysDir = File(context.filesDir, "rpf7_keys")
         if (!keysDir.exists()) keysDir.mkdirs()
         val targetFile = File(keysDir, "magic.dat")
         val tempFile = File(keysDir, "magic.dat.download.tmp")
@@ -184,7 +191,7 @@ object GtaVKeyManager {
                     executor.shutdown()
                 }
             } catch (e: Exception) {
-                GTRadioLogger.log("GtaVKeyManager: Background download of magic.dat failed or timed out", e)
+                GTRadioLogger.log("Rpf7KeyManager: Background download of magic.dat failed or timed out", e)
                 null
             }
         } else {
@@ -194,7 +201,7 @@ object GtaVKeyManager {
 
     private fun downloadPublicMagicDatInternal(targetFile: File, tempFile: File): File? {
         try {
-            GTRadioLogger.log("GtaVKeyManager: Downloading public magic.dat from GitHub...")
+            GTRadioLogger.log("Rpf7KeyManager: Downloading public magic.dat from GitHub...")
             val url = URL(MAGIC_DAT_URL)
             val conn = url.openConnection() as HttpURLConnection
             conn.connectTimeout = 15000
@@ -203,7 +210,7 @@ object GtaVKeyManager {
             conn.connect()
 
             if (conn.responseCode != HttpURLConnection.HTTP_OK) {
-                GTRadioLogger.log("GtaVKeyManager: Download failed with HTTP ${conn.responseCode}")
+                GTRadioLogger.log("Rpf7KeyManager: Download failed with HTTP ${conn.responseCode}")
                 return null
             }
 
@@ -216,12 +223,12 @@ object GtaVKeyManager {
             if (tempFile.length() > 0) {
                 if (targetFile.exists()) targetFile.delete()
                 if (tempFile.renameTo(targetFile)) {
-                    GTRadioLogger.log("GtaVKeyManager: magic.dat downloaded successfully (${targetFile.length()} bytes)")
+                    GTRadioLogger.log("Rpf7KeyManager: magic.dat downloaded successfully (${targetFile.length()} bytes)")
                     return targetFile
                 }
             }
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaVKeyManager: Failed downloading magic.dat", e)
+            GTRadioLogger.log("Rpf7KeyManager: Failed downloading magic.dat", e)
         } finally {
             if (tempFile.exists()) tempFile.delete()
         }
@@ -231,15 +238,41 @@ object GtaVKeyManager {
     // ------------------------------------------------------------------------
     // Path A: Load from private cache files
     // ------------------------------------------------------------------------
-    private fun loadFromPrivateCache(context: Context): GtaVKeySet? {
-        val keysDir = File(context.filesDir, "gtav_keys")
+    private fun loadFromPrivateCache(context: Context): Rpf7KeySet? {
+        val keysDir = File(context.filesDir, "rpf7_keys")
+        val legacyDir = File(context.filesDir, "gtav_keys")
+
+        // Migration from legacy gtav_keys if needed
+        if ((!keysDir.exists() || keysDir.listFiles().isNullOrEmpty()) && legacyDir.exists()) {
+            val legacyFiles = legacyDir.listFiles()
+            if (!legacyFiles.isNullOrEmpty()) {
+                try {
+                    if (!keysDir.exists()) keysDir.mkdirs()
+                    for (file in legacyFiles) {
+                        val targetName = when (file.name) {
+                            "gtav_aes_key.dat" -> "rpf7_aes_key.dat"
+                            "gtav_lut.dat" -> "rpf7_lut.dat"
+                            "gtav_ng_keys.dat" -> "rpf7_ng_keys.dat"
+                            "gtav_ng_tables.dat" -> "rpf7_ng_tables.dat"
+                            "gtav_awc_key.dat" -> "rpf7_awc_key.dat"
+                            else -> file.name // magic.dat, etc.
+                        }
+                        file.copyTo(File(keysDir, targetName), overwrite = true)
+                    }
+                    GTRadioLogger.log("Rpf7KeyManager: Migrated keys from legacy gtav_keys to rpf7_keys")
+                } catch (e: Exception) {
+                    GTRadioLogger.log("Rpf7KeyManager: Failed migrating legacy keys", e)
+                }
+            }
+        }
+
         if (!keysDir.exists()) return null
 
-        val fAes = File(keysDir, "gtav_aes_key.dat")
-        val fLut = File(keysDir, "gtav_lut.dat")
-        val fNgKeys = File(keysDir, "gtav_ng_keys.dat")
-        val fNgTables = File(keysDir, "gtav_ng_tables.dat")
-        val fAwcKey = File(keysDir, "gtav_awc_key.dat")
+        val fAes = if (File(keysDir, "rpf7_aes_key.dat").exists()) File(keysDir, "rpf7_aes_key.dat") else File(keysDir, "gtav_aes_key.dat")
+        val fLut = if (File(keysDir, "rpf7_lut.dat").exists()) File(keysDir, "rpf7_lut.dat") else File(keysDir, "gtav_lut.dat")
+        val fNgKeys = if (File(keysDir, "rpf7_ng_keys.dat").exists()) File(keysDir, "rpf7_ng_keys.dat") else File(keysDir, "gtav_ng_keys.dat")
+        val fNgTables = if (File(keysDir, "rpf7_ng_tables.dat").exists()) File(keysDir, "rpf7_ng_tables.dat") else File(keysDir, "gtav_ng_tables.dat")
+        val fAwcKey = if (File(keysDir, "rpf7_awc_key.dat").exists()) File(keysDir, "rpf7_awc_key.dat") else File(keysDir, "gtav_awc_key.dat")
 
         if (!fAes.exists() || !fLut.exists() || !fNgKeys.exists() || !fNgTables.exists() || !fAwcKey.exists()) {
             return null
@@ -256,7 +289,7 @@ object GtaVKeyManager {
                 ngKeysBytes.size != 101 * 272 || ngTablesBytes.size != 272 * 1024 ||
                 awcKeyBytes.size != 16
             ) {
-                GTRadioLogger.log("GtaVKeyManager: Private key cache size mismatch")
+                GTRadioLogger.log("Rpf7KeyManager: Private key cache size mismatch")
                 return null
             }
 
@@ -266,15 +299,15 @@ object GtaVKeyManager {
                 !sha1Hex(ngKeysBytes, 0, 272).equals(PC_NG_KEY_0_SHA1, ignoreCase = true) ||
                 !sha1Hex(ngTablesBytes, 0, 1024).equals(PC_NG_DECRYPT_TABLE_0_SHA1, ignoreCase = true)
             ) {
-                GTRadioLogger.log("GtaVKeyManager: Private key cache SHA-1 verification failed")
+                GTRadioLogger.log("Rpf7KeyManager: Private key cache SHA-1 verification failed")
                 return null
             }
 
             val keySet = buildKeySet(aesBytes, lutBytes, ngKeysBytes, ngTablesBytes, awcKeyBytes)
-            GTRadioLogger.log("GtaVKeyManager: Successfully loaded keys from private cache")
+            GTRadioLogger.log("Rpf7KeyManager: Successfully loaded keys from private cache")
             return keySet
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaVKeyManager: Failed loading keys from private cache", e)
+            GTRadioLogger.log("Rpf7KeyManager: Failed loading keys from private cache", e)
             return null
         }
     }
@@ -289,11 +322,11 @@ object GtaVKeyManager {
             f.name?.lowercase(Locale.ROOT)?.let { docMap[it] = f }
         }
 
-        val aesDoc = docMap["gtav_aes_key.dat"] ?: return ImportResult.NoKeysFound
-        val ngKeysDoc = docMap["gtav_ng_key.dat"] ?: docMap["gtav_ng_keys.dat"] ?: return ImportResult.NoKeysFound
-        val ngTablesDoc = docMap["gtav_ng_decrypt_tables.dat"] ?: docMap["gtav_ng_tables.dat"] ?: return ImportResult.NoKeysFound
-        val lutDoc = docMap["gtav_hash_lut.dat"] ?: docMap["gtav_lut.dat"] ?: return ImportResult.NoKeysFound
-        val awcDoc = docMap["gtav_awc_key.dat"]
+        val aesDoc = docMap["rpf7_aes_key.dat"] ?: docMap["gtav_aes_key.dat"] ?: return ImportResult.NoKeysFound
+        val ngKeysDoc = docMap["rpf7_ng_key.dat"] ?: docMap["rpf7_ng_keys.dat"] ?: docMap["gtav_ng_key.dat"] ?: docMap["gtav_ng_keys.dat"] ?: return ImportResult.NoKeysFound
+        val ngTablesDoc = docMap["rpf7_ng_decrypt_tables.dat"] ?: docMap["rpf7_ng_tables.dat"] ?: docMap["gtav_ng_decrypt_tables.dat"] ?: docMap["gtav_ng_tables.dat"] ?: return ImportResult.NoKeysFound
+        val lutDoc = docMap["rpf7_hash_lut.dat"] ?: docMap["rpf7_lut.dat"] ?: docMap["gtav_hash_lut.dat"] ?: docMap["gtav_lut.dat"] ?: return ImportResult.NoKeysFound
+        val awcDoc = docMap["rpf7_awc_key.dat"] ?: docMap["gtav_awc_key.dat"]
 
         try {
             val aesBytes = readDocFully(context, aesDoc)
@@ -318,7 +351,7 @@ object GtaVKeyManager {
 
             saveToPrivateCache(context, aesBytes, lutBytes, ngKeysBytes, ngTablesBytes, awcKeyBytes)
             val keySet = buildKeySet(aesBytes, lutBytes, ngKeysBytes, ngTablesBytes, awcKeyBytes)
-            GTRadioLogger.log("GtaVKeyManager: Successfully imported CodeWalker .dat files")
+            GTRadioLogger.log("Rpf7KeyManager: Successfully imported CodeWalker .dat files")
             return ImportResult.Success(keySet, "CodeWalker .dat files")
         } catch (e: Exception) {
             return ImportResult.Error("Failed reading .dat files: ${e.message}", e)
@@ -358,7 +391,7 @@ object GtaVKeyManager {
         if (magicDoc != null) {
             try {
                 magicBytes = readDocFully(context, magicDoc)
-                val keysDir = File(context.filesDir, "gtav_keys")
+                val keysDir = File(context.filesDir, "rpf7_keys")
                 if (!keysDir.exists()) keysDir.mkdirs()
                 val localMagic = File(keysDir, "magic.dat")
                 if (!localMagic.exists() || localMagic.length() != magicBytes.size.toLong()) {
@@ -367,9 +400,14 @@ object GtaVKeyManager {
             } catch (_: Exception) {}
         }
         if (magicBytes == null) {
-            val localMagic = File(context.filesDir, "gtav_keys/magic.dat")
+            val localMagic = File(context.filesDir, "rpf7_keys/magic.dat")
             if (localMagic.exists() && localMagic.length() > 0) {
                 magicBytes = localMagic.readBytes()
+            } else {
+                val legacyMagic = File(context.filesDir, "gtav_keys/magic.dat")
+                if (legacyMagic.exists() && legacyMagic.length() > 0) {
+                    magicBytes = legacyMagic.readBytes()
+                }
             }
         }
         if (magicBytes == null && allowMagicDownload) {
@@ -380,7 +418,7 @@ object GtaVKeyManager {
         }
 
         if (magicBytes == null) {
-            GTRadioLogger.log("GtaVKeyManager: $exeName found but magic.dat is missing")
+            GTRadioLogger.log("Rpf7KeyManager: $exeName found but magic.dat is missing")
             return ImportResult.MissingMagicDat
         }
 
@@ -426,7 +464,7 @@ object GtaVKeyManager {
                         val candidate = bufAes.array()
                         if (sha1Hex(candidate).equals(PC_AES_KEY_SHA1, ignoreCase = true)) {
                             foundAes = candidate
-                            GTRadioLogger.log("GtaVKeyManager: PC_AES_KEY found at fast-path offset 0x${off.toString(16)}")
+                            GTRadioLogger.log("Rpf7KeyManager: PC_AES_KEY found at fast-path offset 0x${off.toString(16)}")
                             break
                         }
                     }
@@ -441,7 +479,7 @@ object GtaVKeyManager {
                         val candidate = bufLut.array()
                         if (sha1Hex(candidate).equals(PC_LUT_SHA1, ignoreCase = true)) {
                             foundLut = candidate
-                            GTRadioLogger.log("GtaVKeyManager: PC_LUT found at fast-path offset 0x${off.toString(16)}")
+                            GTRadioLogger.log("Rpf7KeyManager: PC_LUT found at fast-path offset 0x${off.toString(16)}")
                             break
                         }
                     }
@@ -449,13 +487,13 @@ object GtaVKeyManager {
 
                 if (foundAes != null) {
                     if (foundLut == null) {
-                        GTRadioLogger.log("GtaVKeyManager: PC_LUT not found at fast-path offsets; will source directly from magic.dat")
+                        GTRadioLogger.log("Rpf7KeyManager: PC_LUT not found at fast-path offsets; will source directly from magic.dat")
                     }
                     return Pair(foundAes, foundLut)
                 }
 
                 // Fallback: Stream PE sections (.data and .rdata)
-                GTRadioLogger.log("GtaVKeyManager: Fast path miss; scanning PE sections...")
+                GTRadioLogger.log("Rpf7KeyManager: Fast path miss; scanning PE sections...")
                 val peSections = parsePeSections(channel)
                 for (sec in peSections) {
                     if (foundAes != null && foundLut != null) break
@@ -565,13 +603,13 @@ object GtaVKeyManager {
                 if (needAes && curAes == null && off + 32 <= bytesRead) {
                     if (sha1Hex(rawBytes, off, 32).equals(PC_AES_KEY_SHA1, ignoreCase = true)) {
                         curAes = rawBytes.copyOfRange(off, off + 32)
-                        GTRadioLogger.log("GtaVKeyManager: PC_AES_KEY found in ${section.name} at 0x${(filePos + off).toString(16)}")
+                        GTRadioLogger.log("Rpf7KeyManager: PC_AES_KEY found in ${section.name} at 0x${(filePos + off).toString(16)}")
                     }
                 }
                 if (needLut && curLut == null && off + 256 <= bytesRead) {
                     if (sha1Hex(rawBytes, off, 256).equals(PC_LUT_SHA1, ignoreCase = true)) {
                         curLut = rawBytes.copyOfRange(off, off + 256)
-                        GTRadioLogger.log("GtaVKeyManager: PC_LUT found in ${section.name} at 0x${(filePos + off).toString(16)}")
+                        GTRadioLogger.log("Rpf7KeyManager: PC_LUT found in ${section.name} at 0x${(filePos + off).toString(16)}")
                     }
                 }
                 off += 8
@@ -592,10 +630,10 @@ object GtaVKeyManager {
         aesKey: ByteArray,
         magicBytes: ByteArray,
         lutFromExe: ByteArray?
-    ): GtaVKeySet {
+    ): Rpf7KeySet {
         val n = magicBytes.size
-        val seed = GtaVCrypto.jenkHash(aesKey)
-        val rng = GtaVCrypto.DotNetRandom(seed)
+        val seed = Rpf7Crypto.jenkHash(aesKey)
+        val rng = Rpf7Crypto.DotNetRandom(seed)
 
         val rb1 = ByteArray(n); rng.nextBytes(rb1)
         val rb2 = ByteArray(n); rng.nextBytes(rb2)
@@ -612,7 +650,7 @@ object GtaVKeyManager {
             db[i] = v.toByte()
         }
 
-        val dec = GtaVCrypto.decryptAesEcb(db, aesKey)
+        val dec = Rpf7Crypto.decryptAesEcb(db, aesKey)
 
         // Raw Deflate inflation (Inflater(true))
         val inflater = Inflater(true)
@@ -658,7 +696,7 @@ object GtaVKeyManager {
         saveToPrivateCache(context, aesKey, finalLut, ngKeysBytes, ngTablesBytes, awcKeyBytes)
 
         val keySet = buildKeySet(aesKey, finalLut, ngKeysBytes, ngTablesBytes, awcKeyBytes)
-        GTRadioLogger.log("GtaVKeyManager: Successfully derived all GTA V keys from magic.dat")
+        GTRadioLogger.log("Rpf7KeyManager: Successfully derived all keys from magic.dat")
         return keySet
     }
 
@@ -670,14 +708,14 @@ object GtaVKeyManager {
         ngTables: ByteArray,
         awcKey: ByteArray
     ) {
-        val keysDir = File(context.filesDir, "gtav_keys")
+        val keysDir = File(context.filesDir, "rpf7_keys")
         if (!keysDir.exists()) keysDir.mkdirs()
 
-        File(keysDir, "gtav_aes_key.dat").writeBytes(aes)
-        File(keysDir, "gtav_lut.dat").writeBytes(lut)
-        File(keysDir, "gtav_ng_keys.dat").writeBytes(ngKeys)
-        File(keysDir, "gtav_ng_tables.dat").writeBytes(ngTables)
-        File(keysDir, "gtav_awc_key.dat").writeBytes(awcKey)
+        File(keysDir, "rpf7_aes_key.dat").writeBytes(aes)
+        File(keysDir, "rpf7_lut.dat").writeBytes(lut)
+        File(keysDir, "rpf7_ng_keys.dat").writeBytes(ngKeys)
+        File(keysDir, "rpf7_ng_tables.dat").writeBytes(ngTables)
+        File(keysDir, "rpf7_awc_key.dat").writeBytes(awcKey)
     }
 
     private fun buildKeySet(
@@ -686,7 +724,7 @@ object GtaVKeyManager {
         ngKeysBytes: ByteArray,
         ngTablesBytes: ByteArray,
         awcKeyBytes: ByteArray
-    ): GtaVKeySet {
+    ): Rpf7KeySet {
         val ngKeys = Array(101) { i ->
             ngKeysBytes.copyOfRange(i * 272, (i + 1) * 272)
         }
@@ -713,7 +751,7 @@ object GtaVKeyManager {
                     ((awcKeyBytes[off + 3].toInt() and 0xFF) shl 24)
         }
 
-        return GtaVKeySet(aes, lut, ngKeys, ngTables, awcKey)
+        return Rpf7KeySet(aes, lut, ngKeys, ngTables, awcKey)
     }
 
     private fun readDocFully(context: Context, doc: DocumentFile): ByteArray {

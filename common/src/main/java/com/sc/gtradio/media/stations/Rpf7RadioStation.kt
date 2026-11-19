@@ -28,14 +28,14 @@ import java.util.Locale
 import java.util.Random
 import java.util.concurrent.atomic.AtomicInteger
 
-data class GtaVSongItem(
-    val archive: GtaVRpfArchive,
+data class Rpf7SongItem(
+    val archive: Rpf7Archive,
     val trackName: String,
     val introKeys: List<String> = emptyList()
 )
 
-data class GtaVClipRef(
-    val archive: GtaVRpfArchive,
+data class Rpf7ClipRef(
+    val archive: Rpf7Archive,
     val trackKey: String
 )
 
@@ -50,14 +50,14 @@ data class GtaVClipRef(
  * - Safe error recovery on ExoPlayer playback errors
  * - Preference-aware metadata and era-accurate album art (cutoff <= 2013)
  */
-@UnstableApi class GtaVRpfRadioStation(
+@UnstableApi class Rpf7RadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
     override val mediaItem: MediaBrowserCompat.MediaItem,
     private val stationKey: String,
-    private val stationArchive: GtaVRpfArchive,
-    private val advertsArchive: GtaVRpfArchive?,
-    private val newsArchive: GtaVRpfArchive?,
+    private val stationArchive: Rpf7Archive,
+    private val advertsArchive: Rpf7Archive?,
+    private val newsArchive: Rpf7Archive?,
     private val player: GTRadioPlayer,
     private val context: Context,
     override var adsEnabled: Boolean,
@@ -82,22 +82,22 @@ data class GtaVClipRef(
     private var isTalkRadio = false
     private var isContinuousMixStation = false
 
-    private val idQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
-    private val soloQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
-    private val generalDjQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
-    private val morningDjList = ArrayList<GtaVClipRef>()
-    private val afternoonDjList = ArrayList<GtaVClipRef>()
-    private val eveningDjList = ArrayList<GtaVClipRef>()
-    private val nightDjList = ArrayList<GtaVClipRef>()
-    private val timeOfDayDjQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
+    private val idQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val soloQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val generalDjQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val morningDjList = ArrayList<Rpf7ClipRef>()
+    private val afternoonDjList = ArrayList<Rpf7ClipRef>()
+    private val eveningDjList = ArrayList<Rpf7ClipRef>()
+    private val nightDjList = ArrayList<Rpf7ClipRef>()
+    private val timeOfDayDjQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
 
-    private val toAdQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
-    private val toNewsQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
-    private val toWeatherQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
+    private val toAdQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val toNewsQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val toWeatherQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
 
-    private val advertQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
-    private val newsQueue = RandomizedDualHeadQueue<GtaVClipRef>(emptyList(), rng)
-    private val songQueue = RandomizedDualHeadQueue<GtaVSongItem>(emptyList(), rng)
+    private val advertQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val newsQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val songQueue = RandomizedDualHeadQueue<Rpf7SongItem>(emptyList(), rng)
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -108,7 +108,7 @@ data class GtaVClipRef(
     private var activeListener: Player.Listener? = null
 
     private var currentSegmentUris: List<Uri> = emptyList()
-    private var currentSongItem: GtaVSongItem? = null
+    private var currentSongItem: Rpf7SongItem? = null
     private var currentMultiChunkNextBlock: Int = 0
     private var currentMultiChunkTotalBlocks: Int = 0
     private var currentMultiChunksPlayedInRow: Int = 0
@@ -133,8 +133,8 @@ data class GtaVClipRef(
         if (initialized) return
         initialized = true
 
-        val sInfo = GtaVMetadataRepository.getStationInfo(stationKey)
-            ?: GtaVMetadataRepository.getStationInfo(stationArchive.rpfName)
+        val sInfo = Rpf7MetadataRepository.getStationInfo(stationKey)
+            ?: Rpf7MetadataRepository.getStationInfo(stationArchive.rpfName)
         isTalkRadio = sInfo?.isTalk ?: (stationKey.contains("talk") || stationArchive.rpfName.contains("talk"))
         isContinuousMixStation = sInfo?.isContinuousMix ?: false
 
@@ -142,22 +142,22 @@ data class GtaVClipRef(
         advertsArchive?.ensureIndexed()
         newsArchive?.ensureIndexed()
 
-        val ids = ArrayList<GtaVClipRef>()
-        val solos = ArrayList<GtaVClipRef>()
-        val generals = ArrayList<GtaVClipRef>()
-        val toAds = ArrayList<GtaVClipRef>()
-        val toNews = ArrayList<GtaVClipRef>()
-        val toWeather = ArrayList<GtaVClipRef>()
+        val ids = ArrayList<Rpf7ClipRef>()
+        val solos = ArrayList<Rpf7ClipRef>()
+        val generals = ArrayList<Rpf7ClipRef>()
+        val toAds = ArrayList<Rpf7ClipRef>()
+        val toNews = ArrayList<Rpf7ClipRef>()
+        val toWeather = ArrayList<Rpf7ClipRef>()
         val introMap = HashMap<String, MutableList<String>>()
-        val songItems = ArrayList<GtaVSongItem>()
+        val songItems = ArrayList<Rpf7SongItem>()
 
         // 1. Build lookup tables for 29-bit Jenkins hashes in voice banks
         val timeHashMap = HashMap<Int, String>()
         for (prefix in listOf("morning", "afternoon", "evening", "night")) {
             for (num in 1..15) {
                 val pad = String.format(Locale.ROOT, "%02d", num)
-                timeHashMap[GtaVCrypto.jenkHashString("${prefix}_$pad") and 0x1FFFFFFF] = prefix
-                timeHashMap[GtaVCrypto.jenkHashString("${prefix}_$num") and 0x1FFFFFFF] = prefix
+                timeHashMap[Rpf7Crypto.jenkHashString("${prefix}_$pad") and 0x1FFFFFFF] = prefix
+                timeHashMap[Rpf7Crypto.jenkHashString("${prefix}_$num") and 0x1FFFFFFF] = prefix
             }
         }
 
@@ -165,8 +165,8 @@ data class GtaVClipRef(
         for (prefix in listOf("to_ad", "to_news", "to_weather")) {
             for (num in 1..15) {
                 val pad = String.format(Locale.ROOT, "%02d", num)
-                toHashMap[GtaVCrypto.jenkHashString("${prefix}_$pad") and 0x1FFFFFFF] = prefix
-                toHashMap[GtaVCrypto.jenkHashString("${prefix}_$num") and 0x1FFFFFFF] = prefix
+                toHashMap[Rpf7Crypto.jenkHashString("${prefix}_$pad") and 0x1FFFFFFF] = prefix
+                toHashMap[Rpf7Crypto.jenkHashString("${prefix}_$num") and 0x1FFFFFFF] = prefix
             }
         }
 
@@ -177,10 +177,10 @@ data class GtaVClipRef(
             if (stem in setOf("time", "to", "intro", "general") || stem.startsWith("id_") || stem.startsWith("mono_solo_")) continue
             for (num in 1..8) {
                 val pad = String.format(Locale.ROOT, "%02d", num)
-                introHashMap[GtaVCrypto.jenkHashString("${stem}_$pad") and 0x1FFFFFFF] = stem
-                introHashMap[GtaVCrypto.jenkHashString("intro_${stem}_$pad") and 0x1FFFFFFF] = stem
-                introHashMap[GtaVCrypto.jenkHashString("${stem}_$num") and 0x1FFFFFFF] = stem
-                introHashMap[GtaVCrypto.jenkHashString("intro_${stem}_$num") and 0x1FFFFFFF] = stem
+                introHashMap[Rpf7Crypto.jenkHashString("${stem}_$pad") and 0x1FFFFFFF] = stem
+                introHashMap[Rpf7Crypto.jenkHashString("intro_${stem}_$pad") and 0x1FFFFFFF] = stem
+                introHashMap[Rpf7Crypto.jenkHashString("${stem}_$num") and 0x1FFFFFFF] = stem
+                introHashMap[Rpf7Crypto.jenkHashString("intro_${stem}_$num") and 0x1FFFFFFF] = stem
             }
         }
 
@@ -188,7 +188,7 @@ data class GtaVClipRef(
         for (sub in stationArchive.getBankSubTracks()) {
             val parent = sub.parentEntryName.lowercase(Locale.ROOT).removeSuffix(".awc")
             val h29 = sub.streamId and 0x1FFFFFFF
-            val ref = GtaVClipRef(stationArchive, sub.subKey)
+            val ref = Rpf7ClipRef(stationArchive, sub.subKey)
 
             when (parent) {
                 "time" -> {
@@ -224,13 +224,13 @@ data class GtaVClipRef(
             val stem = nameLower.removeSuffix(".awc")
             if (stem in setOf("time", "to", "intro", "general")) continue
 
-            val ref = GtaVClipRef(stationArchive, entry.name)
+            val ref = Rpf7ClipRef(stationArchive, entry.name)
             when {
                 stem.startsWith("id_") -> ids.add(ref)
                 stem.startsWith("mono_solo_") -> solos.add(ref)
                 else -> {
                     val intros = introMap[stem] ?: emptyList()
-                    songItems.add(GtaVSongItem(stationArchive, entry.name, intros))
+                    songItems.add(Rpf7SongItem(stationArchive, entry.name, intros))
                 }
             }
         }
@@ -245,20 +245,20 @@ data class GtaVClipRef(
         rebuildTimeOfDayQueue()
 
         // 4. Index Adverts and News
-        val allAdverts = ArrayList<GtaVClipRef>()
+        val allAdverts = ArrayList<Rpf7ClipRef>()
         advertsArchive?.getFileEntries()?.forEach {
-            allAdverts.add(GtaVClipRef(advertsArchive, it.name))
+            allAdverts.add(Rpf7ClipRef(advertsArchive, it.name))
         }
         advertQueue.reset(allAdverts)
 
-        val allNews = ArrayList<GtaVClipRef>()
+        val allNews = ArrayList<Rpf7ClipRef>()
         newsArchive?.getFileEntries()?.forEach {
-            allNews.add(GtaVClipRef(newsArchive, it.name))
+            allNews.add(Rpf7ClipRef(newsArchive, it.name))
         }
         newsQueue.reset(allNews)
 
         GTRadioLogger.log(
-            "GtaVRpfRadioStation[$stationTitle]: Indexed ${songItems.size} songs/shows, " +
+            "Rpf7RadioStation[$stationTitle]: Indexed ${songItems.size} songs/shows, " +
                     "${ids.size} IDs, ${solos.size} solos, ${generals.size} general DJ clips, " +
                     "${morningDjList.size + afternoonDjList.size + eveningDjList.size + nightDjList.size} TOD clips, " +
                     "${allAdverts.size} adverts, ${allNews.size} news"
@@ -327,13 +327,13 @@ data class GtaVClipRef(
         onMetadataChanged?.invoke(_currentMetadata)
     }
 
-    private fun applySongOrShowMetadata(item: GtaVSongItem) {
+    private fun applySongOrShowMetadata(item: Rpf7SongItem) {
         if (!isMetadataEnabled()) {
             setStationOnlyMetadata()
             return
         }
 
-        val meta = GtaVMetadataRepository.getTrackMeta(item.trackName, stationTitle)
+        val meta = Rpf7MetadataRepository.getTrackMeta(item.trackName, stationTitle)
         val displayTitle = meta.title
         val displayArtist = meta.artist
         val isTalk = isTalkRadio || meta.isTalkShow
@@ -357,16 +357,16 @@ data class GtaVClipRef(
         // Regular songs: query era-accurate album art (cutoff <= 2013)
         var art: Bitmap? = stationLogo
         if (isAlbumArtEnabled()) {
-            val cached = GtaVMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
+            val cached = Rpf7MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
             if (cached != null) {
                 art = cached
             } else {
                 val expectedGen = playGeneration.get()
-                GtaVMetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear = 2013) {
+                Rpf7MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear = 2013) {
                     mainHandler.post {
                         if (_playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
-                            val newArt = GtaVMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
-                            val alb = GtaVMetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+                            val newArt = Rpf7MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
+                            val alb = Rpf7MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
                             val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
                             _currentMetadata = buildStationMetadata(
                                 trackTitle = displayTitle,
@@ -383,7 +383,7 @@ data class GtaVClipRef(
             }
         }
 
-        val eraAlbum = GtaVMetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+        val eraAlbum = Rpf7MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
         val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
         _currentMetadata = buildStationMetadata(
             trackTitle = displayTitle,
@@ -446,7 +446,7 @@ data class GtaVClipRef(
 
     override fun stop() {
         val gen = playGeneration.incrementAndGet()
-        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: stop() called (gen=$gen)")
+        GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: stop() called (gen=$gen)")
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
             stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
@@ -473,7 +473,7 @@ data class GtaVClipRef(
 
     override fun play() {
         val currentGen = playGeneration.incrementAndGet()
-        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: play() called (gen=$currentGen)")
+        GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: play() called (gen=$currentGen)")
         ensureStationIndexed()
         _playing = true
         player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
@@ -539,7 +539,7 @@ data class GtaVClipRef(
         if (lastSegment == RadioSegmentType.Song && item != null &&
             currentMultiChunkNextBlock in 1 until currentMultiChunkTotalBlocks
         ) {
-            val isContinuousMix = isContinuousMixStation || GtaVMetadataRepository.getTrackMeta(item.trackName).isContinuousMix
+            val isContinuousMix = isContinuousMixStation || Rpf7MetadataRepository.getTrackMeta(item.trackName).isContinuousMix
             val maxChunksBeforeBreak = if (isContinuousMix) 6 else 100
             val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
             if (currentMultiChunksPlayedInRow < maxChunksBeforeBreak) {
@@ -734,11 +734,11 @@ data class GtaVClipRef(
         val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
         val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
         val chunkThreshold = item.archive.getChunkThresholdFor(item.trackName)
-        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, chunkBlocks=$chunkBlocks, intros=${item.introKeys.size})")
+        GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, chunkBlocks=$chunkBlocks, intros=${item.introKeys.size})")
 
         val mainUri: Uri
         if (totalBlocks > chunkThreshold) {
-            val isContinuousMix = isContinuousMixStation || GtaVMetadataRepository.getTrackMeta(item.trackName).isContinuousMix
+            val isContinuousMix = isContinuousMixStation || Rpf7MetadataRepository.getTrackMeta(item.trackName).isContinuousMix
             val startBlk = if (isContinuousMix && totalBlocks > chunkBlocks * 2) {
                 (rng.nextInt(totalBlocks / chunkBlocks) * chunkBlocks).coerceAtMost(totalBlocks - chunkBlocks)
             } else {
@@ -777,7 +777,7 @@ data class GtaVClipRef(
 
     private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
         if (!_playing || playGeneration.get() != expectedGen) {
-            GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: startPlayback aborted: generation mismatch or not playing (gen=$expectedGen, cur=${playGeneration.get()})")
+            GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: startPlayback aborted: generation mismatch or not playing (gen=$expectedGen, cur=${playGeneration.get()})")
             return
         }
 
@@ -815,7 +815,7 @@ data class GtaVClipRef(
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
+                GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
                 if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
                     alreadyHandled = true
                     player.removeListener(this)

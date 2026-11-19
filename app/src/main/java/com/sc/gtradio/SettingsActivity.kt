@@ -20,10 +20,10 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
-import com.sc.gtradio.media.stations.GtaIvKeyManager
-import com.sc.gtradio.media.stations.GtaIvMetadataRepository
-import com.sc.gtradio.media.stations.GtaVKeyManager
-import com.sc.gtradio.media.stations.GtaVMetadataRepository
+import com.sc.gtradio.media.stations.Rpf3KeyManager
+import com.sc.gtradio.media.stations.Rpf3MetadataRepository
+import com.sc.gtradio.media.stations.Rpf7KeyManager
+import com.sc.gtradio.media.stations.Rpf7MetadataRepository
 import com.sc.gtradio.media.stations.ImportResult
 import com.sc.gtradio.media.stations.Gen2MetadataRepository
 import java.util.concurrent.Executors
@@ -88,8 +88,8 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         private fun buildKeyStatusSummary(ctx: Context, folderName: String? = null): String {
-            val ivStatus = GtaIvKeyManager.getStatusLabel(ctx)
-            val vStatus = if (GtaVKeyManager.isUnlocked(ctx)) "Unlocked" else "Locked"
+            val ivStatus = Rpf3KeyManager.getStatusLabel(ctx)
+            val vStatus = if (Rpf7KeyManager.isUnlocked(ctx)) "Unlocked" else "Locked"
             val base = "GTA IV/EFLC: $ivStatus • GTA V: $vStatus\nGTRadio does not bundle game keys. Select a folder with your own GTAIV.exe, EFLC.exe, GTA5.exe, GTA5_Enhanced.exe, or .dat key files to unlock playback."
             return if (!folderName.isNullOrBlank()) {
                 "$base\nFolder: $folderName"
@@ -144,21 +144,21 @@ class SettingsActivity : AppCompatActivity() {
                 var vMissingMagic = false
 
                 for (folder in foldersToScan) {
-                    if (!GtaIvKeyManager.isUnlocked(ctx)) {
-                        val ivRes = GtaIvKeyManager.importFromFolder(ctx, folder)
-                        if (ivRes is GtaIvKeyManager.ImportResult.Success) {
+                    if (!Rpf3KeyManager.isUnlocked(ctx)) {
+                        val ivRes = Rpf3KeyManager.importFromFolder(ctx, folder)
+                        if (ivRes is Rpf3KeyManager.ImportResult.Success) {
                             ivNewlyUnlocked = true
                         }
                     }
-                    if (!GtaVKeyManager.isUnlocked(ctx)) {
-                        val vRes = GtaVKeyManager.importFromFolder(ctx, folder, allowMagicDownload = true)
+                    if (!Rpf7KeyManager.isUnlocked(ctx)) {
+                        val vRes = Rpf7KeyManager.importFromFolder(ctx, folder, allowMagicDownload = true)
                         if (vRes is ImportResult.Success) {
                             vNewlyUnlocked = true
                         } else if (vRes is ImportResult.MissingMagicDat) {
                             vMissingMagic = true
                         }
                     }
-                    if (GtaIvKeyManager.isUnlocked(ctx) && GtaVKeyManager.isUnlocked(ctx)) {
+                    if (Rpf3KeyManager.isUnlocked(ctx) && Rpf7KeyManager.isUnlocked(ctx)) {
                         break
                     }
                 }
@@ -167,14 +167,14 @@ class SettingsActivity : AppCompatActivity() {
                     val folderName = rootDoc?.name ?: result.lastPathSegment
                     keyPref?.summary = buildKeyStatusSummary(ctx, folderName)
 
-                    val ivStatus = GtaIvKeyManager.getStatusLabel(ctx)
-                    val vStatus = if (GtaVKeyManager.isUnlocked(ctx)) "Unlocked" else "Locked"
+                    val ivStatus = Rpf3KeyManager.getStatusLabel(ctx)
+                    val vStatus = if (Rpf7KeyManager.isUnlocked(ctx)) "Unlocked" else "Locked"
 
                     val toastMsg = when {
                         ivNewlyUnlocked && vNewlyUnlocked -> "Keys Unlocked: GTA IV/EFLC and GTA V!"
                         ivNewlyUnlocked -> "GTA IV/EFLC Key Unlocked! (GTA V: $vStatus)"
                         vNewlyUnlocked -> "GTA V Keys Unlocked! (GTA IV/EFLC: $ivStatus)"
-                        GtaIvKeyManager.isUnlocked(ctx) && GtaVKeyManager.isUnlocked(ctx) -> "All game keys already unlocked! (GTA IV/EFLC: Unlocked, GTA V: Unlocked)"
+                        Rpf3KeyManager.isUnlocked(ctx) && Rpf7KeyManager.isUnlocked(ctx) -> "All game keys already unlocked! (GTA IV/EFLC: Unlocked, GTA V: Unlocked)"
                         vMissingMagic -> "GTA5.exe / GTA5_Enhanced.exe detected, but magic.dat could not be downloaded (offline?). Check internet connection. (GTA IV/EFLC: $ivStatus)"
                         else -> "No game keys found in selected folder. (GTA IV/EFLC: $ivStatus • GTA V: $vStatus)"
                     }
@@ -265,7 +265,7 @@ class SettingsActivity : AppCompatActivity() {
 
             Executors.newSingleThreadExecutor().submit {
                 Gen2MetadataRepository.ensureLoaded(ctx)
-                GtaIvMetadataRepository.ensureLoaded(ctx)
+                Rpf3MetadataRepository.ensureLoaded(ctx)
 
                 // Tuple: (artist, title, maxYear)
                 val allSongs = ArrayList<Triple<String, String, Int>>()
@@ -276,10 +276,10 @@ class SettingsActivity : AppCompatActivity() {
                         allSongs.add(Triple(s.artist, s.cleanTitle, 2004))
                     }
                 }
-                for ((artist, title) in GtaIvMetadataRepository.getAllMusicSongs(ctx)) {
+                for ((artist, title) in Rpf3MetadataRepository.getAllMusicSongs(ctx)) {
                     allSongs.add(Triple(artist, title, 2008))
                 }
-                for ((artist, title) in GtaVMetadataRepository.getAllMusicSongs()) {
+                for ((artist, title) in Rpf7MetadataRepository.getAllMusicSongs()) {
                     allSongs.add(Triple(artist, title, 2013))
                 }
 
@@ -293,7 +293,7 @@ class SettingsActivity : AppCompatActivity() {
                         scanPref.summary = "Scanning ($cur / $total): $artist - $title"
                     }
                     val fetched = if (maxYear == 2013) {
-                        GtaVMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, 2013)
+                        Rpf7MetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, 2013)
                     } else {
                         Gen2MetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, maxYear)
                     }

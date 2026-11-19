@@ -16,7 +16,7 @@ import java.util.concurrent.Executors
 /**
  * Metadata record for a top-level .awc binary entry within an RPF7 archive.
  */
-data class GtaVRpfEntry(
+data class Rpf7Entry(
     val name: String,
     val offset: Long,
     val size: Long,
@@ -38,7 +38,7 @@ data class GtaVRpfEntry(
 /**
  * Metadata record for an individual sub-stream inside a single-channel voice bank (e.g. general.awc).
  */
-data class GtaVBankSubTrack(
+data class Rpf7BankSubTrack(
     val parentEntryName: String,
     val subIndex: Int,
     val streamId: Int,
@@ -60,16 +60,16 @@ data class GtaVBankSubTrack(
  * - 4-bit IMA ADPCM and 16-bit PCM decoding with RSXXTEA block decryption
  * - Chunked block streaming for low latency on mobile (CHUNK_BLOCKS = 4)
  * - Single-threaded background prefetching
- * - Safe 100 MB LRU cache eviction in context.cacheDir/gta5_rpf_tracks
+ * - Safe 100 MB LRU cache eviction in context.cacheDir/rpf7_tracks
  */
-class GtaVRpfArchive(
+class Rpf7Archive(
     private val context: Context,
     val rpfName: String,
     val sourceUri: Uri
 ) {
 
-    private val entries = LinkedHashMap<String, GtaVRpfEntry>()
-    private val bankSubTracks = LinkedHashMap<String, GtaVBankSubTrack>()
+    private val entries = LinkedHashMap<String, Rpf7Entry>()
+    private val bankSubTracks = LinkedHashMap<String, Rpf7BankSubTrack>()
     @Volatile private var indexed = false
 
     companion object {
@@ -182,9 +182,9 @@ class GtaVRpfArchive(
         if (indexed) return
         indexed = true
 
-        val keys = GtaVKeyManager.getKeys(context)
+        val keys = Rpf7KeyManager.getKeys(context)
         if (keys == null) {
-            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: GTA V keys not unlocked. Indexing skipped.")
+            GTRadioLogger.log("Rpf7Archive[$rpfName]: GTA V keys not unlocked. Indexing skipped.")
             return
         }
 
@@ -194,13 +194,13 @@ class GtaVRpfArchive(
                     indexRpf(channel, keys)
                 }
             }
-            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
+            GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Indexing failed", e)
+            GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexing failed", e)
         }
     }
 
-    private fun indexRpf(channel: FileChannel, keys: GtaVKeySet) {
+    private fun indexRpf(channel: FileChannel, keys: Rpf7KeySet) {
         val fileSize = channel.size()
         if (fileSize < 16) return
 
@@ -211,7 +211,7 @@ class GtaVRpfArchive(
 
         val magic = hdrBuf.int
         if (magic != 0x52504637) { // "RPF7"
-            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Invalid RPF7 magic: 0x${Integer.toHexString(magic)}")
+            GTRadioLogger.log("Rpf7Archive[$rpfName]: Invalid RPF7 magic: 0x${Integer.toHexString(magic)}")
             return
         }
 
@@ -233,9 +233,9 @@ class GtaVRpfArchive(
         channel.read(bufNames)
 
         // Resolve valid NG key index
-        val keyIndex = GtaVCrypto.findValidRpf7TocKeyIndex(entriesEnc, rpfName, fileSize, keys)
-        val decEntries = GtaVCrypto.decryptNGWithKeyIndex(entriesEnc, keyIndex, keys)
-        val decNames = GtaVCrypto.decryptNGWithKeyIndex(namesEnc, keyIndex, keys)
+        val keyIndex = Rpf7Crypto.findValidRpf7TocKeyIndex(entriesEnc, rpfName, fileSize, keys)
+        val decEntries = Rpf7Crypto.decryptNGWithKeyIndex(entriesEnc, keyIndex, keys)
+        val decNames = Rpf7Crypto.decryptNGWithKeyIndex(namesEnc, keyIndex, keys)
 
         for (i in 0 until entryCount) {
             val base = i * 16
@@ -272,7 +272,7 @@ class GtaVRpfArchive(
                     try {
                         indexAwcEntry(channel, name, fOffset, actualSize, isEncrypted, isCompressed, keys)
                     } catch (e: Exception) {
-                        GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed indexing AWC $name", e)
+                        GTRadioLogger.log("Rpf7Archive[$rpfName]: Failed indexing AWC $name", e)
                     }
                 }
             }
@@ -286,7 +286,7 @@ class GtaVRpfArchive(
         rpfSize: Long,
         isEncrypted: Boolean,
         isCompressed: Boolean,
-        keys: GtaVKeySet
+        keys: Rpf7KeySet
     ) {
         // Read header prefix (16384 bytes covers header, stream infos, and chunk table)
         val hdrLen = Math.min(rpfSize, 16384L).toInt()
@@ -299,7 +299,7 @@ class GtaVRpfArchive(
         var wholeFileEncrypted = false
         val magicLe = readIntLe(rawHdr, 0)
         if (magicLe != 0x54414441 && magicLe != 0x41444154) { // Not "ADAT"
-            GtaVCrypto.decryptRsxxtea(rawHdr, 0, rawHdr.size, keys.awcKey)
+            Rpf7Crypto.decryptRsxxtea(rawHdr, 0, rawHdr.size, keys.awcKey)
             val checkMagic = readIntLe(rawHdr, 0)
             if (checkMagic == 0x54414441 || checkMagic == 0x41444154) {
                 wholeFileEncrypted = true
@@ -389,7 +389,7 @@ class GtaVRpfArchive(
                 }
             }
 
-            val entry = GtaVRpfEntry(
+            val entry = Rpf7Entry(
                 name = entryName,
                 offset = rpfOffset,
                 size = rpfSize,
@@ -439,7 +439,7 @@ class GtaVRpfArchive(
                         val subKey = "${baseName}_sub$sIdx"
                         val hexKey = "${baseName}_0x${Integer.toHexString(sInfo.id).padStart(8, '0')}"
 
-                        val subTrack = GtaVBankSubTrack(
+                        val subTrack = Rpf7BankSubTrack(
                             parentEntryName = entryName,
                             subIndex = sIdx,
                             streamId = sInfo.id,
@@ -457,7 +457,7 @@ class GtaVRpfArchive(
                 }
             }
 
-            val parentEntry = GtaVRpfEntry(
+            val parentEntry = Rpf7Entry(
                 name = entryName,
                 offset = rpfOffset,
                 size = rpfSize,
@@ -479,23 +479,23 @@ class GtaVRpfArchive(
     // Public Accessors
     // ------------------------------------------------------------------------
 
-    fun getFileEntries(): Collection<GtaVRpfEntry> {
+    fun getFileEntries(): Collection<Rpf7Entry> {
         ensureIndexed()
         return entries.values
     }
 
-    fun getBankSubTracks(): Collection<GtaVBankSubTrack> {
+    fun getBankSubTracks(): Collection<Rpf7BankSubTrack> {
         ensureIndexed()
         return bankSubTracks.values
     }
 
-    fun getBankSubTracksFor(parentName: String): List<GtaVBankSubTrack> {
+    fun getBankSubTracksFor(parentName: String): List<Rpf7BankSubTrack> {
         ensureIndexed()
         val cleanParent = if (parentName.endsWith(".awc")) parentName else "$parentName.awc"
         return bankSubTracks.values.filter { it.parentEntryName.equals(cleanParent, ignoreCase = true) }
     }
 
-    fun getEntry(name: String): GtaVRpfEntry? {
+    fun getEntry(name: String): Rpf7Entry? {
         ensureIndexed()
         val cleanName = if (name.endsWith(".awc")) name else "$name.awc"
         return entries[cleanName] ?: entries[name]
@@ -559,7 +559,7 @@ class GtaVRpfArchive(
             return materializeBankSubTrackUri(subTrack)
         }
 
-        GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Track key not found: $trackKey")
+        GTRadioLogger.log("Rpf7Archive[$rpfName]: Track key not found: $trackKey")
         return null
     }
 
@@ -589,7 +589,7 @@ class GtaVRpfArchive(
     }
 
     /**
-     * Alias for [materializeBlockChunkUri] for parity with GtaIvRpfArchive.
+     * Alias for [materializeBlockChunkUri] for parity with Rpf3Archive.
      */
     fun materializeAudioChunkUri(
         entryName: String,
@@ -617,11 +617,11 @@ class GtaVRpfArchive(
     }
 
     private fun materializeBlockChunkInternal(
-        entry: GtaVRpfEntry,
+        entry: Rpf7Entry,
         startBlock: Int,
         blockCount: Int
     ): Uri? {
-        val cacheDir = File(context.cacheDir, "gta5_rpf_tracks")
+        val cacheDir = File(context.cacheDir, "rpf7_tracks")
         if (!cacheDir.exists()) cacheDir.mkdirs()
 
         val uriHash = Integer.toHexString(sourceUri.toString().hashCode())
@@ -647,7 +647,7 @@ class GtaVRpfArchive(
 
             val tempFile = File(cacheDir, "${safeFileName}_${Thread.currentThread().id}.tmp")
             try {
-                val keys = GtaVKeyManager.getKeys(context)
+                val keys = Rpf7KeyManager.getKeys(context)
                     ?: throw IllegalStateException("Keys not unlocked")
 
                 context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
@@ -667,7 +667,7 @@ class GtaVRpfArchive(
                     }
                 }
             } catch (e: Exception) {
-                GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed decoding ${entry.name} blk[$startBlock..${startBlock+blockCount}]", e)
+                GTRadioLogger.log("Rpf7Archive[$rpfName]: Failed decoding ${entry.name} blk[$startBlock..${startBlock+blockCount}]", e)
             } finally {
                 if (tempFile.exists()) tempFile.delete()
             }
@@ -677,10 +677,10 @@ class GtaVRpfArchive(
 
     private fun decodeEnhancedMp3MultiChannelBlocks(
         channel: FileChannel,
-        entry: GtaVRpfEntry,
+        entry: Rpf7Entry,
         startBlock: Int,
         blockCount: Int,
-        keys: GtaVKeySet,
+        keys: Rpf7KeySet,
         tempFile: File
     ) {
         val blkSize = entry.blockSize
@@ -706,7 +706,7 @@ class GtaVRpfArchive(
 
             // Decrypt block payload if encrypted
             if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
-                GtaVCrypto.decryptRsxxtea(blockBytes, 0, actualBlockSize and -4, keys.awcKey)
+                Rpf7Crypto.decryptRsxxtea(blockBytes, 0, actualBlockSize and -4, keys.awcKey)
             }
 
             // Parse 2048-byte Codec-7 block header
@@ -792,19 +792,19 @@ class GtaVRpfArchive(
     private fun decodeMp3ChannelToPcm(mp3Bytes: ByteArray, sampleRate: Int): ShortArray {
         if (mp3Bytes.isEmpty()) return ShortArray(0)
         return try {
-            GtaVMp3Decoder.nativeDecodeMonoMp3(mp3Bytes)
+            NativeMp3Decoder.nativeDecodeMonoMp3(mp3Bytes)
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Native MP3 decoding failed", e)
+            GTRadioLogger.log("Rpf7Archive[$rpfName]: Native MP3 decoding failed", e)
             ShortArray(0)
         }
     }
 
     private fun decodeMultiChannelBlocks(
         channel: FileChannel,
-        entry: GtaVRpfEntry,
+        entry: Rpf7Entry,
         startBlock: Int,
         blockCount: Int,
-        keys: GtaVKeySet,
+        keys: Rpf7KeySet,
         tempFile: File
     ) {
         val blkSize = entry.blockSize
@@ -832,7 +832,7 @@ class GtaVRpfArchive(
 
             // RSXXTEA decrypt block payload if encrypted
             if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
-                GtaVCrypto.decryptRsxxtea(rawBlock, 0, bytesRead, keys.awcKey)
+                Rpf7Crypto.decryptRsxxtea(rawBlock, 0, bytesRead, keys.awcKey)
             }
 
             // Parse block channel headers
@@ -895,8 +895,8 @@ class GtaVRpfArchive(
         }
     }
 
-    private fun materializeBankSubTrackUri(subTrack: GtaVBankSubTrack): Uri? {
-        val cacheDir = File(context.cacheDir, "gta5_rpf_tracks")
+    private fun materializeBankSubTrackUri(subTrack: Rpf7BankSubTrack): Uri? {
+        val cacheDir = File(context.cacheDir, "rpf7_tracks")
         if (!cacheDir.exists()) cacheDir.mkdirs()
 
         val uriHash = Integer.toHexString(sourceUri.toString().hashCode())
@@ -921,7 +921,7 @@ class GtaVRpfArchive(
 
             val tempFile = File(cacheDir, "${safeFileName}_${Thread.currentThread().id}.tmp")
             try {
-                val keys = GtaVKeyManager.getKeys(context)
+                val keys = Rpf7KeyManager.getKeys(context)
                     ?: throw IllegalStateException("Keys not unlocked")
 
                 val clipRaw = ByteArray(subTrack.dataSize)
@@ -935,7 +935,7 @@ class GtaVRpfArchive(
 
                 // Decrypt SingleChannelEncrypt payload
                 if (subTrack.isEncrypted) {
-                    GtaVCrypto.decryptRsxxtea(clipRaw, 0, clipRaw.size and -4, keys.awcKey)
+                    Rpf7Crypto.decryptRsxxtea(clipRaw, 0, clipRaw.size and -4, keys.awcKey)
                 }
 
                 if (isMp3) {
@@ -970,7 +970,7 @@ class GtaVRpfArchive(
                     }
                 }
             } catch (e: Exception) {
-                GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed decoding bank sub-track ${subTrack.subKey}", e)
+                GTRadioLogger.log("Rpf7Archive[$rpfName]: Failed decoding bank sub-track ${subTrack.subKey}", e)
             } finally {
                 if (tempFile.exists()) tempFile.delete()
             }
@@ -1025,7 +1025,11 @@ class GtaVRpfArchive(
     private fun cleanCacheIfNeeded(cacheDir: File, currentSafeFileName: String) {
         val allFiles = ArrayList<File>()
         cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        File(context.cacheDir, "at3_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
         File(context.cacheDir, "gen2_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        File(context.cacheDir, "rpf3_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        File(context.cacheDir, "gta5_rpf_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        File(context.cacheDir, "gta4_rpf_tracks_v3").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
         File(context.cacheDir, "sa_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
         File(context.cacheDir, "sa_raw_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
         if (allFiles.isEmpty()) return

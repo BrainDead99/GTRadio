@@ -449,11 +449,11 @@ import java.util.ArrayList
                 newsReportsEnabled
             )
         }
-        if (group.isGtaIvRpfGroup) {
-            if (!GtaIvKeyManager.isUnlocked(this)) {
-                GtaIvKeyManager.ensureKeyLoaded(this)
+        if (group.isRpf3Group) {
+            if (!Rpf3KeyManager.isUnlocked(this)) {
+                Rpf3KeyManager.ensureKeyLoaded(this)
             }
-            if (!GtaIvKeyManager.isUnlocked(this)) {
+            if (!Rpf3KeyManager.isUnlocked(this)) {
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(
                         applicationContext,
@@ -464,7 +464,7 @@ import java.util.ArrayList
                 return null
             }
             com.sc.gtradio.common.GTRadioLogger.log("GTRadioMusicService: Creating GTA IV RPF station for ${stationMedia.description.title}")
-            return group.createGtaIvRpfStation(
+            return group.createRpf3Station(
                 group.mediaItem.mediaId!!,
                 stationMedia.mediaId!!,
                 stationMedia,
@@ -475,11 +475,11 @@ import java.util.ArrayList
                 newsReportsEnabled
             )
         }
-        if (group.isGtaVRpfGroup) {
-            if (!GtaVKeyManager.isUnlocked(this)) {
-                GtaVKeyManager.ensureKeysLoaded(this)
+        if (group.isRpf7Group) {
+            if (!Rpf7KeyManager.isUnlocked(this)) {
+                Rpf7KeyManager.ensureKeysLoaded(this)
             }
-            if (!GtaVKeyManager.isUnlocked(this)) {
+            if (!Rpf7KeyManager.isUnlocked(this)) {
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(
                         applicationContext,
@@ -490,7 +490,7 @@ import java.util.ArrayList
                 return null
             }
             com.sc.gtradio.common.GTRadioLogger.log("GTRadioMusicService: Creating GTA V RPF station for ${stationMedia.description.title}")
-            return group.createGtaVRpfStation(
+            return group.createRpf7Station(
                 group.mediaItem.mediaId!!,
                 stationMedia.mediaId!!,
                 stationMedia,
