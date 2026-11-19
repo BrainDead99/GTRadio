@@ -205,11 +205,11 @@ init {
         gen1GameCode = gameCode
         generation = 1
         groupName = when (gameCode) {
-            1 -> "GTA Vice City (ADF Audio)"
-            2 -> "GTA III (WAV Audio)"
-            3 -> "GTA: Liberty City Stories (AT3 Audio)"
-            4 -> "GTA: Vice City Stories (AT3 Audio)"
-            else -> "GTA Radio (Gen1 Audio)"
+            1 -> "GTA Vice City (PC)"
+            2 -> "GTA III (PC)"
+            3 -> "GTA: Liberty City Stories (PSP)"
+            4 -> "GTA: Vice City Stories (PSP)"
+            else -> "GTA Radio (Gen1)"
         }
         mediaId = UUID.randomUUID().toString()
 
@@ -331,7 +331,7 @@ init {
         val isEflc = stationRpfFiles.any { it.name.lowercase() in setOf("radio_vcfm.rpf", "radio_ramjamfm.rpf", "radio_meditation.rpf") } ||
             allFiles.any { it.name.lowercase() in setOf("ep1_sfx.rpf", "ep2_sfx.rpf") } ||
             folderDoc.name?.uppercase()?.contains("EFLC") == true
-        groupName = if (isEflc) "GTA: Episodes from Liberty City (RPF Audio)" else "GTA IV (RPF Audio)"
+        groupName = if (isEflc) "GTA: Episodes from Liberty City (PC)" else "GTA IV (PC)"
         mediaId = UUID.randomUUID().toString()
 
         val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
@@ -499,7 +499,7 @@ init {
         isRpf7Group = true
         generation = 3
         val isEnhanced = detectIsEnhanced(allFiles, stationRpfFiles)
-        groupName = if (isEnhanced) "GTA V Enhanced (RPF Audio)" else "GTA V (RPF Audio)"
+        groupName = if (isEnhanced) "GTA V Enhanced (PC)" else "GTA V (PC)"
         val idPrefix = if (isEnhanced) "gtav_enh_" else "gtav_"
         mediaId = "$idPrefix${UUID.randomUUID()}"
 
@@ -749,7 +749,7 @@ init {
             rawContainerType = Gen2ContainerType.MOBILE_OSW
             rawStreamUris.putAll(oswMatches)
             generation = 2
-            groupName = "GTA San Andreas (Mobile OSW)"
+            groupName = "GTA San Andreas (Mobile)"
             GTRadioLogger.log("detectGen2RawStreams: Detected Mobile OSW in '${folderDoc.name}' (${oswMatches.keys})")
             return true
         } else if (radioPcCount >= 1) {
@@ -757,7 +757,7 @@ init {
             rawContainerType = Gen2ContainerType.PC_STREAM
             rawStreamUris.putAll(pcMatches)
             generation = 2
-            groupName = "GTA San Andreas (PC Streams)"
+            groupName = "GTA San Andreas (PC)"
             GTRadioLogger.log("detectGen2RawStreams: Detected PC Streams in '${folderDoc.name}' (${pcMatches.keys})")
             return true
         }

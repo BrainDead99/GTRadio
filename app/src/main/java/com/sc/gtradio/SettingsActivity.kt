@@ -261,7 +261,7 @@ class SettingsActivity : AppCompatActivity() {
             if (isScanning) return
             val ctx = context?.applicationContext ?: return
             isScanning = true
-            scanPref.summary = "Preparing GTA SA, GTA IV & GTA V tracklists..."
+            scanPref.summary = "Preparing tracklists for album art scan..."
 
             Executors.newSingleThreadExecutor().submit {
                 Gen2MetadataRepository.ensureLoaded(ctx)
@@ -304,7 +304,7 @@ class SettingsActivity : AppCompatActivity() {
                 val finalOk = okCount
                 mainHandler.post {
                     isScanning = false
-                    scanPref.summary = "Complete! Cached $finalOk / $total era-accurate GTA SA, GTA IV & GTA V album covers offline."
+                    scanPref.summary = "Complete! Cached $finalOk / $total era-accurate album covers offline."
                 }
             }
         }
