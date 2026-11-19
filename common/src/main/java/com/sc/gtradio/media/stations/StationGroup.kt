@@ -13,6 +13,7 @@ import android.support.v4.media.MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.documentfile.provider.DocumentFile
+import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.FileUtils
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
@@ -44,6 +45,13 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     private var gtaIvAdvertsArchive: GtaIvRpfArchive? = null
     private var gtaIvNewsArchive: GtaIvRpfArchive? = null
     private var gtaIvWeatherArchive: GtaIvRpfArchive? = null
+
+    var isGtaVRpfGroup: Boolean = false
+        private set
+    private val gtaVStationArchives = HashMap<String, GtaVRpfArchive>()
+    private val gtaVStationKeys = HashMap<String, String>()
+    private var gtaVAdvertsArchive: GtaVRpfArchive? = null
+    private var gtaVNewsArchive: GtaVRpfArchive? = null
     var mediaId: String = ""
     var isValid: Boolean = true
     var isRawSaGroup: Boolean = false
@@ -118,9 +126,12 @@ init {
         } catch (e: Exception) {
             emptyArray()
         }
-        val detectedRpfFiles = detectGtaIvRpfs(rpfScanFiles)
-        val detectedGen1Pair = if (detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
-        if (detectedRpfFiles.isNotEmpty()) {
+        val detectedGtaVRpfFiles = detectGtaVRpfs(rpfScanFiles)
+        val detectedRpfFiles = if (detectedGtaVRpfFiles.isEmpty()) detectGtaIvRpfs(rpfScanFiles) else emptyList()
+        val detectedGen1Pair = if (detectedGtaVRpfFiles.isEmpty() && detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
+        if (detectedGtaVRpfFiles.isNotEmpty()) {
+            setupGtaVRpfGroup(rpfScanFiles, detectedGtaVRpfFiles)
+        } else if (detectedRpfFiles.isNotEmpty()) {
             setupGtaIvRpfGroup(rpfScanFiles, detectedRpfFiles)
         } else if (detectedGen1Pair != null) {
             setupGen1RawGroup(rpfScanFiles, detectedGen1Pair.first, detectedGen1Pair.second)
@@ -144,7 +155,7 @@ init {
         }
 
         mediaItem = getMediaItem(folderDoc, simpleFiles, groupName)
-        stationList = if (isRawSaGroup || isGtaIvRpfGroup || isGen1RawGroup) {
+        stationList = if (isRawSaGroup || isGtaIvRpfGroup || isGen1RawGroup || isGtaVRpfGroup) {
             getRawSaStationsList()
         } else {
             getStationsList(folderDoc)
@@ -433,6 +444,168 @@ init {
             advertsArchive = gtaIvAdvertsArchive,
             newsArchive = gtaIvNewsArchive,
             weatherArchive = gtaIvWeatherArchive,
+            player = player,
+            context = ctx,
+            adsEnabled = adsEnabled,
+            weatherChatterEnabled = weatherChatterEnabled,
+            newsReportsEnabled = newsReportsEnabled
+        )
+    }
+
+    private fun detectGtaVRpfs(files: Array<SimpleFileInfo>): List<SimpleFileInfo> {
+        val knownStationRpfs = GtaVMetadataRepository.stationInfoByRpf.keys
+        val matched = files.filter { !it.isDirectory && knownStationRpfs.contains(it.name.lowercase()) }
+        if (matched.isNotEmpty()) {
+            GTRadioLogger.log("detectGtaVRpfs: Detected ${matched.size} GTA V RPF stations in '${folderDoc.name}'")
+        }
+        return matched
+    }
+
+    private fun setupGtaVRpfGroup(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
+        isGtaVRpfGroup = true
+        generation = 3
+        groupName = "GTA V (RPF Audio)"
+        mediaId = UUID.randomUUID().toString()
+
+        // Automatic First-Startup Key Discovery
+        if (!GtaVKeyManager.isUnlocked(context)) {
+            tryAutoImportKeys()
+        }
+
+        val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
+        val logoUri = allFiles.find { !it.isDirectory && it.name.uppercase().contains("LOGO") }?.uri
+            ?: themePack?.groupLogoUri
+        val logoBitmap = DynamicThemeManager.loadBitmap(context, logoUri, 512)
+            ?: FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
+
+        for (f in allFiles) {
+            if (f.isDirectory) continue
+            when (f.name.lowercase()) {
+                "radio_adverts.rpf" -> gtaVAdvertsArchive = GtaVRpfArchive(context, f.name, f.uri)
+                "radio_news.rpf" -> gtaVNewsArchive = GtaVRpfArchive(context, f.name, f.uri)
+            }
+        }
+
+        // Sort in official station order (RADIO_01 through RADIO_18)
+        val sortedStationFiles = stationRpfFiles.sortedBy { stFile ->
+            val lower = stFile.name.lowercase()
+            val orderMatch = Regex("radio_(\\d+)").find(lower)?.groupValues?.get(1)?.toIntOrNull()
+            orderMatch ?: 999
+        }
+
+        for (stFile in sortedStationFiles) {
+            val stKey = stFile.name.lowercase()
+            val info = GtaVMetadataRepository.getStationInfo(stKey)
+            val stDisplayName = info?.stationName ?: stFile.name
+            val stMediaId = UUID.randomUUID().toString()
+
+            val arch = GtaVRpfArchive(context, stFile.name, stFile.uri)
+
+            val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
+            val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
+
+            val meta = MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, stMediaId)
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stDisplayName)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, stDisplayName)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
+                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupName)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, iconBmp)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, iconBmp)
+                .build()
+
+            stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
+            gtaVStationArchives[stMediaId] = arch
+            gtaVStationArchives[stDisplayName] = arch
+            gtaVStationKeys[stMediaId] = stKey
+            gtaVStationKeys[stDisplayName] = stKey
+        }
+
+        if (stationList.isNotEmpty()) {
+            val groupMeta = MediaMetadataCompat.Builder()
+                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)
+                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, groupName)
+                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, groupName)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, logoBitmap)
+                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, logoBitmap)
+                .build()
+            mediaItem = MediaBrowserCompat.MediaItem(groupMeta.description, FLAG_BROWSABLE)
+            isValid = true
+        }
+    }
+
+    private fun tryAutoImportKeys() {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        // (a) Check saved Settings key folder URI
+        val savedKeyUri = prefs.getString("gtav_key_folder_uri", null)
+        if (!savedKeyUri.isNullOrBlank()) {
+            try {
+                DocumentFile.fromTreeUri(context, Uri.parse(savedKeyUri))?.let { keyDoc ->
+                    if (keyDoc.isDirectory) {
+                        val res = GtaVKeyManager.importFromFolder(context, keyDoc, allowMagicDownload = true)
+                        if (res is ImportResult.Success) {
+                            GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from saved settings folder: ${keyDoc.uri}")
+                            return
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("StationGroup[GTA V]: Auto-import from saved key folder failed", e)
+            }
+        }
+
+        // (b) Check GTA V audio folder itself (e.g. where GTA5.exe or .dat files live alongside RADIO_*.rpf)
+        try {
+            val res = GtaVKeyManager.importFromFolder(context, folderDoc, allowMagicDownload = true)
+            if (res is ImportResult.Success) {
+                GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from audio folder: ${folderDoc.uri}")
+                return
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.log("StationGroup[GTA V]: Auto-import from audio folder failed", e)
+        }
+
+        // (c) Check parent/root library folder
+        try {
+            folderDoc.parentFile?.let { parentDoc ->
+                if (parentDoc.isDirectory) {
+                    val res = GtaVKeyManager.importFromFolder(context, parentDoc, allowMagicDownload = true)
+                    if (res is ImportResult.Success) {
+                        GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from parent folder: ${parentDoc.uri}")
+                        return
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.log("StationGroup[GTA V]: Auto-import from parent folder failed", e)
+        }
+    }
+
+    fun createGtaVRpfStation(
+        stationGroupId: String,
+        stMediaId: String,
+        stMediaItem: MediaBrowserCompat.MediaItem,
+        player: GTRadioPlayer,
+        ctx: Context,
+        adsEnabled: Boolean,
+        weatherChatterEnabled: Boolean,
+        newsReportsEnabled: Boolean
+    ): RadioStation {
+        val titleKey = stMediaItem.description.title?.toString() ?: ""
+        val arch = gtaVStationArchives[stMediaId]
+            ?: gtaVStationArchives[titleKey]
+            ?: gtaVStationArchives.values.first()
+        val stKey = gtaVStationKeys[stMediaId]
+            ?: gtaVStationKeys[titleKey]
+            ?: arch.rpfName.lowercase()
+        return GtaVRpfRadioStation(
+            stationGroupId = stationGroupId,
+            mediaId = stMediaId,
+            mediaItem = stMediaItem,
+            stationKey = stKey,
+            stationArchive = arch,
+            advertsArchive = gtaVAdvertsArchive,
+            newsArchive = gtaVNewsArchive,
             player = player,
             context = ctx,
             adsEnabled = adsEnabled,

@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.ResultReceiver
 import androidx.preference.PreferenceManager
 import android.support.v4.media.MediaBrowserCompat.MediaItem
@@ -43,10 +45,11 @@ import java.util.ArrayList
         override fun onSharedPreferenceChanged(prefs: SharedPreferences?, key: String?) {
             if (prefs != null) {
                 when(key) {
-                    "dynamic_theme_uri", resources.getString(R.string.radio_folders_uri_key) -> {
-                        GTRadioLogger.log("GTRadioMusicService: Library URI preference changed, rescanning...")
+                    "dynamic_theme_uri", "gtav_key_folder_uri", "gtav_keys_updated", resources.getString(R.string.radio_folders_uri_key) -> {
+                        GTRadioLogger.log("GTRadioMusicService: Library URI or GTA V keys changed, rescanning...")
                         this@GTRadioMusicService.activeStation?.stop()
                         this@GTRadioMusicService.activeStation = null
+                        this@GTRadioMusicService.stationCache.clear()
                         this@GTRadioMusicService.stationGroups = this@GTRadioMusicService.getStationGroups()
                         this@GTRadioMusicService.fullStationList = this@GTRadioMusicService.getFullStationList()
                         this@GTRadioMusicService.notifyChildrenChanged("root")
@@ -449,6 +452,32 @@ import java.util.ArrayList
         if (group.isGtaIvRpfGroup) {
             com.sc.gtradio.common.GTRadioLogger.log("GTRadioMusicService: Creating GTA IV RPF station for ${stationMedia.description.title}")
             return group.createGtaIvRpfStation(
+                group.mediaItem.mediaId!!,
+                stationMedia.mediaId!!,
+                stationMedia,
+                radioPlayer,
+                applicationContext,
+                adsEnabled,
+                weatherChatterEnabled,
+                newsReportsEnabled
+            )
+        }
+        if (group.isGtaVRpfGroup) {
+            if (!GtaVKeyManager.isUnlocked(this)) {
+                GtaVKeyManager.ensureKeysLoaded(this)
+            }
+            if (!GtaVKeyManager.isUnlocked(this)) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        applicationContext,
+                        "GTA V keys not found. Select a folder with GTA5.exe or key files in Settings -> GTA V Key Directory.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return null
+            }
+            com.sc.gtradio.common.GTRadioLogger.log("GTRadioMusicService: Creating GTA V RPF station for ${stationMedia.description.title}")
+            return group.createGtaVRpfStation(
                 group.mediaItem.mediaId!!,
                 stationMedia.mediaId!!,
                 stationMedia,

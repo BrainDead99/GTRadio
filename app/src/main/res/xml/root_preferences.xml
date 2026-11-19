@@ -7,6 +7,12 @@
             app:key="@string/radio_folders_uri_key"
             app:title="@string/music_path_title"
             app:useSimpleSummaryProvider="true" />
+
+        <Preference
+            android:clickable="true"
+            app:key="gtav_key_folder_uri"
+            app:title="GTA V Key Directory"
+            app:summary="Select folder containing GTA5.exe or extracted GTA V key files" />
     </PreferenceCategory>
 
     <PreferenceCategory app:title="@string/theme_header">

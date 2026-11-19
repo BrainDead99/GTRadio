@@ -1,0 +1,905 @@
+package com.sc.gtradio.media.stations
+
+import android.content.Context
+import android.net.Uri
+import com.sc.gtradio.common.GTRadioLogger
+import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.channels.FileChannel
+import java.util.Locale
+import java.util.concurrent.Executors
+
+/**
+ * Metadata record for a top-level .awc binary entry within an RPF7 archive.
+ */
+data class GtaVRpfEntry(
+    val name: String,
+    val offset: Long,
+    val size: Long,
+    val isEncrypted: Boolean,
+    val isCompressed: Boolean,
+    val isMultiChannel: Boolean,
+    val numBlocks: Int,
+    val sampleRate: Int,
+    val channels: Int,
+    val totalSamples: Int,
+    val dataChunkOffset: Long = 0L,
+    val dataChunkSize: Long = 0L,
+    val blockSize: Int = 0,
+    val isMultiChannelEncrypt: Boolean = false,
+    val isWholeFileEncrypted: Boolean = false
+)
+
+/**
+ * Metadata record for an individual sub-stream inside a single-channel voice bank (e.g. general.awc).
+ */
+data class GtaVBankSubTrack(
+    val parentEntryName: String,
+    val subIndex: Int,
+    val streamId: Int,
+    val subKey: String,
+    val dataOffsetInRpf: Long,
+    val dataSize: Int,
+    val numSamples: Int,
+    val sampleRate: Int,
+    val codec: Int,
+    val isEncrypted: Boolean
+)
+
+/**
+ * Reader and on-demand audio decoder for GTA V Legacy PC RPF7 archives containing AWC audio.
+ * Supports:
+ * - Lazy indexing via FileChannel through SAF contentResolver
+ * - RPF7 TOC NG decryption with automatic key index resolution
+ * - Fast header parsing of multi-channel streams and single-channel voice banks
+ * - 4-bit IMA ADPCM and 16-bit PCM decoding with RSXXTEA block decryption
+ * - Chunked block streaming for low latency on mobile (CHUNK_BLOCKS = 4)
+ * - Single-threaded background prefetching
+ * - Safe 100 MB LRU cache eviction in context.cacheDir/gta5_rpf_tracks
+ */
+class GtaVRpfArchive(
+    private val context: Context,
+    val rpfName: String,
+    val sourceUri: Uri
+) {
+
+    private val entries = LinkedHashMap<String, GtaVRpfEntry>()
+    private val bankSubTracks = LinkedHashMap<String, GtaVBankSubTrack>()
+    @Volatile private var indexed = false
+
+    companion object {
+        const val CHUNK_BLOCKS = 4
+        const val CHUNK_THRESHOLD_BLOCKS = 12
+
+        private const val MAX_CACHE_BYTES = 100L * 1024L * 1024L // 100 MB cap
+        private const val TARGET_CACHE_BYTES = 65L * 1024L * 1024L // Evict down to 65 MB
+
+        private val prefetchExecutor = Executors.newSingleThreadExecutor()
+        private val decodeLock = Any()
+
+        private val IMA_INDEX_TABLE = intArrayOf(
+            -1, -1, -1, -1, 2, 4, 6, 8,
+            -1, -1, -1, -1, 2, 4, 6, 8
+        )
+
+        private val IMA_STEP_TABLE = intArrayOf(
+            7, 8, 9, 10, 11, 12, 13, 14, 16, 17,
+            19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+            50, 55, 60, 66, 73, 80, 88, 97, 107, 118,
+            130, 143, 157, 173, 190, 209, 230, 253, 279, 307,
+            337, 371, 408, 449, 494, 544, 598, 658, 724, 796,
+            876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+            2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358,
+            5894, 6484, 7132, 7845, 8630, 9493, 10442, 11487, 12635, 13899,
+            15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767
+        )
+
+        private fun clip(value: Int, min: Int, max: Int): Int {
+            if (value < min) return min
+            if (value > max) return max
+            return value
+        }
+
+        /**
+         * Decodes GTA V 4-bit IMA ADPCM data.
+         * In GTA V, each 2048-byte sub-block starts with a 4-byte header:
+         * byte 0: stepIndex, byte 1: unused, bytes 2..3: initial predictor (16-bit signed).
+         * followed by 2044 bytes of ADPCM nibbles (low nibble first).
+         */
+        fun decodeAdpcm(
+            data: ByteArray,
+            offset: Int,
+            length: Int,
+            sampleCount: Int,
+            outPcm: ShortArray,
+            outOffset: Int
+        ): Int {
+            var predictor = 0
+            var stepIndex = 0
+            var readingOffset = offset
+            val endOffset = offset + length
+            var writingOffset = outOffset
+            var samplesLeft = sampleCount
+            var bytesInBlock = 0
+
+            while (readingOffset < endOffset && samplesLeft > 0) {
+                if (bytesInBlock == 0) {
+                    if (readingOffset + 4 > endOffset) break
+                    stepIndex = clip(data[readingOffset].toInt() and 0xFF, 0, 88)
+                    val p0 = data[readingOffset + 2].toInt() and 0xFF
+                    val p1 = data[readingOffset + 3].toInt()
+                    predictor = (p0 or (p1 shl 8)).toShort().toInt()
+                    bytesInBlock = 2044
+                    readingOffset += 4
+                } else {
+                    val b = data[readingOffset].toInt() and 0xFF
+
+                    // Low nibble
+                    val nibble0 = b and 0x0F
+                    var step = IMA_STEP_TABLE[stepIndex]
+                    var diff = ((((nibble0 and 7) shl 1) + 1) * step) shr 3
+                    if ((nibble0 and 8) != 0) diff = -diff
+                    predictor += diff
+                    stepIndex = clip(stepIndex + IMA_INDEX_TABLE[nibble0], 0, 88)
+                    if (writingOffset < outPcm.size) {
+                        outPcm[writingOffset++] = clip(predictor, -32768, 32767).toShort()
+                    }
+                    samplesLeft--
+
+                    // High nibble
+                    if (samplesLeft > 0) {
+                        val nibble1 = (b shr 4) and 0x0F
+                        step = IMA_STEP_TABLE[stepIndex]
+                        diff = ((((nibble1 and 7) shl 1) + 1) * step) shr 3
+                        if ((nibble1 and 8) != 0) diff = -diff
+                        predictor += diff
+                        stepIndex = clip(stepIndex + IMA_INDEX_TABLE[nibble1], 0, 88)
+                        if (writingOffset < outPcm.size) {
+                            outPcm[writingOffset++] = clip(predictor, -32768, 32767).toShort()
+                        }
+                        samplesLeft--
+                    }
+
+                    bytesInBlock--
+                    readingOffset++
+                }
+            }
+            return writingOffset - outOffset
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Indexing
+    // ------------------------------------------------------------------------
+
+    @Synchronized
+    fun ensureIndexed() {
+        if (indexed) return
+        indexed = true
+
+        val keys = GtaVKeyManager.getKeys(context)
+        if (keys == null) {
+            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: GTA V keys not unlocked. Indexing skipped.")
+            return
+        }
+
+        try {
+            context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { channel ->
+                    indexRpf(channel, keys)
+                }
+            }
+            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
+        } catch (e: Exception) {
+            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Indexing failed", e)
+        }
+    }
+
+    private fun indexRpf(channel: FileChannel, keys: GtaVKeySet) {
+        val fileSize = channel.size()
+        if (fileSize < 16) return
+
+        val hdrBuf = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+        channel.position(0)
+        channel.read(hdrBuf)
+        hdrBuf.flip()
+
+        val magic = hdrBuf.int
+        if (magic != 0x52504637) { // "RPF7"
+            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Invalid RPF7 magic: 0x${Integer.toHexString(magic)}")
+            return
+        }
+
+        val entryCount = hdrBuf.int
+        val namesLength = hdrBuf.int
+        val enc = hdrBuf.int
+
+        if (entryCount <= 0 || namesLength <= 0) return
+
+        val entriesEnc = ByteArray(entryCount * 16)
+        val namesEnc = ByteArray(namesLength)
+
+        val bufEntries = ByteBuffer.wrap(entriesEnc)
+        channel.position(16)
+        channel.read(bufEntries)
+
+        val bufNames = ByteBuffer.wrap(namesEnc)
+        channel.position(16L + entryCount * 16L)
+        channel.read(bufNames)
+
+        // Resolve valid NG key index
+        val keyIndex = GtaVCrypto.findValidRpf7TocKeyIndex(entriesEnc, rpfName, fileSize, keys)
+        val decEntries = GtaVCrypto.decryptNGWithKeyIndex(entriesEnc, keyIndex, keys)
+        val decNames = GtaVCrypto.decryptNGWithKeyIndex(namesEnc, keyIndex, keys)
+
+        for (i in 0 until entryCount) {
+            val base = i * 16
+            val y = readIntLe(decEntries, base)
+            val x = readIntLe(decEntries, base + 4)
+
+            if (x == 0x7FFFFF00) {
+                // Directory entry
+                continue
+            }
+
+            if ((x and 0x80000000.toInt()) == 0) {
+                // Binary file entry
+                val bufQ = readLongLe(decEntries, base)
+                val nameOff = (bufQ and 0xFFFFL).toInt()
+                val fSize = ((bufQ ushr 16) and 0xFFFFFFL)
+                val fOffset = (((bufQ ushr 40) and 0xFFFFFFL) * 512L)
+
+                val uncompressed = readIntLe(decEntries, base + 8).toLong() and 0xFFFFFFFFL
+                val encType = readIntLe(decEntries, base + 12)
+
+                val isEncrypted = (encType == 1)
+                val isCompressed = (fSize > 0)
+                val actualSize = if (isCompressed) fSize else uncompressed
+
+                // Resolve filename
+                var nEnd = nameOff
+                while (nEnd < decNames.size && decNames[nEnd] != 0.toByte()) {
+                    nEnd++
+                }
+                val name = String(decNames, nameOff, nEnd - nameOff, Charsets.ISO_8859_1)
+
+                if (name.lowercase(Locale.ROOT).endsWith(".awc")) {
+                    try {
+                        indexAwcEntry(channel, name, fOffset, actualSize, isEncrypted, isCompressed, keys)
+                    } catch (e: Exception) {
+                        GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed indexing AWC $name", e)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun indexAwcEntry(
+        channel: FileChannel,
+        entryName: String,
+        rpfOffset: Long,
+        rpfSize: Long,
+        isEncrypted: Boolean,
+        isCompressed: Boolean,
+        keys: GtaVKeySet
+    ) {
+        // Read header prefix (16384 bytes covers header, stream infos, and chunk table)
+        val hdrLen = Math.min(rpfSize, 16384L).toInt()
+        val rawHdr = ByteArray(hdrLen)
+        val buf = ByteBuffer.wrap(rawHdr)
+        channel.position(rpfOffset)
+        channel.read(buf)
+
+        // Decrypt AWC whole-file encryption if needed
+        var wholeFileEncrypted = false
+        val magicLe = readIntLe(rawHdr, 0)
+        if (magicLe != 0x54414441 && magicLe != 0x41444154) { // Not "ADAT"
+            GtaVCrypto.decryptRsxxtea(rawHdr, 0, rawHdr.size, keys.awcKey)
+            val checkMagic = readIntLe(rawHdr, 0)
+            if (checkMagic == 0x54414441 || checkMagic == 0x41444154) {
+                wholeFileEncrypted = true
+            } else {
+                return
+            }
+        }
+
+        val version = readShortLe(rawHdr, 4).toInt() and 0xFFFF
+        val flags = readShortLe(rawHdr, 6).toInt() and 0xFFFF
+        val streamCount = readIntLe(rawHdr, 8)
+        val dataOffset = readIntLe(rawHdr, 12)
+
+        val chunkIndicesFlag = (flags and 1) != 0
+        val singleChannelEncrypt = (flags and 2) != 0
+        val isMultiChannel = (flags and 4) != 0
+        val multiChannelEncrypt = (flags and 8) != 0
+
+        var pos = 16
+        if (chunkIndicesFlag) {
+            pos += streamCount * 2
+        }
+
+        data class TempStreamInfo(val id: Int, val chunkCount: Int)
+        data class TempChunkInfo(val type: Int, val size: Int, val offset: Int)
+
+        val streams = ArrayList<TempStreamInfo>()
+        for (s in 0 until streamCount) {
+            if (pos + 4 > rawHdr.size) break
+            val rawVal = readIntLe(rawHdr, pos)
+            pos += 4
+            val chunks = (rawVal ushr 29) and 0x7
+            val id = rawVal and 0x1FFFFFFF
+            streams.add(TempStreamInfo(id, chunks))
+        }
+
+        val allChunksByStream = ArrayList<List<TempChunkInfo>>()
+        for (s in streams) {
+            val cList = ArrayList<TempChunkInfo>()
+            for (c in 0 until s.chunkCount) {
+                if (pos + 8 > rawHdr.size) break
+                val rawChunk = readLongLe(rawHdr, pos)
+                pos += 8
+                val cType = ((rawChunk ushr 56) and 0xFFL).toInt()
+                val cSize = ((rawChunk ushr 28) and 0x0FFFFFFFL).toInt()
+                val cOffset = (rawChunk and 0x0FFFFFFFL).toInt()
+                cList.add(TempChunkInfo(cType, cSize, cOffset))
+            }
+            allChunksByStream.add(cList)
+        }
+
+        if (isMultiChannel) {
+            // Find StreamFormatChunk (0x48) and DataChunk (0x55)
+            var blkCount = 1
+            var blkSize = 524288
+            var chCount = 2
+            var chSampleRate = 48000
+            var chSamples = 0
+            var dataChunkOff = dataOffset.toLong()
+            var dataChunkSize = rpfSize - dataOffset
+
+            for (sIdx in 0 until streams.size) {
+                val chunks = allChunksByStream.getOrNull(sIdx) ?: continue
+                for (chunk in chunks) {
+                    if (chunk.type == 0x48) { // StreamFormat chunk
+                        val sfBuf = ByteBuffer.allocate(Math.min(chunk.size, 128)).order(ByteOrder.LITTLE_ENDIAN)
+                        channel.position(rpfOffset + chunk.offset)
+                        channel.read(sfBuf)
+                        sfBuf.flip()
+                        if (sfBuf.remaining() >= 12) {
+                            blkCount = sfBuf.int
+                            blkSize = sfBuf.int
+                            chCount = sfBuf.int
+                            if (sfBuf.remaining() >= 16) {
+                                sfBuf.int // id
+                                chSamples = sfBuf.int
+                                sfBuf.short // headroom
+                                chSampleRate = sfBuf.short.toInt() and 0xFFFF
+                            }
+                        }
+                    } else if (chunk.type == 0x55) { // Data chunk
+                        dataChunkOff = chunk.offset.toLong()
+                        dataChunkSize = chunk.size.toLong()
+                    }
+                }
+            }
+
+            val entry = GtaVRpfEntry(
+                name = entryName,
+                offset = rpfOffset,
+                size = rpfSize,
+                isEncrypted = isEncrypted,
+                isCompressed = isCompressed,
+                isMultiChannel = true,
+                numBlocks = blkCount,
+                sampleRate = chSampleRate,
+                channels = chCount,
+                totalSamples = chSamples,
+                dataChunkOffset = dataChunkOff,
+                dataChunkSize = dataChunkSize,
+                blockSize = blkSize,
+                isMultiChannelEncrypt = multiChannelEncrypt,
+                isWholeFileEncrypted = wholeFileEncrypted
+            )
+            entries[entryName] = entry
+        } else {
+            // Single-channel voice bank (e.g. general.awc, intro.awc, to.awc)
+            val parentEntry = GtaVRpfEntry(
+                name = entryName,
+                offset = rpfOffset,
+                size = rpfSize,
+                isEncrypted = isEncrypted,
+                isCompressed = isCompressed,
+                isMultiChannel = false,
+                numBlocks = 1,
+                sampleRate = 48000,
+                channels = 1,
+                totalSamples = 0,
+                isWholeFileEncrypted = wholeFileEncrypted
+            )
+            entries[entryName] = parentEntry
+
+            val baseName = entryName.removeSuffix(".awc")
+            for (sIdx in 0 until streams.size) {
+                val sInfo = streams[sIdx]
+                val chunks = allChunksByStream.getOrNull(sIdx) ?: continue
+                val fmtChunk = chunks.firstOrNull { it.type == 0xFA }
+                val datChunk = chunks.firstOrNull { it.type == 0x55 }
+
+                if (fmtChunk != null && datChunk != null) {
+                    val fmtBuf = ByteBuffer.allocate(Math.min(fmtChunk.size, 32)).order(ByteOrder.LITTLE_ENDIAN)
+                    channel.position(rpfOffset + fmtChunk.offset)
+                    channel.read(fmtBuf)
+                    fmtBuf.flip()
+
+                    if (fmtBuf.remaining() >= 20) {
+                        val numSamples = fmtBuf.int
+                        fmtBuf.int // loopPoint
+                        val sRate = fmtBuf.short.toInt() and 0xFFFF
+                        fmtBuf.short // headroom
+                        fmtBuf.short // loopBegin
+                        fmtBuf.short // loopEnd
+                        fmtBuf.short // playEnd
+                        fmtBuf.get() // playBegin
+                        val codec = fmtBuf.get().toInt() and 0xFF
+
+                        val subKey = "${baseName}_sub$sIdx"
+                        val hexKey = "${baseName}_0x${Integer.toHexString(sInfo.id).padStart(8, '0')}"
+
+                        val subTrack = GtaVBankSubTrack(
+                            parentEntryName = entryName,
+                            subIndex = sIdx,
+                            streamId = sInfo.id,
+                            subKey = subKey,
+                            dataOffsetInRpf = rpfOffset + datChunk.offset,
+                            dataSize = datChunk.size,
+                            numSamples = numSamples,
+                            sampleRate = sRate,
+                            codec = codec,
+                            isEncrypted = singleChannelEncrypt
+                        )
+                        bankSubTracks[subKey] = subTrack
+                        bankSubTracks[hexKey] = subTrack
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Public Accessors
+    // ------------------------------------------------------------------------
+
+    fun getFileEntries(): Collection<GtaVRpfEntry> {
+        ensureIndexed()
+        return entries.values
+    }
+
+    fun getBankSubTracks(): Collection<GtaVBankSubTrack> {
+        ensureIndexed()
+        return bankSubTracks.values
+    }
+
+    fun getBankSubTracksFor(parentName: String): List<GtaVBankSubTrack> {
+        ensureIndexed()
+        val cleanParent = if (parentName.endsWith(".awc")) parentName else "$parentName.awc"
+        return bankSubTracks.values.filter { it.parentEntryName.equals(cleanParent, ignoreCase = true) }
+    }
+
+    fun getEntry(name: String): GtaVRpfEntry? {
+        ensureIndexed()
+        val cleanName = if (name.endsWith(".awc")) name else "$name.awc"
+        return entries[cleanName] ?: entries[name]
+    }
+
+    fun getEntryBlockCount(name: String): Int {
+        return getEntry(name)?.numBlocks ?: 1
+    }
+
+    fun hasEntry(name: String): Boolean {
+        ensureIndexed()
+        val cleanName = if (name.endsWith(".awc")) name else "$name.awc"
+        return entries.containsKey(cleanName) || entries.containsKey(name) || bankSubTracks.containsKey(name)
+    }
+
+    // ------------------------------------------------------------------------
+    // Audio Materialization (Decoding to 16-bit PCM WAV)
+    // ------------------------------------------------------------------------
+
+    /**
+     * Main entry point to materialize audio for [trackKey].
+     * For large MultiChannel tracks (> CHUNK_THRESHOLD_BLOCKS), decodes the first chunk (0..CHUNK_BLOCKS)
+     * and triggers prefetch of the next chunk.
+     * For small MultiChannel tracks, decodes all blocks into a full WAV.
+     * For single-channel bank clips, decodes the clip into a mono WAV.
+     */
+    fun materializeAudioUri(trackKey: String): Uri? {
+        ensureIndexed()
+        val cleanKey = trackKey.trim()
+
+        // 1. Check if it's a MultiChannel entry
+        val entry = getEntry(cleanKey)
+        if (entry != null && entry.isMultiChannel) {
+            return if (entry.numBlocks > CHUNK_THRESHOLD_BLOCKS) {
+                materializeBlockChunkUri(entry.name, 0, CHUNK_BLOCKS)
+            } else {
+                materializeBlockChunkUri(entry.name, 0, entry.numBlocks)
+            }
+        }
+
+        // 2. Check if it's a Bank sub-track
+        val subTrack = bankSubTracks[cleanKey]
+        if (subTrack != null) {
+            return materializeBankSubTrackUri(subTrack)
+        }
+
+        GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Track key not found: $trackKey")
+        return null
+    }
+
+    /**
+     * Decodes [blockCount] blocks starting from [startBlock] of [entryName] to a stereo 16-bit WAV.
+     * Automatically triggers prefetch of the subsequent chunk.
+     */
+    fun materializeBlockChunkUri(
+        entryName: String,
+        startBlock: Int,
+        blockCount: Int = CHUNK_BLOCKS
+    ): Uri? {
+        ensureIndexed()
+        val entry = getEntry(entryName) ?: return null
+        val actualStart = Math.max(0, startBlock)
+        val actualCount = Math.min(blockCount, entry.numBlocks - actualStart)
+        if (actualCount <= 0) return null
+
+        val uri = materializeBlockChunkInternal(entry, actualStart, actualCount)
+
+        // Background prefetch next chunk if more blocks remain
+        if (actualStart + actualCount < entry.numBlocks) {
+            prefetchBlockChunk(entry.name, actualStart + actualCount, CHUNK_BLOCKS)
+        }
+
+        return uri
+    }
+
+    /**
+     * Alias for [materializeBlockChunkUri] for parity with GtaIvRpfArchive.
+     */
+    fun materializeAudioChunkUri(
+        entryName: String,
+        startBlock: Int,
+        blockCount: Int = CHUNK_BLOCKS
+    ): Uri? = materializeBlockChunkUri(entryName, startBlock, blockCount)
+
+    /**
+     * Asynchronously decodes the next chunk in the background so transitions are instantaneous.
+     */
+    fun prefetchBlockChunk(
+        entryName: String,
+        startBlock: Int,
+        blockCount: Int = CHUNK_BLOCKS,
+        isCancelled: (() -> Boolean)? = null
+    ) {
+        val entry = getEntry(entryName) ?: return
+        if (startBlock >= entry.numBlocks) return
+        prefetchExecutor.execute {
+            if (isCancelled?.invoke() == true) return@execute
+            try {
+                materializeBlockChunkInternal(entry, startBlock, blockCount)
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun materializeBlockChunkInternal(
+        entry: GtaVRpfEntry,
+        startBlock: Int,
+        blockCount: Int
+    ): Uri? {
+        val cacheDir = File(context.cacheDir, "gta5_rpf_tracks")
+        if (!cacheDir.exists()) cacheDir.mkdirs()
+
+        val isFullTrack = (startBlock == 0 && blockCount >= entry.numBlocks)
+        val chunkSuffix = if (isFullTrack) "" else "_blk${startBlock}_${blockCount}"
+        val safeBase = entry.name.removeSuffix(".awc").replace(Regex("[^A-Za-z0-9_]"), "_")
+        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${safeBase}$chunkSuffix.wav"
+        val outFile = File(cacheDir, safeFileName)
+
+        // Cache hit
+        if (outFile.exists() && outFile.length() > 44) {
+            outFile.setLastModified(System.currentTimeMillis())
+            return Uri.fromFile(outFile)
+        }
+
+        synchronized(decodeLock) {
+            if (outFile.exists() && outFile.length() > 44) {
+                outFile.setLastModified(System.currentTimeMillis())
+                return Uri.fromFile(outFile)
+            }
+
+            cleanCacheIfNeeded(cacheDir, safeFileName)
+
+            val tempFile = File(cacheDir, "${safeFileName}_${Thread.currentThread().id}.tmp")
+            try {
+                val keys = GtaVKeyManager.getKeys(context)
+                    ?: throw IllegalStateException("Keys not unlocked")
+
+                context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                    FileInputStream(pfd.fileDescriptor).channel.use { channel ->
+                        decodeMultiChannelBlocks(channel, entry, startBlock, blockCount, keys, tempFile)
+                    }
+                }
+
+                if (tempFile.exists() && tempFile.length() > 44) {
+                    if (outFile.exists()) outFile.delete()
+                    if (tempFile.renameTo(outFile)) {
+                        return Uri.fromFile(outFile)
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed decoding ${entry.name} blk[$startBlock..${startBlock+blockCount}]", e)
+            } finally {
+                if (tempFile.exists()) tempFile.delete()
+            }
+        }
+        return null
+    }
+
+    private fun decodeMultiChannelBlocks(
+        channel: FileChannel,
+        entry: GtaVRpfEntry,
+        startBlock: Int,
+        blockCount: Int,
+        keys: GtaVKeySet,
+        tempFile: File
+    ) {
+        val blkSize = entry.blockSize
+        val baseDataOffset = entry.offset + entry.dataChunkOffset
+        val chCount = Math.max(1, entry.channels)
+
+        // Temporary decode buffers (each byte of ADPCM decompresses to 2 PCM samples)
+        val rawBlock = ByteArray(blkSize)
+        val maxSamplesPerChannel = Math.max((blkSize / 2048 + 2) * 4088, blkSize * 2 + 8192)
+        val chLeftPcm = ShortArray(maxSamplesPerChannel)
+        val chRightPcm = ShortArray(maxSamplesPerChannel)
+
+        var totalFramesDecoded = 0
+        val pcmDataBaos = java.io.ByteArrayOutputStream(blockCount * blkSize * 4)
+
+        for (b in 0 until blockCount) {
+            val curBlockIdx = startBlock + b
+            if (curBlockIdx >= entry.numBlocks) break
+
+            val blockOffset = baseDataOffset + curBlockIdx.toLong() * blkSize.toLong()
+            val buf = ByteBuffer.wrap(rawBlock)
+            channel.position(blockOffset)
+            val bytesRead = channel.read(buf)
+            if (bytesRead <= 0) break
+
+            // RSXXTEA decrypt block payload if encrypted
+            if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
+                GtaVCrypto.decryptRsxxtea(rawBlock, 0, bytesRead, keys.awcKey)
+            }
+
+            // Parse block channel headers
+            var rpos = 0
+            val startBlks = IntArray(chCount)
+            val blockCounts = IntArray(chCount)
+            val sampleCounts = IntArray(chCount)
+
+            for (c in 0 until chCount) {
+                startBlks[c] = readIntLe(rawBlock, rpos)
+                blockCounts[c] = readIntLe(rawBlock, rpos + 4)
+                sampleCounts[c] = readIntLe(rawBlock, rpos + 12)
+                rpos += 24
+            }
+
+            for (c in 0 until chCount) {
+                rpos += blockCounts[c] * 4
+            }
+
+            val pad = (2048 - (rpos % 2048)) % 2048
+            rpos += pad
+
+            // Decode each channel
+            var ch0Samples = 0
+            var ch1Samples = 0
+
+            for (c in 0 until chCount) {
+                val bcnt = blockCounts[c] * 2048
+                val sCount = sampleCounts[c]
+
+                if (c == 0) {
+                    ch0Samples = decodeAdpcm(rawBlock, rpos, bcnt, sCount, chLeftPcm, 0)
+                } else if (c == 1) {
+                    ch1Samples = decodeAdpcm(rawBlock, rpos, bcnt, sCount, chRightPcm, 0)
+                }
+                rpos += bcnt
+            }
+
+            // Interleave PCM frames (Left, Right)
+            val frames = if (chCount > 1) Math.min(ch0Samples, ch1Samples) else ch0Samples
+            for (f in 0 until frames) {
+                val l = chLeftPcm[f].toInt()
+                pcmDataBaos.write(l and 0xFF)
+                pcmDataBaos.write((l ushr 8) and 0xFF)
+
+                if (chCount > 1) {
+                    val r = chRightPcm[f].toInt()
+                    pcmDataBaos.write(r and 0xFF)
+                    pcmDataBaos.write((r ushr 8) and 0xFF)
+                }
+            }
+            totalFramesDecoded += frames
+        }
+
+        // Write final WAV file
+        val pcmBytes = pcmDataBaos.toByteArray()
+        BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
+            writeWavHeader(out, pcmBytes.size, entry.sampleRate, chCount)
+            out.write(pcmBytes)
+        }
+    }
+
+    private fun materializeBankSubTrackUri(subTrack: GtaVBankSubTrack): Uri? {
+        val cacheDir = File(context.cacheDir, "gta5_rpf_tracks")
+        if (!cacheDir.exists()) cacheDir.mkdirs()
+
+        val safeParent = subTrack.parentEntryName.removeSuffix(".awc").replace(Regex("[^A-Za-z0-9_]"), "_")
+        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${safeParent}_0x${Integer.toHexString(subTrack.streamId).padStart(8, '0')}.wav"
+        val outFile = File(cacheDir, safeFileName)
+
+        if (outFile.exists() && outFile.length() > 44) {
+            outFile.setLastModified(System.currentTimeMillis())
+            return Uri.fromFile(outFile)
+        }
+
+        synchronized(decodeLock) {
+            if (outFile.exists() && outFile.length() > 44) {
+                outFile.setLastModified(System.currentTimeMillis())
+                return Uri.fromFile(outFile)
+            }
+
+            cleanCacheIfNeeded(cacheDir, safeFileName)
+
+            val tempFile = File(cacheDir, "${safeFileName}_${Thread.currentThread().id}.tmp")
+            try {
+                val keys = GtaVKeyManager.getKeys(context)
+                    ?: throw IllegalStateException("Keys not unlocked")
+
+                val clipRaw = ByteArray(subTrack.dataSize)
+                context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                    FileInputStream(pfd.fileDescriptor).channel.use { channel ->
+                        val buf = ByteBuffer.wrap(clipRaw)
+                        channel.position(subTrack.dataOffsetInRpf)
+                        channel.read(buf)
+                    }
+                }
+
+                // Decrypt SingleChannelEncrypt payload
+                if (subTrack.isEncrypted) {
+                    GtaVCrypto.decryptRsxxtea(clipRaw, 0, clipRaw.size, keys.awcKey)
+                }
+
+                val pcmBytes: ByteArray = if (subTrack.codec == 0 || subTrack.codec == 1) {
+                    clipRaw
+                } else {
+                    val outPcm = ShortArray(subTrack.numSamples + 2048)
+                    val decodedCount = decodeAdpcm(clipRaw, 0, clipRaw.size, subTrack.numSamples, outPcm, 0)
+                    val out = ByteArray(decodedCount * 2)
+                    for (i in 0 until decodedCount) {
+                        val s = outPcm[i].toInt()
+                        out[i * 2] = (s and 0xFF).toByte()
+                        out[i * 2 + 1] = ((s ushr 8) and 0xFF).toByte()
+                    }
+                    out
+                }
+
+                BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
+                    writeWavHeader(out, pcmBytes.size, subTrack.sampleRate, 1)
+                    out.write(pcmBytes)
+                }
+
+                if (tempFile.exists() && tempFile.length() > 44) {
+                    if (outFile.exists()) outFile.delete()
+                    if (tempFile.renameTo(outFile)) {
+                        return Uri.fromFile(outFile)
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed decoding bank sub-track ${subTrack.subKey}", e)
+            } finally {
+                if (tempFile.exists()) tempFile.delete()
+            }
+        }
+        return null
+    }
+
+    // ------------------------------------------------------------------------
+    // WAV Header & Cache Management
+    // ------------------------------------------------------------------------
+
+    private fun writeWavHeader(
+        out: java.io.OutputStream,
+        pcmDataBytes: Int,
+        sampleRate: Int,
+        channels: Int
+    ) {
+        val totalDataLen = pcmDataBytes + 36
+        val byteRate = sampleRate * channels * 2
+        val blockAlign = channels * 2
+
+        val header = ByteArray(44)
+        header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
+        header[4] = (totalDataLen and 0xFF).toByte()
+        header[5] = ((totalDataLen ushr 8) and 0xFF).toByte()
+        header[6] = ((totalDataLen ushr 16) and 0xFF).toByte()
+        header[7] = ((totalDataLen ushr 24) and 0xFF).toByte()
+        header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
+        header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
+        header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
+        header[20] = 1; header[21] = 0 // 1 = PCM
+        header[22] = channels.toByte(); header[23] = 0
+        header[24] = (sampleRate and 0xFF).toByte()
+        header[25] = ((sampleRate ushr 8) and 0xFF).toByte()
+        header[26] = ((sampleRate ushr 16) and 0xFF).toByte()
+        header[27] = ((sampleRate ushr 24) and 0xFF).toByte()
+        header[28] = (byteRate and 0xFF).toByte()
+        header[29] = ((byteRate ushr 8) and 0xFF).toByte()
+        header[30] = ((byteRate ushr 16) and 0xFF).toByte()
+        header[31] = ((byteRate ushr 24) and 0xFF).toByte()
+        header[32] = blockAlign.toByte(); header[33] = 0
+        header[34] = 16; header[35] = 0 // 16-bit
+        header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
+        header[40] = (pcmDataBytes and 0xFF).toByte()
+        header[41] = ((pcmDataBytes ushr 8) and 0xFF).toByte()
+        header[42] = ((pcmDataBytes ushr 16) and 0xFF).toByte()
+        header[43] = ((pcmDataBytes ushr 24) and 0xFF).toByte()
+
+        out.write(header)
+    }
+
+    private fun cleanCacheIfNeeded(cacheDir: File, currentSafeFileName: String) {
+        val files = cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") } ?: return
+        var totalBytes = 0L
+        for (f in files) totalBytes += f.length()
+
+        if (totalBytes > MAX_CACHE_BYTES) {
+            val now = System.currentTimeMillis()
+            val sorted = files.sortedBy { it.lastModified() }
+            for (f in sorted) {
+                if (totalBytes <= TARGET_CACHE_BYTES) break
+                val ageMs = now - f.lastModified()
+                // Never delete active file or files modified within the last 15 seconds
+                if (f.name != currentSafeFileName && ageMs > 15_000L) {
+                    val len = f.length()
+                    if (f.delete()) totalBytes -= len
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // Binary Parsing Helpers
+    // ------------------------------------------------------------------------
+
+    private fun readIntLe(b: ByteArray, off: Int): Int {
+        return (b[off].toInt() and 0xFF) or
+                ((b[off + 1].toInt() and 0xFF) shl 8) or
+                ((b[off + 2].toInt() and 0xFF) shl 16) or
+                ((b[off + 3].toInt() and 0xFF) shl 24)
+    }
+
+    private fun readShortLe(b: ByteArray, off: Int): Short {
+        return ((b[off].toInt() and 0xFF) or ((b[off + 1].toInt() and 0xFF) shl 8)).toShort()
+    }
+
+    private fun readLongLe(b: ByteArray, off: Int): Long {
+        var res = 0L
+        for (i in 0 until 8) {
+            res = res or ((b[off + i].toLong() and 0xFFL) shl (i * 8))
+        }
+        return res
+    }
+}

@@ -14,12 +14,16 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.documentfile.provider.DocumentFile
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.stations.GtaIvMetadataRepository
+import com.sc.gtradio.media.stations.GtaVKeyManager
+import com.sc.gtradio.media.stations.GtaVMetadataRepository
+import com.sc.gtradio.media.stations.ImportResult
 import com.sc.gtradio.media.stations.SaMetadataRepository
 import java.util.concurrent.Executors
 
@@ -82,6 +86,50 @@ class SettingsActivity : AppCompatActivity() {
             context?.let { DynamicThemeManager.forceRescan(it) }
         }
 
+        private val gtavKeyResultLauncher = registerForActivityResult(contract) { result: Uri? ->
+            if (result == null) return@registerForActivityResult
+            GTRadioLogger.log("SettingsActivity: Selected GTA V Key directory URI: $result")
+            val ctx = context?.applicationContext ?: return@registerForActivityResult
+            try {
+                activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {}
+
+            val sharedPref = PreferenceManager.getDefaultSharedPreferences(ctx)
+            sharedPref.edit().putString("gtav_key_folder_uri", result.toString()).apply()
+
+            val gtavKeyPref = findPreference<Preference>("gtav_key_folder_uri")
+            gtavKeyPref?.summary = "Scanning for keys..."
+
+            Executors.newSingleThreadExecutor().submit {
+                val folderDoc = DocumentFile.fromTreeUri(ctx, result)
+                val importRes = if (folderDoc != null && folderDoc.isDirectory) {
+                    GtaVKeyManager.importFromFolder(ctx, folderDoc, allowMagicDownload = true)
+                } else {
+                    ImportResult.NoKeysFound
+                }
+
+                mainHandler.post {
+                    val status = GtaVKeyManager.getKeyStatusSummary(ctx)
+                    gtavKeyPref?.summary = "$status\nFolder: ${folderDoc?.name ?: result.lastPathSegment}"
+                    when (importRes) {
+                        is ImportResult.Success -> {
+                            Toast.makeText(ctx, "GTA V Keys Unlocked! (${importRes.source})", Toast.LENGTH_LONG).show()
+                        }
+                        is ImportResult.MissingMagicDat -> {
+                            Toast.makeText(ctx, "GTA5.exe found, but magic.dat could not be downloaded (offline?). Check internet connection.", Toast.LENGTH_LONG).show()
+                        }
+                        is ImportResult.Error -> {
+                            Toast.makeText(ctx, "Key Import Error: ${importRes.message}", Toast.LENGTH_LONG).show()
+                        }
+                        ImportResult.NoKeysFound -> {
+                            Toast.makeText(ctx, "No GTA V keys or GTA5.exe found in selected folder.", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    sharedPref.edit().putLong("gtav_keys_updated", System.currentTimeMillis()).apply()
+                }
+            }
+        }
+
         override fun onCreatePreferences(savedInstanceState: Bundle?, rootKey: String?) {
             setPreferencesFromResource(R.xml.root_preferences, rootKey)
 
@@ -89,6 +137,17 @@ class SettingsActivity : AppCompatActivity() {
             pathPref?.setOnPreferenceClickListener {
                 libraryResultLauncher.launch(null)
                 true
+            }
+
+            val gtavKeyPref = findPreference<Preference>("gtav_key_folder_uri")
+            gtavKeyPref?.let { pref ->
+                val status = GtaVKeyManager.getKeyStatusSummary(requireContext())
+                val currentUri = PreferenceManager.getDefaultSharedPreferences(requireContext()).getString("gtav_key_folder_uri", "") ?: ""
+                pref.summary = if (currentUri.isNotBlank()) "$status\nFolder: ${Uri.parse(currentUri).lastPathSegment}" else status
+                pref.setOnPreferenceClickListener {
+                    gtavKeyResultLauncher.launch(null)
+                    true
+                }
             }
 
             val themePathPref = findPreference<Preference>(getString(R.string.dynamic_theme_uri_key))
@@ -141,7 +200,7 @@ class SettingsActivity : AppCompatActivity() {
             if (isScanning) return
             val ctx = context?.applicationContext ?: return
             isScanning = true
-            scanPref.summary = "Preparing GTA SA & GTA IV tracklists..."
+            scanPref.summary = "Preparing GTA SA, GTA IV & GTA V tracklists..."
 
             Executors.newSingleThreadExecutor().submit {
                 SaMetadataRepository.ensureLoaded(ctx)
@@ -159,6 +218,9 @@ class SettingsActivity : AppCompatActivity() {
                 for ((artist, title) in GtaIvMetadataRepository.getAllMusicSongs(ctx)) {
                     allSongs.add(Triple(artist, title, 2008))
                 }
+                for ((artist, title) in GtaVMetadataRepository.getAllMusicSongs()) {
+                    allSongs.add(Triple(artist, title, 2013))
+                }
 
                 var done = 0
                 var okCount = 0
@@ -169,14 +231,19 @@ class SettingsActivity : AppCompatActivity() {
                     mainHandler.post {
                         scanPref.summary = "Scanning ($cur / $total): $artist - $title"
                     }
-                    if (SaMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, maxYear)) {
+                    val fetched = if (maxYear == 2013) {
+                        GtaVMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, 2013)
+                    } else {
+                        SaMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, maxYear)
+                    }
+                    if (fetched) {
                         okCount++
                     }
                 }
                 val finalOk = okCount
                 mainHandler.post {
                     isScanning = false
-                    scanPref.summary = "Complete! Cached $finalOk / $total era-accurate GTA SA & GTA IV album covers offline."
+                    scanPref.summary = "Complete! Cached $finalOk / $total era-accurate GTA SA, GTA IV & GTA V album covers offline."
                 }
             }
         }

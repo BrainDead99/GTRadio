@@ -208,6 +208,10 @@ object DynamicThemeManager {
         val pIsIv = p.contains("GTA IV") || p.contains("GTA 4") || pNorm.contains("GTAIV")
         if (gIsIv && pIsIv) return true
 
+        val gIs5 = g.contains("GTA V") || g.contains("GTA 5") || gNorm.contains("GTAV")
+        val pIs5 = p.contains("GTA V") || p.contains("GTA 5") || pNorm.contains("GTAV")
+        if (gIs5 && pIs5) return true
+
         val gIsVcs = g.contains("VICE CITY STORIES") || g.contains("VCS")
         val pIsVcs = p.contains("VICE CITY STORIES") || p.contains("VCS")
         if (gIsVcs || pIsVcs) return gIsVcs && pIsVcs
