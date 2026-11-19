@@ -68,7 +68,16 @@ class SettingsActivity : AppCompatActivity() {
                 this?.putString(getString(R.string.radio_folders_uri_key), result.toString())
                 this?.apply()
             }
-            context?.let { DynamicThemeManager.forceRescan(it) }
+            val ctx = context?.applicationContext
+            if (ctx != null) {
+                Executors.newSingleThreadExecutor().submit {
+                    DynamicThemeManager.forceRescan(ctx)
+                    mainHandler.post {
+                        val pathPref = findPreference<Preference>(getString(R.string.radio_folders_uri_key))
+                        pathPref?.summary = result.toString()
+                    }
+                }
+            }
         }
 
         private val themeResultLauncher = registerForActivityResult(contract) { result: Uri? ->
@@ -84,7 +93,16 @@ class SettingsActivity : AppCompatActivity() {
                 this?.putString(getString(R.string.dynamic_theme_uri_key), result.toString())
                 this?.apply()
             }
-            context?.let { DynamicThemeManager.forceRescan(it) }
+            val ctx = context?.applicationContext
+            if (ctx != null) {
+                Executors.newSingleThreadExecutor().submit {
+                    DynamicThemeManager.forceRescan(ctx)
+                    mainHandler.post {
+                        val themePathPref = findPreference<Preference>(getString(R.string.dynamic_theme_uri_key))
+                        themePathPref?.summary = result.toString()
+                    }
+                }
+            }
         }
 
         private fun buildKeyStatusSummary(ctx: Context, folderName: String? = null): String {

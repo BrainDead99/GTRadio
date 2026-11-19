@@ -64,8 +64,9 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
         private val GEN2_STREAM_CODES = setOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG", "TK", "ADVERTS")
         private val SKIP_DIRS = setOf(
             "SFX", "CONFIG", "ANIM", "TEXT", "MODELS", "DATA", "MOVIES",
-            "DYNAMIC THEME", "BACKGROUND", "FONT", "ICON", "SONGS",
-            "DJ CHATTER", "ANNOUNCER", "IDS", "ADVERTS", "WEATHER",
+            "DYNAMIC THEME", "HD RADIO ICONS", "BACKGROUND", "BACKGROUNDS",
+            "FONT", "FONTS", "ICON", "ICONS", "SOUNDS", "SOUND",
+            "SONGS", "DJ CHATTER", "ANNOUNCER", "IDS", "ADVERTS", "WEATHER",
             "MORNING", "EVENING", "NIGHT", "OTHER", "FOG", "RAIN", "STORM", "SUN"
         )
 
@@ -80,7 +81,29 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
             }
 
             GTRadioLogger.log("scanRootDirectory: Starting scan at '${rootDoc.name}' (${rootDoc.uri})")
-            scanRecursive(rootDoc, context, results, depth = 0, maxDepth = 7)
+
+            val rootChildren = try {
+                rootDoc.listFiles().filter { it.isDirectory }
+            } catch (e: Exception) {
+                GTRadioLogger.log("scanRootDirectory: Failed listing children of '${rootDoc.name}'", e)
+                emptyList()
+            }
+
+            val audioDir = rootChildren.firstOrNull { it.name.equals("Audio", ignoreCase = true) }
+            if (audioDir != null) {
+                GTRadioLogger.log("scanRootDirectory: Found direct 'Audio' directory at '${audioDir.name}', scanning strictly inside Audio/")
+                scanAudioDirectory(audioDir, context, results)
+            } else {
+                GTRadioLogger.log("scanRootDirectory: No 'Audio' directory in root, running backward compatibility scan")
+                val rootCandidate = StationGroup(rootDoc, context)
+                if (rootCandidate.generation in 1..3 && rootCandidate.stationList.isNotEmpty()) {
+                    GTRadioLogger.log("scanRootDirectory: Root '${rootDoc.name}' is itself a valid station group '${rootCandidate.groupName}'")
+                    results.add(rootCandidate)
+                } else {
+                    scanRecursive(rootDoc, context, results, depth = 0, maxDepth = 2)
+                }
+            }
+
             results.sortBy { it.groupName }
             val scanElapsed = System.currentTimeMillis() - scanStart
             GTRadioLogger.logVerbose("SCAN") {
@@ -88,6 +111,68 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
             }
             GTRadioLogger.log("scanRootDirectory: Finished scan. Found ${results.size} station group(s): ${results.map { it.groupName }}")
             return results
+        }
+
+        private fun scanAudioDirectory(
+            audioDir: DocumentFile,
+            context: Context,
+            results: ArrayList<StationGroup>
+        ) {
+            val children = try {
+                audioDir.listFiles().filter { it.isDirectory }
+            } catch (e: Exception) {
+                GTRadioLogger.log("scanAudioDirectory: Failed listing children of '${audioDir.name}'", e)
+                emptyList()
+            }
+
+            for (child in children) {
+                val cName = (child.name ?: "").uppercase()
+                if (cName.startsWith(".") || cName in SKIP_DIRS) continue
+
+                val candidate = StationGroup(child, context)
+                if (candidate.generation in 1..3 && candidate.stationList.isNotEmpty()) {
+                    GTRadioLogger.log("scanAudioDirectory: Found valid group '${candidate.groupName}' at '${child.name}'")
+                    results.add(candidate)
+                    continue
+                }
+
+                // Check max 1 extra level ONLY if child contains an audio or streams subfolder
+                val subDirs = try {
+                    child.listFiles().filter { it.isDirectory }
+                } catch (_: Exception) {
+                    emptyList()
+                }
+
+                val hasAudioOrStreams = subDirs.any {
+                    val sName = it.name?.uppercase() ?: ""
+                    sName == "AUDIO" || sName == "STREAMS"
+                }
+
+                if (hasAudioOrStreams) {
+                    for (sub in subDirs) {
+                        val sName = (sub.name ?: "").uppercase()
+                        if (sName.startsWith(".") || sName in SKIP_DIRS) continue
+                        if (sName == "AUDIO" || sName == "STREAMS") {
+                            val subCandidate = StationGroup(sub, context)
+                            if (subCandidate.generation in 1..3 && subCandidate.stationList.isNotEmpty()) {
+                                GTRadioLogger.log("scanAudioDirectory: Found valid group '${subCandidate.groupName}' at '${child.name}/${sub.name}'")
+                                results.add(subCandidate)
+                            } else if (sName == "AUDIO") {
+                                val subStreams = try {
+                                    sub.listFiles().find { it.isDirectory && it.name?.equals("streams", ignoreCase = true) == true }
+                                } catch (_: Exception) { null }
+                                if (subStreams != null) {
+                                    val streamsCandidate = StationGroup(subStreams, context)
+                                    if (streamsCandidate.generation in 1..3 && streamsCandidate.stationList.isNotEmpty()) {
+                                        GTRadioLogger.log("scanAudioDirectory: Found valid group '${streamsCandidate.groupName}' at '${child.name}/audio/streams'")
+                                        results.add(streamsCandidate)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         private fun scanRecursive(
@@ -99,7 +184,7 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
         ) {
             if (depth > maxDepth) return
             val dirNameUpper = (dir.name ?: "").uppercase()
-            if (depth > 0 && dirNameUpper in SKIP_DIRS) return
+            if (depth > 0 && (dirNameUpper in SKIP_DIRS || dirNameUpper.startsWith("."))) return
 
             val folderStart = System.currentTimeMillis()
             val candidate = StationGroup(dir, context)

@@ -33,6 +33,7 @@ import com.sc.gtradio.databinding.FragmentRadiolistBinding
 import com.sc.gtradio.databinding.FragmentStationitemBinding
 import com.sc.gtradio.media.*
 import com.sc.gtradio.utils.InjectorUtils
+import java.util.concurrent.Executors
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -445,7 +446,43 @@ class RadioList : Fragment() {
     private fun setupDynamicThemeIfAvailable(children: List<MediaBrowserCompat.MediaItem>) {
         if (_binding == null) return
         val seriesName = children.firstOrNull()?.description?.subtitle?.toString() ?: ""
-        val pack = DynamicThemeManager.findThemeForSeries(requireContext(), seriesName)
+        if (seriesName.isBlank() || !DynamicThemeManager.isDynamicThemeEnabled(requireContext())) {
+            applyDynamicTheme(null, children)
+            return
+        }
+
+        val cachedPack = DynamicThemeManager.getCachedThemeForSeries(seriesName)
+        if (cachedPack != null) {
+            applyDynamicTheme(cachedPack, children)
+        } else {
+            val ctx = context?.applicationContext ?: return
+            Executors.newSingleThreadExecutor().submit {
+                val pack = DynamicThemeManager.findThemeForSeries(ctx, seriesName)
+                if (pack != null) {
+                    val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+                    val bgList = if (isLandscape && pack.landscapeBgUris.isNotEmpty()) pack.landscapeBgUris else pack.portraitBgUris
+                    if (bgList.isNotEmpty()) {
+                        DynamicThemeManager.loadBitmap(ctx, bgList[0], 1440)
+                    }
+                    for (item in children) {
+                        val stTitle = item.description.title?.toString() ?: ""
+                        val onUri = DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, stTitle)
+                        val offUri = DynamicThemeManager.resolveStationIconUri(pack.stationOffIconUris, stTitle)
+                        DynamicThemeManager.loadBitmap(ctx, onUri, 256)
+                        DynamicThemeManager.loadBitmap(ctx, offUri, 256)
+                    }
+                }
+                Handler(Looper.getMainLooper()).post {
+                    if (_binding != null && isAdded) {
+                        applyDynamicTheme(pack, children)
+                    }
+                }
+            }
+        }
+    }
+
+    private fun applyDynamicTheme(pack: DynamicThemePack?, children: List<MediaBrowserCompat.MediaItem>) {
+        if (_binding == null) return
         activeThemePack = pack
 
         if (pack == null) {

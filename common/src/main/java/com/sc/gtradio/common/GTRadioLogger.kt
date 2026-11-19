@@ -25,8 +25,10 @@ object GTRadioLogger {
     private const val PREF_VERBOSE_LOGGING = "verbose_logging_enabled"
     private const val PREF_LAST_EXIT_TIMESTAMP = "last_logged_exit_timestamp"
     private const val RING_BUFFER_CAPACITY = 1200
+    private const val ART_BUFFER_CAPACITY = 150
 
     private val memoryLogs = ArrayDeque<String>(RING_BUFFER_CAPACITY)
+    private val artMemoryLogs = ArrayDeque<String>(ART_BUFFER_CAPACITY)
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private var appContext: Context? = null
 
@@ -116,10 +118,17 @@ object GTRadioLogger {
             "$ts | $message"
         }
         Log.d(TAG, fullMsg)
-        while (memoryLogs.size >= RING_BUFFER_CAPACITY) {
-            memoryLogs.removeFirst()
+        if (message.startsWith("[ART]")) {
+            while (artMemoryLogs.size >= ART_BUFFER_CAPACITY) {
+                artMemoryLogs.removeFirst()
+            }
+            artMemoryLogs.addLast(fullMsg)
+        } else {
+            while (memoryLogs.size >= RING_BUFFER_CAPACITY) {
+                memoryLogs.removeFirst()
+            }
+            memoryLogs.addLast(fullMsg)
         }
-        memoryLogs.addLast(fullMsg)
         appendToDisk(fullMsg + "\n")
     }
 
@@ -264,7 +273,7 @@ object GTRadioLogger {
     @Synchronized
     fun getLogsText(): String {
         if (memoryLogs.isEmpty()) return "No logs recorded yet."
-        return memoryLogs.joinToString("\n")
+        return memoryLogs.reversed().joinToString("\n")
     }
 
     private fun getDirSizeAndCount(dir: File): Pair<Long, Int> {
@@ -355,10 +364,31 @@ object GTRadioLogger {
             sb.append("RPF7 Audio (rpf7_tracks): $rpf7Count file(s), ${formatSize(rpf7Bytes)}\n")
         } catch (_: Exception) {}
 
+        val mainCount: Int
+        val mainText: String
+        val artCount: Int
+        val artText: String
+        synchronized(this) {
+            mainCount = memoryLogs.size
+            mainText = if (memoryLogs.isEmpty()) "No logs recorded yet." else memoryLogs.reversed().joinToString("\n")
+            artCount = artMemoryLogs.size
+            artText = if (artMemoryLogs.isEmpty()) "" else artMemoryLogs.reversed().joinToString("\n")
+        }
+
         sb.append("========================================\n")
-        sb.append("Diagnostic Event Log (${memoryLogs.size} lines in ring buffer):\n")
+        sb.append("Diagnostic Event Log (newest first, $mainCount lines):\n")
         sb.append("========================================\n")
-        sb.append(getLogsText())
+        sb.append(mainText)
+        sb.append("\n")
+
+        if (artCount > 0) {
+            sb.append("\n========================================\n")
+            sb.append("Recent Album Art Log (latest $artCount lines):\n")
+            sb.append("========================================\n")
+            sb.append(artText)
+            sb.append("\n")
+        }
+
         return sb.toString()
     }
 
@@ -370,6 +400,7 @@ object GTRadioLogger {
     @Synchronized
     fun clear(context: Context? = appContext) {
         memoryLogs.clear()
+        artMemoryLogs.clear()
         try {
             context?.let { File(it.filesDir, "gtradio_debug.log").delete() }
             File("/sdcard/GTA SA RADIO PROJECT/gtradio_debug.log").delete()

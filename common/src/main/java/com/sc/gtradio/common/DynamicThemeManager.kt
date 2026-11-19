@@ -126,7 +126,9 @@ object DynamicThemeManager {
     }
 
     fun invalidateCache() {
-        packCache.clear()
+        synchronized(packCache) {
+            packCache.clear()
+        }
         scannedPacks = null
     }
 
@@ -136,6 +138,11 @@ object DynamicThemeManager {
 
     fun forceRescan(context: Context? = null) {
         invalidateCache()
+        if (context != null) {
+            try {
+                scannedPacks = scanAllThemePacks(context, null)
+            } catch (_: Exception) {}
+        }
     }
 
     fun normalizeStationKey(raw: String): String {
@@ -169,22 +176,43 @@ object DynamicThemeManager {
         return if (exact != null && exact.noiseSoundUris.isNotEmpty()) exact else null
     }
 
+    fun getCachedThemeForSeries(seriesName: String): DynamicThemePack? {
+        if (seriesName.isBlank()) return null
+        synchronized(packCache) {
+            packCache[seriesName]?.let { return it }
+        }
+        val packs = scannedPacks ?: return null
+        val matched = packs.firstOrNull { matchesSeries(seriesName, it.seriesName) }
+        if (matched != null) {
+            synchronized(packCache) {
+                packCache[seriesName] = matched
+            }
+        }
+        return matched
+    }
+
     fun findThemeForSeries(context: Context, seriesName: String, libraryRootDoc: DocumentFile? = null): DynamicThemePack? {
         if (seriesName.isBlank() || !isDynamicThemeEnabled(context)) return null
 
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         val currentThemeUri = prefs.getString("dynamic_theme_uri", "") ?: ""
-        if (currentThemeUri != lastThemeUriString) {
+        val currentLibUri = prefs.getString("radio_folders_uri", "") ?: ""
+        val combinedKey = "$currentThemeUri|$currentLibUri"
+        if (combinedKey != lastThemeUriString) {
             invalidateCache()
-            lastThemeUriString = currentThemeUri
+            lastThemeUriString = combinedKey
         }
 
-        packCache[seriesName]?.let { return it }
+        synchronized(packCache) {
+            packCache[seriesName]?.let { return it }
+        }
 
         val packs = scannedPacks ?: scanAllThemePacks(context, libraryRootDoc).also { scannedPacks = it }
         val matched = packs.firstOrNull { matchesSeries(seriesName, it.seriesName) }
         if (matched != null) {
-            packCache[seriesName] = matched
+            synchronized(packCache) {
+                packCache[seriesName] = matched
+            }
         }
         return matched
     }
@@ -234,55 +262,83 @@ object DynamicThemeManager {
     private fun scanAllThemePacks(context: Context, libraryRootDoc: DocumentFile?): List<DynamicThemePack> {
         val results = ArrayList<DynamicThemePack>()
         val seenNames = HashSet<String>()
-        val roots = findDynamicThemeRoots(context, libraryRootDoc)
+        val root = resolveDynamicThemeRoot(context, libraryRootDoc) ?: return results
 
-        for (root in roots) {
-            val children = try { root.listFiles() } catch (_: Exception) { emptyArray() }
-            for (dir in children) {
-                if (!dir.isDirectory) continue
-                val dName = dir.name ?: continue
-                if (dName.startsWith(".") || dName.equals("HD Radio Icons", ignoreCase = true)) continue
-                if (!seenNames.add(dName.uppercase())) continue
-                loadSingleThemePack(context, dir)?.let { results.add(it) }
-            }
+        val children = try { root.listFiles() } catch (_: Exception) { emptyArray() }
+        for (dir in children) {
+            if (!dir.isDirectory) continue
+            val dName = dir.name ?: continue
+            if (dName.startsWith(".") || dName.equals("HD Radio Icons", ignoreCase = true)) continue
+            if (!seenNames.add(dName.uppercase())) continue
+            loadSingleThemePack(context, dir)?.let { results.add(it) }
         }
         return results
     }
 
-    private fun findDynamicThemeRoots(context: Context, libraryRootDoc: DocumentFile?): List<DocumentFile> {
-        val list = ArrayList<DocumentFile>()
+    fun resolveDynamicThemeRoot(context: Context, libraryRootDoc: DocumentFile? = null): DocumentFile? {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
 
+        // 1. Explicit user override from "dynamic_theme_uri" (if set and still persisted/valid)
         val customUri = prefs.getString("dynamic_theme_uri", "") ?: ""
         if (customUri.isNotBlank()) {
             try {
-                DocumentFile.fromTreeUri(context, Uri.parse(customUri))?.let { doc ->
-                    list.add(doc)
-                    doc.findFile("Dynamic Theme")?.let { if (it.isDirectory) list.add(it) }
+                val doc = DocumentFile.fromTreeUri(context, Uri.parse(customUri))
+                if (doc != null && doc.isDirectory && doc.canRead()) {
+                    // If "dynamic_theme_uri" points to parent GTRadio root instead of Dynamic Theme, look for child "Dynamic Theme"
+                    val dtChild = try {
+                        doc.listFiles().firstOrNull { it.isDirectory && it.name.equals("Dynamic Theme", ignoreCase = true) }
+                    } catch (_: Exception) { null }
+                    val resolved = dtChild ?: doc
+                    GTRadioLogger.log("DynamicThemeManager: Resolved root from user override dynamic_theme_uri: ${resolved.uri}")
+                    return resolved
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                GTRadioLogger.log("DynamicThemeManager: Failed to access custom dynamic_theme_uri", e)
+            }
         }
 
-        val sdPaths = listOf(
+        // 2. Auto-discover "Dynamic Theme" directly inside selected Library root (radio_folders_uri)
+        val libDoc = libraryRootDoc ?: run {
+            val libUriStr = prefs.getString("radio_folders_uri", "") ?: ""
+            if (libUriStr.isNotBlank()) {
+                try {
+                    val d = DocumentFile.fromTreeUri(context, Uri.parse(libUriStr))
+                    if (d != null && d.isDirectory && d.canRead()) d else null
+                } catch (_: Exception) { null }
+            } else null
+        }
+        if (libDoc != null) {
+            val dtChild = try {
+                libDoc.listFiles().firstOrNull { it.isDirectory && it.name.equals("Dynamic Theme", ignoreCase = true) }
+            } catch (_: Exception) { null }
+            if (dtChild != null && dtChild.canRead()) {
+                GTRadioLogger.log("DynamicThemeManager: Auto-discovered Dynamic Theme inside library root: ${dtChild.uri}")
+                return dtChild
+            }
+        }
+
+        // 3. Fallback to legacy /storage/emulated/0/GTRadio/Dynamic Theme only if readable
+        val legacyPaths = listOf(
             "/storage/emulated/0/GTRadio/Dynamic Theme",
             "/sdcard/GTRadio/Dynamic Theme"
         )
-        for (p in sdPaths) {
+        for (p in legacyPaths) {
             try {
                 val f = File(p)
                 if (f.exists() && f.isDirectory && f.canRead()) {
-                    list.add(DocumentFile.fromFile(f))
+                    val doc = DocumentFile.fromFile(f)
+                    GTRadioLogger.log("DynamicThemeManager: Resolved root from legacy filesystem path: $p")
+                    return doc
                 }
             } catch (_: Exception) {}
         }
 
-        if (libraryRootDoc != null) {
-            try {
-                libraryRootDoc.findFile("Dynamic Theme")?.let { if (it.isDirectory) list.add(it) }
-            } catch (_: Exception) {}
-        }
+        return null
+    }
 
-        return list
+    fun findDynamicThemeRoots(context: Context, libraryRootDoc: DocumentFile? = null): List<DocumentFile> {
+        val root = resolveDynamicThemeRoot(context, libraryRootDoc)
+        return if (root != null) listOf(root) else emptyList()
     }
 
     private fun loadSingleThemePack(context: Context, themeDir: DocumentFile): DynamicThemePack? {

@@ -33,6 +33,7 @@ import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.stations.*
 import java.util.ArrayList
+import java.util.concurrent.Executors
 
 @UnstableApi open class GTRadioMusicService : MediaBrowserServiceCompat() {
     private var stationGroups: ArrayList<StationGroup> = ArrayList()
@@ -40,19 +41,33 @@ import java.util.ArrayList
     private val stationCache: MutableMap<String, RadioStation> = mutableMapOf()
     private val sharedPrefListener = GTRadioOnSharedPrefChange()
 
+    private val scanExecutor = Executors.newSingleThreadExecutor()
+    @Volatile private var groupsLoaded = false
+    private var cachedUri: String? = null
+    private val pendingRootResults = ArrayList<Result<MutableList<MediaItem>>>()
+
     //Setup a listener for settings changes
     private inner class GTRadioOnSharedPrefChange : SharedPreferences.OnSharedPreferenceChangeListener {
         override fun onSharedPreferenceChanged(prefs: SharedPreferences?, key: String?) {
             if (prefs != null) {
                 when(key) {
                     "dynamic_theme_uri", "game_key_folder_uri", "gtav_key_folder_uri", "game_keys_updated", "gtav_keys_updated", resources.getString(R.string.radio_folders_uri_key) -> {
-                        GTRadioLogger.log("GTRadioMusicService: Library URI or Game keys changed, rescanning...")
+                        GTRadioLogger.log("GTRadioMusicService: Library URI or Game keys changed, invalidating cache...")
                         this@GTRadioMusicService.activeStation?.stop()
                         this@GTRadioMusicService.activeStation = null
                         this@GTRadioMusicService.stationCache.clear()
-                        this@GTRadioMusicService.stationGroups = this@GTRadioMusicService.getStationGroups()
-                        this@GTRadioMusicService.fullStationList = this@GTRadioMusicService.getFullStationList()
-                        this@GTRadioMusicService.notifyChildrenChanged("root")
+                        synchronized(this@GTRadioMusicService.pendingRootResults) {
+                            this@GTRadioMusicService.groupsLoaded = false
+                            this@GTRadioMusicService.cachedUri = null
+                            this@GTRadioMusicService.stationGroups = ArrayList()
+                            this@GTRadioMusicService.fullStationList = ArrayList()
+                        }
+                        DynamicThemeManager.invalidateCache()
+                        this@GTRadioMusicService.scanExecutor.submit {
+                            Handler(Looper.getMainLooper()).post {
+                                this@GTRadioMusicService.notifyChildrenChanged("root")
+                            }
+                        }
                     }
                     resources.getString(R.string.ads_enabled_preference_key)  -> {
                         //Update ads enabled
@@ -347,9 +362,6 @@ import java.util.ArrayList
             PlayerNotificationListener()
         )
         notificationManager.showNotificationForPlayer(radioPlayer)
-
-        stationGroups = getStationGroups()
-        fullStationList = getFullStationList()
     }
 
     private fun getStationGroups(): ArrayList<StationGroup> {
@@ -381,6 +393,7 @@ import java.util.ArrayList
         // Free ExoPlayer resources.
         radioPlayer.removeListener(playerListener)
         radioPlayer.release()
+        scanExecutor.shutdown()
     }
 
     override fun onGetRoot(clientPackageName: String, clientUid: Int, rootHints: Bundle?): BrowserRoot? {
@@ -388,19 +401,84 @@ import java.util.ArrayList
     }
 
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaItem>>) {
+        val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        val currentUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "") ?: ""
+
         if (parentId.isBlank() || parentId == "root") {
-            if (stationGroups.isEmpty()) {
-                stationGroups = getStationGroups()
-                fullStationList = getFullStationList()
+            var needScan = false
+            synchronized(pendingRootResults) {
+                if (groupsLoaded && cachedUri == currentUri) {
+                    val groups = ArrayList(stationGroups.map { x -> x.mediaItem })
+                    GTRadioLogger.log("GTRadioMusicService.onLoadChildren(root): cached hit, sending ${groups.size} groups (0ms)")
+                    result.sendResult(groups)
+                    return
+                }
+
+                result.detach()
+                pendingRootResults.add(result)
+                if (pendingRootResults.size == 1) {
+                    needScan = true
+                } else {
+                    GTRadioLogger.log("GTRadioMusicService.onLoadChildren(root): Scan already in progress, coalescing request (#${pendingRootResults.size})")
+                }
             }
-            val groups = ArrayList(stationGroups.map { x -> x.mediaItem })
-            GTRadioLogger.log("GTRadioMusicService.onLoadChildren(root): sending ${groups.size} groups")
-            result.sendResult(groups)
+
+            if (needScan) {
+                scanExecutor.submit {
+                    GTRadioLogger.log("GTRadioMusicService: Starting background station group scan on scanExecutor")
+                    val groups = getStationGroups()
+                    val fullList = ArrayList(groups.map { x -> x.stationList }.flatten())
+                    val groupMediaItems = ArrayList(groups.map { x -> x.mediaItem })
+
+                    val callbacks: List<Result<MutableList<MediaItem>>>
+                    synchronized(pendingRootResults) {
+                        stationGroups = groups
+                        fullStationList = fullList
+                        cachedUri = currentUri
+                        groupsLoaded = true
+                        callbacks = ArrayList(pendingRootResults)
+                        pendingRootResults.clear()
+                    }
+
+                    GTRadioLogger.log("GTRadioMusicService: Background scan complete, delivering to ${callbacks.size} pending client(s)")
+                    for (cb in callbacks) {
+                        try {
+                            cb.sendResult(ArrayList(groupMediaItems))
+                        } catch (e: Exception) {
+                            GTRadioLogger.log("GTRadioMusicService.onLoadChildren: Client disconnected or failed to sendResult", e)
+                        }
+                    }
+                }
+            }
             return
         }
-        val group = stationGroups.find { x -> x.mediaItem.mediaId == parentId }
-        val stations = group?.stationList ?: ArrayList()
-        result.sendResult(stations)
+
+        if (groupsLoaded && cachedUri == currentUri) {
+            val group = stationGroups.find { x -> x.mediaItem.mediaId == parentId }
+            val stations = group?.stationList ?: ArrayList()
+            result.sendResult(stations)
+        } else {
+            result.detach()
+            scanExecutor.submit {
+                if (!groupsLoaded || cachedUri != currentUri) {
+                    val groups = getStationGroups()
+                    val fullList = ArrayList(groups.map { x -> x.stationList }.flatten())
+                    synchronized(pendingRootResults) {
+                        stationGroups = groups
+                        fullStationList = fullList
+                        cachedUri = currentUri
+                        groupsLoaded = true
+                    }
+                }
+                val group = stationGroups.find { x -> x.mediaItem.mediaId == parentId }
+                val stations = group?.stationList ?: ArrayList()
+                try {
+                    result.sendResult(stations)
+                } catch (e: Exception) {
+                    GTRadioLogger.log("GTRadioMusicService.onLoadChildren($parentId): Failed to sendResult", e)
+                }
+            }
+        }
     }
 
     private fun getRadioStation(group: StationGroup, mediaId: String): RadioStation? {
