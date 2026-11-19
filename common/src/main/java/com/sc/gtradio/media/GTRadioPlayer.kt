@@ -51,6 +51,7 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
     var previousEnabled = false
     fun isExoPlayerReady(): Boolean = exoPlayer.playbackState == Player.STATE_READY && exoPlayer.playWhenReady
     fun setStreamMuted(muted: Boolean) { exoPlayer.volume = if (muted) 0f else 1f }
+    fun resetForStationSwitch() { exoPlayer.stop() }
 
     //region Customized Functionality
     //-----------

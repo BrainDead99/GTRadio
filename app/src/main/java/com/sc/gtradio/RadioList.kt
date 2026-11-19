@@ -97,9 +97,7 @@ class RadioList : Fragment() {
         val nowPlayingId = currentMetadata.description.mediaId ?: ""
         if (!currentPlaybackState.isPlaying || targetId != nowPlayingId) {
             lastAutoScrolledMediaId = targetId
-            startStationWithTuningNoise {
-                musicServiceConnection?.transportControls?.playFromMediaId(targetId, null)
-            }
+            musicServiceConnection?.transportControls?.playFromMediaId(targetId, null)
         }
         updateDynamicThemePlaybackUi()
     }
@@ -161,10 +159,6 @@ class RadioList : Fragment() {
         return pack.layoutStyle.equals("strip", ignoreCase = true) ||
             pack.layoutStyle.equals("gta4", ignoreCase = true) ||
             pack.stationOffIconUris.isNotEmpty()
-    }
-
-    private fun startStationWithTuningNoise(playAction: () -> Unit) {
-        playAction()
     }
 
     private fun recenterInfiniteScrollIfNeeded() {
@@ -261,19 +255,19 @@ class RadioList : Fragment() {
             selectedStationTitle = clickedItem.description.title?.toString() ?: ""
             scrollSlotToCenter(slot, smooth = true)
             if (currentPlaybackState.isPlaying && clickedId == activeMediaId) {
-                DynamicThemeManager.stopTuningNoise()
+                DynamicThemeManager.stopTuningNoise("user_stop")
                 musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
                 transportControls?.stop()
             } else {
                 lastAutoScrolledMediaId = clickedId
-                startStationWithTuningNoise { transportControls?.playFromMediaId(clickedId, null) }
+                transportControls?.playFromMediaId(clickedId, null)
             }
         } else {
             centeredMediaId = clickedId
             selectedStationTitle = clickedItem.description.title?.toString() ?: ""
             lastAutoScrolledMediaId = clickedId
             scrollSlotToCenter(slot, smooth = true)
-            startStationWithTuningNoise { transportControls?.playFromMediaId(clickedId, null) }
+            transportControls?.playFromMediaId(clickedId, null)
         }
         updateDynamicThemePlaybackUi()
     }
@@ -295,15 +289,15 @@ class RadioList : Fragment() {
         if (clickedItem.mediaId == nowPlaying?.description?.mediaId) {
             musicServiceConnection?.playbackState?.value?.let { state ->
                 if (state.isPlaying) {
-                    DynamicThemeManager.stopTuningNoise()
+                    DynamicThemeManager.stopTuningNoise("user_stop")
                     musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
                     transportControls?.stop()
                 } else {
-                    startStationWithTuningNoise { transportControls?.play() }
+                    transportControls?.play()
                 }
             }
         } else {
-            startStationWithTuningNoise { transportControls?.playFromMediaId(clickedItem.mediaId, null) }
+            transportControls?.playFromMediaId(clickedItem.mediaId, null)
         }
         updateDynamicThemePlaybackUi()
     }
@@ -311,7 +305,7 @@ class RadioList : Fragment() {
     private fun toggleRadioPower() {
         val transportControls = musicServiceConnection?.transportControls
         if (currentPlaybackState.isPlaying) {
-            DynamicThemeManager.stopTuningNoise()
+            DynamicThemeManager.stopTuningNoise("user_power_off")
             musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
             transportControls?.stop()
         } else {
@@ -323,9 +317,9 @@ class RadioList : Fragment() {
                 selectedStationTitle = targetItem.description.title?.toString() ?: ""
                 lastAutoScrolledMediaId = centeredMediaId
                 scrollIconToCenter(centeredMediaId, smooth = true)
-                startStationWithTuningNoise { transportControls?.playFromMediaId(targetItem.mediaId, null) }
+                transportControls?.playFromMediaId(targetItem.mediaId, null)
             } else {
-                startStationWithTuningNoise { transportControls?.play() }
+                transportControls?.play()
             }
         }
     }

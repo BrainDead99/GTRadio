@@ -10,6 +10,7 @@ import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.documentfile.provider.DocumentFile
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
@@ -17,6 +18,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Random
+import java.util.concurrent.atomic.AtomicInteger
 
 data class DynamicThemePack(
     val seriesName: String,
@@ -35,7 +37,8 @@ data class DynamicThemePack(
     val stationIconUris: Map<String, Uri>,
     val stationOffIconUris: Map<String, Uri> = emptyMap(),
     val noiseSoundUris: List<Uri> = emptyList(),
-    val layoutStyle: String = "grid"
+    val layoutStyle: String = "grid",
+    val hasThemeJson: Boolean = true
 )
 
 object DynamicThemeManager {
@@ -44,9 +47,7 @@ object DynamicThemeManager {
     private var scannedPacks: List<DynamicThemePack>? = null
     private var lastThemeUriString: String? = null
 
-    private var noisePlayer: MediaPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var noiseCheckRunnable: Runnable? = null
     private val rng = Random()
 
     private val stationAliases = mapOf(
@@ -122,6 +123,9 @@ object DynamicThemeManager {
 
     fun isDynamicThemeEnabled(context: Context): Boolean {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        if (prefs.contains("enable_dynamic_theme_ui")) {
+            return prefs.getBoolean("enable_dynamic_theme_ui", true)
+        }
         return prefs.getBoolean("dynamic_theme_enabled", true)
     }
 
@@ -171,9 +175,10 @@ object DynamicThemeManager {
     }
 
     fun findNoisePackForSeries(context: Context, seriesName: String?): DynamicThemePack? {
-        if (seriesName.isNullOrBlank()) return null
-        val exact = findThemeForSeries(context, seriesName)
-        return if (exact != null && exact.noiseSoundUris.isNotEmpty()) exact else null
+        if (seriesName.isNullOrBlank() || !isDynamicThemeEnabled(context)) return null
+        val exact = findThemeForSeries(context, seriesName) ?: return null
+        if (!exact.hasThemeJson || exact.noiseSoundUris.isEmpty()) return null
+        return exact
     }
 
     fun getCachedThemeForSeries(seriesName: String): DynamicThemePack? {
@@ -516,7 +521,8 @@ object DynamicThemeManager {
             stationIconUris = onIcons,
             stationOffIconUris = offIcons,
             noiseSoundUris = noiseUris,
-            layoutStyle = layoutStyle
+            layoutStyle = layoutStyle,
+            hasThemeJson = true
         )
     }
 
@@ -550,29 +556,44 @@ object DynamicThemeManager {
         }
     }
 
+    private val tuneGeneration = AtomicInteger(0)
+    @Volatile private var isPlayingNoise = false
+    private var noisePlayer: MediaPlayer? = null
     private var tuningStartTime = 0L
+    private var noiseWatchdogRunnable: Runnable? = null
+    private const val SAFETY_LOOP_CAP_MS = 6500L
+    private const val WATCHDOG_MAX_MS = 7000L
 
     fun getBitmap(context: Context, uri: Uri?, maxDim: Int = 1080): Bitmap? = loadBitmap(context, uri, maxDim)
 
-    fun isPlayingTuningNoise(): Boolean = noisePlayer != null
+    fun isPlayingTuningNoise(): Boolean = isPlayingNoise
 
     fun stopTuningNoise(trigger: String = "stopped") {
-        val durationMs = if (tuningStartTime > 0L) System.currentTimeMillis() - tuningStartTime else 0L
-        if (noisePlayer != null) {
+        tuneGeneration.incrementAndGet()
+        stopTuningNoiseInternal(trigger)
+    }
+
+    private fun stopTuningNoiseInternal(trigger: String) {
+        val durationMs = if (tuningStartTime > 0L) SystemClock.uptimeMillis() - tuningStartTime else 0L
+        if (noisePlayer != null || isPlayingNoise) {
             GTRadioLogger.logVerbose("TUNE") {
                 "Stopped tuning static noise: trigger='$trigger', duration=${durationMs}ms"
             }
         }
         tuningStartTime = 0L
-        noiseCheckRunnable?.let { mainHandler.removeCallbacks(it) }
-        noiseCheckRunnable = null
-        try {
-            noisePlayer?.stop()
-        } catch (_: Exception) {}
-        try {
-            noisePlayer?.release()
-        } catch (_: Exception) {}
+        isPlayingNoise = false
+        noiseWatchdogRunnable?.let { mainHandler.removeCallbacks(it) }
+        noiseWatchdogRunnable = null
+        val mp = noisePlayer
         noisePlayer = null
+        if (mp != null) {
+            try {
+                mp.stop()
+            } catch (_: Exception) {}
+            try {
+                mp.release()
+            } catch (_: Exception) {}
+        }
     }
 
     fun playTuningNoiseUntilReady(
@@ -581,23 +602,40 @@ object DynamicThemeManager {
         isRadioReady: () -> Boolean,
         onComplete: () -> Unit
     ) {
-        stopTuningNoise("rapid_switch")
-        if (pack.noiseSoundUris.isEmpty()) {
+        val myGen = tuneGeneration.incrementAndGet()
+        stopTuningNoiseInternal("new_tune_request")
+
+        if (pack.noiseSoundUris.isEmpty() || !pack.hasThemeJson || !isDynamicThemeEnabled(context)) {
             onComplete()
             return
         }
 
         val chosenUri = pack.noiseSoundUris[rng.nextInt(pack.noiseSoundUris.size)]
-        val startTime = System.currentTimeMillis()
+        val startTime = SystemClock.uptimeMillis()
         tuningStartTime = startTime
+        isPlayingNoise = true
+        var loopCount = 0
+
         GTRadioLogger.logVerbose("TUNE") {
-            "Starting tuning static noise for pack '${pack.seriesName}', chosen URI: $chosenUri"
+            "Starting tuning static noise [gen=$myGen] for pack '${pack.seriesName}', chosen URI: $chosenUri"
         }
-        val minNoiseMs = 550L
-        val maxNoiseMs = 2800L
+
+        val mp = MediaPlayer()
+        noisePlayer = mp
+
+        // Safety watchdog runnable (7000L ms max)
+        val watchdogRunnable = Runnable {
+            if (myGen == tuneGeneration.get()) {
+                val elapsed = SystemClock.uptimeMillis() - startTime
+                GTRadioLogger.log("[TUNE] Safety watchdog triggered after ${elapsed}ms (loops=$loopCount). Forcing completion.")
+                stopTuningNoiseInternal("safety_watchdog")
+                mainHandler.post { onComplete() }
+            }
+        }
+        noiseWatchdogRunnable = watchdogRunnable
+        mainHandler.postDelayed(watchdogRunnable, WATCHDOG_MAX_MS)
 
         try {
-            val mp = MediaPlayer()
             mp.setAudioAttributes(
                 AudioAttributes.Builder()
                     .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
@@ -605,33 +643,69 @@ object DynamicThemeManager {
                     .build()
             )
             mp.setDataSource(context, chosenUri)
-            mp.isLooping = true
+            mp.isLooping = false
             mp.setVolume(0.85f, 0.85f)
-            mp.setOnPreparedListener { it.start() }
-            mp.prepareAsync()
-            noisePlayer = mp
-        } catch (_: Exception) {
-            stopTuningNoise("error")
-            onComplete()
-            return
-        }
 
-        val checkTask = object : Runnable {
-            override fun run() {
-                val elapsed = System.currentTimeMillis() - startTime
-                if (elapsed >= minNoiseMs && isRadioReady()) {
-                    stopTuningNoise("player_ready")
-                    onComplete()
-                } else if (elapsed >= maxNoiseMs) {
-                    stopTuningNoise("timeout")
-                    onComplete()
-                } else {
-                    mainHandler.postDelayed(this, 80L)
+            mp.setOnPreparedListener { player ->
+                if (myGen != tuneGeneration.get()) {
+                    try { player.release() } catch (_: Exception) {}
+                    return@setOnPreparedListener
+                }
+                try {
+                    player.start()
+                } catch (e: Exception) {
+                    GTRadioLogger.log("[TUNE] MediaPlayer start failed", e)
+                    stopTuningNoiseInternal("start_error")
+                    mainHandler.post { onComplete() }
                 }
             }
+
+            mp.setOnCompletionListener { player ->
+                if (myGen != tuneGeneration.get()) {
+                    try { player.release() } catch (_: Exception) {}
+                    return@setOnCompletionListener
+                }
+                val totalElapsed = SystemClock.uptimeMillis() - startTime
+                val ready = isRadioReady()
+                val safetyExceeded = totalElapsed >= SAFETY_LOOP_CAP_MS
+
+                if (ready || safetyExceeded) {
+                    val reason = if (safetyExceeded && !ready) "safety_timeout" else "clip_finished_ready"
+                    GTRadioLogger.log("[TUNE] Tuning static completed: reason='$reason', elapsed=${totalElapsed}ms, loops=$loopCount")
+                    stopTuningNoiseInternal(reason)
+                    mainHandler.post { onComplete() }
+                } else {
+                    // Station not ready yet -> loop another pass
+                    loopCount++
+                    GTRadioLogger.log("[TUNE] Tuning static loop #$loopCount: radio not ready yet (${totalElapsed}ms elapsed), looping...")
+                    try {
+                        player.seekTo(0)
+                        player.start()
+                    } catch (e: Exception) {
+                        GTRadioLogger.log("[TUNE] MediaPlayer loop restart failed", e)
+                        stopTuningNoiseInternal("loop_restart_error")
+                        mainHandler.post { onComplete() }
+                    }
+                }
+            }
+
+            mp.setOnErrorListener { player, what, extra ->
+                GTRadioLogger.log("[TUNE] MediaPlayer error: what=$what, extra=$extra (gen=$myGen)")
+                if (myGen == tuneGeneration.get()) {
+                    stopTuningNoiseInternal("media_player_error")
+                    mainHandler.post { onComplete() }
+                } else {
+                    try { player.release() } catch (_: Exception) {}
+                }
+                true
+            }
+
+            mp.prepareAsync()
+        } catch (e: Exception) {
+            GTRadioLogger.log("[TUNE] MediaPlayer setup failed", e)
+            stopTuningNoiseInternal("setup_exception")
+            onComplete()
         }
-        noiseCheckRunnable = checkTask
-        mainHandler.postDelayed(checkTask, 120L)
     }
 
     private fun copyUriToCache(context: Context, uri: Uri, dest: File): File? {
