@@ -45,8 +45,8 @@ import java.util.ArrayList
         override fun onSharedPreferenceChanged(prefs: SharedPreferences?, key: String?) {
             if (prefs != null) {
                 when(key) {
-                    "dynamic_theme_uri", "gtav_key_folder_uri", "gtav_keys_updated", resources.getString(R.string.radio_folders_uri_key) -> {
-                        GTRadioLogger.log("GTRadioMusicService: Library URI or GTA V keys changed, rescanning...")
+                    "dynamic_theme_uri", "game_key_folder_uri", "gtav_key_folder_uri", "game_keys_updated", "gtav_keys_updated", resources.getString(R.string.radio_folders_uri_key) -> {
+                        GTRadioLogger.log("GTRadioMusicService: Library URI or Game keys changed, rescanning...")
                         this@GTRadioMusicService.activeStation?.stop()
                         this@GTRadioMusicService.activeStation = null
                         this@GTRadioMusicService.stationCache.clear()
@@ -450,6 +450,19 @@ import java.util.ArrayList
             )
         }
         if (group.isGtaIvRpfGroup) {
+            if (!GtaIvKeyManager.isUnlocked(this)) {
+                GtaIvKeyManager.ensureKeyLoaded(this)
+            }
+            if (!GtaIvKeyManager.isUnlocked(this)) {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        applicationContext,
+                        "GTA IV/EFLC key not found. Select a folder containing GTAIV.exe, EFLC.exe, or a key .dat file in Settings -> Game Key Directory.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return null
+            }
             com.sc.gtradio.common.GTRadioLogger.log("GTRadioMusicService: Creating GTA IV RPF station for ${stationMedia.description.title}")
             return group.createGtaIvRpfStation(
                 group.mediaItem.mediaId!!,
@@ -470,7 +483,7 @@ import java.util.ArrayList
                 Handler(Looper.getMainLooper()).post {
                     Toast.makeText(
                         applicationContext,
-                        "GTA V keys not found. Select a folder with GTA5.exe or key files in Settings -> GTA V Key Directory.",
+                        "GTA V keys not found. Select a folder with GTA5.exe or key files in Settings -> Game Key Directory.",
                         Toast.LENGTH_LONG
                     ).show()
                 }

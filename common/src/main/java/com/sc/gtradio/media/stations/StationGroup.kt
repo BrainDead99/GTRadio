@@ -322,6 +322,11 @@ init {
         GtaIvMetadataRepository.ensureLoaded(context)
         isGtaIvRpfGroup = true
         generation = 3
+
+        // Automatic First-Startup Key Discovery for GTA IV / EFLC
+        if (!GtaIvKeyManager.isUnlocked(context)) {
+            tryAutoImportGtaIvKeys()
+        }
         val isEflc = stationRpfFiles.any { it.name.lowercase() in setOf("radio_vcfm.rpf", "radio_ramjamfm.rpf", "radio_meditation.rpf") } ||
             allFiles.any { it.name.lowercase() in setOf("ep1_sfx.rpf", "ep2_sfx.rpf") } ||
             folderDoc.name?.uppercase()?.contains("EFLC") == true
@@ -534,10 +539,68 @@ init {
         }
     }
 
+    private fun tryAutoImportGtaIvKeys() {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(context)
+        // (a) Check saved Settings key folder URI
+        val savedKeyUri = prefs.getString("game_key_folder_uri", null)
+            ?: prefs.getString("gtav_key_folder_uri", null)
+        if (!savedKeyUri.isNullOrBlank()) {
+            try {
+                DocumentFile.fromTreeUri(context, Uri.parse(savedKeyUri))?.let { keyDoc ->
+                    if (keyDoc.isDirectory) {
+                        val res = GtaIvKeyManager.importFromFolder(context, keyDoc)
+                        if (res is GtaIvKeyManager.ImportResult.Success) {
+                            GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from saved settings folder: ${keyDoc.uri}")
+                            return
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("StationGroup[GTA IV]: Auto-import from saved key folder failed", e)
+            }
+        }
+
+        // (b) Check GTA IV / EFLC folder itself
+        try {
+            val res = GtaIvKeyManager.importFromFolder(context, folderDoc)
+            if (res is GtaIvKeyManager.ImportResult.Success) {
+                GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from audio folder: ${folderDoc.uri}")
+                return
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.log("StationGroup[GTA IV]: Auto-import from audio folder failed", e)
+        }
+
+        // (c) Check parent and parent's parent (for nested pc/audio/sfx layouts)
+        try {
+            folderDoc.parentFile?.let { p1 ->
+                if (p1.isDirectory) {
+                    val res1 = GtaIvKeyManager.importFromFolder(context, p1)
+                    if (res1 is GtaIvKeyManager.ImportResult.Success) {
+                        GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from parent folder: ${p1.uri}")
+                        return
+                    }
+                    p1.parentFile?.let { p2 ->
+                        if (p2.isDirectory) {
+                            val res2 = GtaIvKeyManager.importFromFolder(context, p2)
+                            if (res2 is GtaIvKeyManager.ImportResult.Success) {
+                                GTRadioLogger.log("StationGroup[GTA IV]: Successfully unlocked keys from grandparent folder: ${p2.uri}")
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.log("StationGroup[GTA IV]: Auto-import from parent folders failed", e)
+        }
+    }
+
     private fun tryAutoImportKeys() {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
         // (a) Check saved Settings key folder URI
-        val savedKeyUri = prefs.getString("gtav_key_folder_uri", null)
+        val savedKeyUri = prefs.getString("game_key_folder_uri", null)
+            ?: prefs.getString("gtav_key_folder_uri", null)
         if (!savedKeyUri.isNullOrBlank()) {
             try {
                 DocumentFile.fromTreeUri(context, Uri.parse(savedKeyUri))?.let { keyDoc ->
@@ -565,7 +628,7 @@ init {
             GTRadioLogger.log("StationGroup[GTA V]: Auto-import from audio folder failed", e)
         }
 
-        // (c) Check parent/root library folder
+        // (c) Check parent/root library folder (and grandparent folder for nested layouts)
         try {
             folderDoc.parentFile?.let { parentDoc ->
                 if (parentDoc.isDirectory) {
@@ -573,6 +636,15 @@ init {
                     if (res is ImportResult.Success) {
                         GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from parent folder: ${parentDoc.uri}")
                         return
+                    }
+                    parentDoc.parentFile?.let { grandDoc ->
+                        if (grandDoc.isDirectory) {
+                            val res2 = GtaVKeyManager.importFromFolder(context, grandDoc, allowMagicDownload = true)
+                            if (res2 is ImportResult.Success) {
+                                GTRadioLogger.log("StationGroup[GTA V]: Successfully unlocked keys from grandparent folder: ${grandDoc.uri}")
+                                return
+                            }
+                        }
                     }
                 }
             }

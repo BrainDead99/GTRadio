@@ -20,6 +20,7 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
+import com.sc.gtradio.media.stations.GtaIvKeyManager
 import com.sc.gtradio.media.stations.GtaIvMetadataRepository
 import com.sc.gtradio.media.stations.GtaVKeyManager
 import com.sc.gtradio.media.stations.GtaVMetadataRepository
@@ -86,46 +87,104 @@ class SettingsActivity : AppCompatActivity() {
             context?.let { DynamicThemeManager.forceRescan(it) }
         }
 
-        private val gtavKeyResultLauncher = registerForActivityResult(contract) { result: Uri? ->
+        private fun buildKeyStatusSummary(ctx: Context, folderName: String? = null): String {
+            val ivStatus = GtaIvKeyManager.getStatusLabel(ctx)
+            val vStatus = if (GtaVKeyManager.isUnlocked(ctx)) "Unlocked" else "Locked"
+            val base = "GTA IV/EFLC: $ivStatus • GTA V: $vStatus\nGTRadio does not bundle game keys. Select a folder with your own GTAIV.exe, EFLC.exe, GTA5.exe, or .dat key files to unlock playback."
+            return if (!folderName.isNullOrBlank()) {
+                "$base\nFolder: $folderName"
+            } else {
+                base
+            }
+        }
+
+        private val gameKeyResultLauncher = registerForActivityResult(contract) { result: Uri? ->
             if (result == null) return@registerForActivityResult
-            GTRadioLogger.log("SettingsActivity: Selected GTA V Key directory URI: $result")
+            GTRadioLogger.log("SettingsActivity: Selected Game Key directory URI: $result")
             val ctx = context?.applicationContext ?: return@registerForActivityResult
             try {
                 activity?.contentResolver?.takePersistableUriPermission(result, Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (_: Exception) {}
 
             val sharedPref = PreferenceManager.getDefaultSharedPreferences(ctx)
-            sharedPref.edit().putString("gtav_key_folder_uri", result.toString()).apply()
+            sharedPref.edit()
+                .putString("game_key_folder_uri", result.toString())
+                .putString("gtav_key_folder_uri", result.toString())
+                .apply()
 
-            val gtavKeyPref = findPreference<Preference>("gtav_key_folder_uri")
-            gtavKeyPref?.summary = "Scanning for keys..."
+            val keyPref = findPreference<Preference>("game_key_folder_uri")
+            keyPref?.summary = "Scanning for GTA IV / EFLC & GTA V keys..."
 
             Executors.newSingleThreadExecutor().submit {
-                val folderDoc = DocumentFile.fromTreeUri(ctx, result)
-                val importRes = if (folderDoc != null && folderDoc.isDirectory) {
-                    GtaVKeyManager.importFromFolder(ctx, folderDoc, allowMagicDownload = true)
-                } else {
-                    ImportResult.NoKeysFound
+                val rootDoc = DocumentFile.fromTreeUri(ctx, result)
+                val foldersToScan = ArrayList<DocumentFile>()
+                if (rootDoc != null && rootDoc.isDirectory) {
+                    foldersToScan.add(rootDoc)
+                    // Immediate subfolders (depth 1) and depth 2
+                    try {
+                        val subFiles = rootDoc.listFiles()
+                        for (sub in subFiles) {
+                            if (sub.isDirectory) {
+                                foldersToScan.add(sub)
+                                try {
+                                    val sub2Files = sub.listFiles()
+                                    for (sub2 in sub2Files) {
+                                        if (sub2.isDirectory) {
+                                            foldersToScan.add(sub2)
+                                        }
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+
+                var ivNewlyUnlocked = false
+                var vNewlyUnlocked = false
+                var vMissingMagic = false
+
+                for (folder in foldersToScan) {
+                    if (!GtaIvKeyManager.isUnlocked(ctx)) {
+                        val ivRes = GtaIvKeyManager.importFromFolder(ctx, folder)
+                        if (ivRes is GtaIvKeyManager.ImportResult.Success) {
+                            ivNewlyUnlocked = true
+                        }
+                    }
+                    if (!GtaVKeyManager.isUnlocked(ctx)) {
+                        val vRes = GtaVKeyManager.importFromFolder(ctx, folder, allowMagicDownload = true)
+                        if (vRes is ImportResult.Success) {
+                            vNewlyUnlocked = true
+                        } else if (vRes is ImportResult.MissingMagicDat) {
+                            vMissingMagic = true
+                        }
+                    }
+                    if (GtaIvKeyManager.isUnlocked(ctx) && GtaVKeyManager.isUnlocked(ctx)) {
+                        break
+                    }
                 }
 
                 mainHandler.post {
-                    val status = GtaVKeyManager.getKeyStatusSummary(ctx)
-                    gtavKeyPref?.summary = "$status\nFolder: ${folderDoc?.name ?: result.lastPathSegment}"
-                    when (importRes) {
-                        is ImportResult.Success -> {
-                            Toast.makeText(ctx, "GTA V Keys Unlocked! (${importRes.source})", Toast.LENGTH_LONG).show()
-                        }
-                        is ImportResult.MissingMagicDat -> {
-                            Toast.makeText(ctx, "GTA5.exe found, but magic.dat could not be downloaded (offline?). Check internet connection.", Toast.LENGTH_LONG).show()
-                        }
-                        is ImportResult.Error -> {
-                            Toast.makeText(ctx, "Key Import Error: ${importRes.message}", Toast.LENGTH_LONG).show()
-                        }
-                        ImportResult.NoKeysFound -> {
-                            Toast.makeText(ctx, "No GTA V keys or GTA5.exe found in selected folder.", Toast.LENGTH_LONG).show()
-                        }
+                    val folderName = rootDoc?.name ?: result.lastPathSegment
+                    keyPref?.summary = buildKeyStatusSummary(ctx, folderName)
+
+                    val ivStatus = GtaIvKeyManager.getStatusLabel(ctx)
+                    val vStatus = if (GtaVKeyManager.isUnlocked(ctx)) "Unlocked" else "Locked"
+
+                    val toastMsg = when {
+                        ivNewlyUnlocked && vNewlyUnlocked -> "Keys Unlocked: GTA IV/EFLC and GTA V!"
+                        ivNewlyUnlocked -> "GTA IV/EFLC Key Unlocked! (GTA V: $vStatus)"
+                        vNewlyUnlocked -> "GTA V Keys Unlocked! (GTA IV/EFLC: $ivStatus)"
+                        GtaIvKeyManager.isUnlocked(ctx) && GtaVKeyManager.isUnlocked(ctx) -> "All game keys already unlocked! (GTA IV/EFLC: Unlocked, GTA V: Unlocked)"
+                        vMissingMagic -> "GTA5.exe detected, but magic.dat could not be downloaded (offline?). Check internet connection. (GTA IV/EFLC: $ivStatus)"
+                        else -> "No game keys found in selected folder. (GTA IV/EFLC: $ivStatus • GTA V: $vStatus)"
                     }
-                    sharedPref.edit().putLong("gtav_keys_updated", System.currentTimeMillis()).apply()
+                    Toast.makeText(ctx, toastMsg, Toast.LENGTH_LONG).show()
+
+                    val now = System.currentTimeMillis()
+                    sharedPref.edit()
+                        .putLong("game_keys_updated", now)
+                        .putLong("gtav_keys_updated", now)
+                        .apply()
                 }
             }
         }
@@ -139,13 +198,15 @@ class SettingsActivity : AppCompatActivity() {
                 true
             }
 
-            val gtavKeyPref = findPreference<Preference>("gtav_key_folder_uri")
-            gtavKeyPref?.let { pref ->
-                val status = GtaVKeyManager.getKeyStatusSummary(requireContext())
-                val currentUri = PreferenceManager.getDefaultSharedPreferences(requireContext()).getString("gtav_key_folder_uri", "") ?: ""
-                pref.summary = if (currentUri.isNotBlank()) "$status\nFolder: ${Uri.parse(currentUri).lastPathSegment}" else status
+            val gameKeyPref = findPreference<Preference>("game_key_folder_uri")
+            gameKeyPref?.let { pref ->
+                val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext())
+                val savedUri = prefs.getString("game_key_folder_uri", null)
+                    ?: prefs.getString("gtav_key_folder_uri", null)
+                val folderName = savedUri?.let { Uri.parse(it).lastPathSegment }
+                pref.summary = buildKeyStatusSummary(requireContext(), folderName)
                 pref.setOnPreferenceClickListener {
-                    gtavKeyResultLauncher.launch(null)
+                    gameKeyResultLauncher.launch(null)
                     true
                 }
             }

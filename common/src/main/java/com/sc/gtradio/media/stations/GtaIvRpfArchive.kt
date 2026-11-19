@@ -50,8 +50,6 @@ class GtaIvRpfArchive(
         private val decodeLock = Any()
         @Volatile private var oldCachePurged = false
 
-        private val RPF3_AES_KEY = ByteArray(32) // Runtime key extraction added in GtaIvKeyManager
-
         private val INDEX_TABLE = intArrayOf(
             -1, -1, -1, -1, 2, 4, 6, 8,
             -1, -1, -1, -1, 2, 4, 6, 8
@@ -181,8 +179,13 @@ class GtaIvRpfArchive(
         var tocBytes = tocBuf.array()
 
         if (encryptedFlag != 0) {
+            val key = GtaIvKeyManager.getKey(context)
+            if (key == null) {
+                GTRadioLogger.log("GtaIvRpfArchive[$rpfName]: GTA IV/EFLC key is not loaded/unlocked; cannot decrypt TOC")
+                return
+            }
             val cipher = Cipher.getInstance("AES/ECB/NoPadding")
-            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(RPF3_AES_KEY, "AES"))
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"))
             for (round in 0 until 16) {
                 tocBytes = cipher.doFinal(tocBytes)
             }

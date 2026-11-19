@@ -37,14 +37,21 @@ class GroupList : Fragment() {
                     if (hasValidFolder) {
                         binding.textviewNogroups.visibility = View.VISIBLE
                         binding.sadFaceIcon.visibility = View.VISIBLE
+                        binding.buttonSelect.visibility = View.GONE
+                        binding.textviewNofolder.visibility = View.GONE
+                        binding.textviewDisclaimer.visibility = View.GONE
                     } else {
                         binding.textviewNogroups.visibility = View.INVISIBLE
                         binding.sadFaceIcon.visibility = View.INVISIBLE
+                        binding.buttonSelect.visibility = View.VISIBLE
+                        binding.textviewNofolder.visibility = View.VISIBLE
+                        binding.textviewDisclaimer.visibility = View.VISIBLE
                     }
                 } else {
                     binding.stationList.visibility = View.VISIBLE
                     binding.buttonSelect.visibility = View.GONE
                     binding.textviewNofolder.visibility = View.GONE
+                    binding.textviewDisclaimer.visibility = View.GONE
                     binding.textviewNogroups.visibility = View.INVISIBLE
                     binding.sadFaceIcon.visibility = View.INVISIBLE
                 }
@@ -164,11 +171,13 @@ class GroupList : Fragment() {
             binding.stationList.visibility = View.GONE
             binding.buttonSelect.visibility = View.VISIBLE
             binding.textviewNofolder.visibility = View.VISIBLE
+            binding.textviewDisclaimer.visibility = View.VISIBLE
             binding.textviewNogroups.visibility = View.INVISIBLE
             binding.sadFaceIcon.visibility = View.INVISIBLE
         } else {
             binding.buttonSelect.visibility = View.GONE
             binding.textviewNofolder.visibility = View.GONE
+            binding.textviewDisclaimer.visibility = View.GONE
         }
     }
 

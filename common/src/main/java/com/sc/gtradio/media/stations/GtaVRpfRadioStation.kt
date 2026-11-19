@@ -26,6 +26,7 @@ import java.nio.ByteOrder
 import java.util.Calendar
 import java.util.Locale
 import java.util.Random
+import java.util.concurrent.atomic.AtomicInteger
 
 data class GtaVSongItem(
     val archive: GtaVRpfArchive,
@@ -118,6 +119,7 @@ data class GtaVClipRef(
     private val durationCache = HashMap<Uri, Long>()
 
     @Volatile private var prefetchGeneration = 0
+    private val playGeneration = AtomicInteger(0)
 
     private fun materializeClip(keyOrScoped: String): Uri? {
         stationArchive.materializeAudioUri(keyOrScoped)?.let { return it }
@@ -359,9 +361,10 @@ data class GtaVClipRef(
             if (cached != null) {
                 art = cached
             } else {
+                val expectedGen = playGeneration.get()
                 GtaVMetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear = 2013) {
                     mainHandler.post {
-                        if (_playing && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
+                        if (_playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
                             val newArt = GtaVMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
                             val alb = GtaVMetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
                             val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
@@ -427,6 +430,8 @@ data class GtaVClipRef(
     }
 
     override fun stop() {
+        val gen = playGeneration.incrementAndGet()
+        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: stop() called (gen=$gen)")
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
             stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
@@ -452,7 +457,8 @@ data class GtaVClipRef(
     }
 
     override fun play() {
-        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: play() called")
+        val currentGen = playGeneration.incrementAndGet()
+        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: play() called (gen=$currentGen)")
         ensureStationIndexed()
         _playing = true
         player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
@@ -461,10 +467,11 @@ data class GtaVClipRef(
 
         if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
             val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-            resumeFromRealTime(elapsedMs)
+            resumeFromRealTime(elapsedMs, currentGen)
         } else {
             pickNextSegment()
             if (currentSegmentUris.isNotEmpty()) {
+                if (!_playing || playGeneration.get() != currentGen) return
                 refreshCurrentSegmentMetadata()
                 val lastIdx = currentSegmentUris.size - 1
                 val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
@@ -473,12 +480,12 @@ data class GtaVClipRef(
                 } else {
                     0L
                 }
-                startPlayback(currentSegmentUris, 0, startOffset)
+                startPlayback(currentSegmentUris, 0, startOffset, currentGen)
             }
         }
     }
 
-    private fun resumeFromRealTime(rawElapsedMs: Long) {
+    private fun resumeFromRealTime(rawElapsedMs: Long, expectedGen: Int) {
         var remainingMs = if (rawElapsedMs > 180_000L) (rawElapsedMs % 180_000L) else rawElapsedMs
         var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
@@ -491,8 +498,9 @@ data class GtaVClipRef(
                 val durMs = getFileDurationMs(uri)
                 val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
                 if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
+                    if (!_playing || playGeneration.get() != expectedGen) return
                     refreshCurrentSegmentMetadata()
-                    startPlayback(currentSegmentUris, i, posMs + remainingMs)
+                    startPlayback(currentSegmentUris, i, posMs + remainingMs, expectedGen)
                     return
                 } else {
                     remainingMs -= timeLeftMs
@@ -505,8 +513,9 @@ data class GtaVClipRef(
         }
 
         if (currentSegmentUris.isNotEmpty()) {
+            if (!_playing || playGeneration.get() != expectedGen) return
             refreshCurrentSegmentMetadata()
-            startPlayback(currentSegmentUris, 0, 0L)
+            startPlayback(currentSegmentUris, 0, 0L, expectedGen)
         }
     }
 
@@ -546,10 +555,12 @@ data class GtaVClipRef(
     }
 
     private fun playNext() {
+        val currentGen = playGeneration.get()
         if (!_playing) return
         if (advanceMultiChunkOrPickNext()) {
+            if (!_playing || playGeneration.get() != currentGen) return
             refreshCurrentSegmentMetadata()
-            startPlayback(currentSegmentUris, 0, 0L)
+            startPlayback(currentSegmentUris, 0, 0L, currentGen)
         }
     }
 
@@ -746,7 +757,12 @@ data class GtaVClipRef(
         return true
     }
 
-    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long) {
+    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+        if (!_playing || playGeneration.get() != expectedGen) {
+            GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: startPlayback aborted: generation mismatch or not playing (gen=$expectedGen, cur=${playGeneration.get()})")
+            return
+        }
+
         if (activeListener != null) {
             player.removeListener(activeListener!!)
             activeListener = null
@@ -759,6 +775,9 @@ data class GtaVClipRef(
         for (u in uris) {
             concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(u)))
         }
+
+        if (!_playing || playGeneration.get() != expectedGen) return
+
         player.setMediaSource(concatSource)
         if (startWindowIndex > 0 || startPositionMs > 0L) {
             player.seekTo(startWindowIndex, startPositionMs)
@@ -771,20 +790,27 @@ data class GtaVClipRef(
                 if (!alreadyHandled && state == Player.STATE_ENDED) {
                     alreadyHandled = true
                     player.removeListener(this)
-                    playNext()
+                    if (_playing && playGeneration.get() == expectedGen) {
+                        playNext()
+                    }
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
                 GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
-                if (!alreadyHandled && _playing) {
+                if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
                     alreadyHandled = true
                     player.removeListener(this)
-                    mainHandler.post { playNext() }
+                    mainHandler.post {
+                        if (_playing && playGeneration.get() == expectedGen) {
+                            playNext()
+                        }
+                    }
                 }
             }
         }
         player.addListener(activeListener!!)
+        if (!_playing || playGeneration.get() != expectedGen) return
         player.prepare()
         player.play()
     }
