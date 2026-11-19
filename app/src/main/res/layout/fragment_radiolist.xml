@@ -143,7 +143,7 @@
                 tools:text="RAGE AGAINST THE MACHINE" />
         </LinearLayout>
 
-        <!-- GTA San Andreas Centered Radio Controls & 2-Row Icon Grid -->
+        <!-- Centered Radio Controls & 2-Row Icon Grid -->
         <LinearLayout
             android:id="@+id/themeControlsBlock"
             android:layout_width="match_parent"
@@ -192,7 +192,7 @@
                 android:textSize="15sp"
                 android:textStyle="bold" />
 
-            <com.sc.gtradio.GtaVolumeBarView
+            <com.sc.gtradio.VolumeBarView
                 android:id="@+id/themeVolumeBar"
                 android:layout_width="180dp"
                 android:layout_height="22dp"
@@ -239,9 +239,9 @@
                 android:textStyle="bold" />
         </LinearLayout>
 
-        <!-- GTA IV Left-Aligned Two-Column Pause Menu Controls & Horizontal Scrolling Station Strip -->
+        <!-- Left-Aligned Two-Column Pause Menu Controls & Horizontal Scrolling Station Strip -->
         <LinearLayout
-            android:id="@+id/themeGta4ControlsBlock"
+            android:id="@+id/themeStripControlsBlock"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
@@ -260,7 +260,7 @@
                 android:orientation="horizontal">
 
                 <TextView
-                    android:id="@+id/themeGta4RadioLabel"
+                    android:id="@+id/themeStripRadioLabel"
                     android:layout_width="152dp"
                     android:layout_height="wrap_content"
                     android:text="Radio"
@@ -268,7 +268,7 @@
                     android:textSize="18sp" />
 
                 <TextView
-                    android:id="@+id/themeGta4RadioState"
+                    android:id="@+id/themeStripRadioState"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:background="?attr/selectableItemBackgroundBorderless"
@@ -291,15 +291,15 @@
                 android:orientation="horizontal">
 
                 <TextView
-                    android:id="@+id/themeGta4VolumeLabel"
+                    android:id="@+id/themeStripVolumeLabel"
                     android:layout_width="152dp"
                     android:layout_height="wrap_content"
                     android:text="Audio Level"
                     android:textColor="#D49A2A"
                     android:textSize="18sp" />
 
-                <com.sc.gtradio.GtaVolumeBarView
-                    android:id="@+id/themeGta4VolumeBar"
+                <com.sc.gtradio.VolumeBarView
+                    android:id="@+id/themeStripVolumeBar"
                     android:layout_width="150dp"
                     android:layout_height="18dp" />
             </LinearLayout>
@@ -314,7 +314,7 @@
                 android:orientation="horizontal">
 
                 <TextView
-                    android:id="@+id/themeGta4StationLabel"
+                    android:id="@+id/themeStripStationLabel"
                     android:layout_width="152dp"
                     android:layout_height="wrap_content"
                     android:text="Radio Station"
@@ -322,7 +322,7 @@
                     android:textSize="18sp" />
 
                 <TextView
-                    android:id="@+id/themeGta4ActiveStationName"
+                    android:id="@+id/themeStripActiveStationName"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
@@ -335,7 +335,7 @@
 
             <!-- Horizontal Scrolling Station Icons Row -->
             <HorizontalScrollView
-                android:id="@+id/themeGta4IconScroll"
+                android:id="@+id/themeStripIconScroll"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="18dp"
@@ -344,7 +344,7 @@
                 android:scrollbars="none">
 
                 <LinearLayout
-                    android:id="@+id/themeGta4IconRow"
+                    android:id="@+id/themeStripIconRow"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:gravity="center_vertical"

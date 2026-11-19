@@ -9,7 +9,7 @@ import android.view.MotionEvent
 import android.view.View
 import kotlin.math.roundToInt
 
-class GtaVolumeBarView @JvmOverloads constructor(
+class VolumeBarView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
     defStyleAttr: Int = 0

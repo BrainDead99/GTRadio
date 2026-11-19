@@ -35,7 +35,7 @@ data class DynamicThemePack(
     val stationIconUris: Map<String, Uri>,
     val stationOffIconUris: Map<String, Uri> = emptyMap(),
     val noiseSoundUris: List<Uri> = emptyList(),
-    val layoutStyle: String = "gtasa"
+    val layoutStyle: String = "grid"
 )
 
 object DynamicThemeManager {
@@ -438,7 +438,7 @@ object DynamicThemeManager {
 
         val layoutStyle = obj.optString(
             "layoutStyle",
-            if (isGta4Folder || offIcons.isNotEmpty()) "gta4" else "gtasa"
+            if (isGta4Folder || offIcons.isNotEmpty()) "strip" else "grid"
         )
 
         GTRadioLogger.log("DynamicThemeManager: Loaded theme pack '$seriesName' (style=$layoutStyle, onIcons=${onIcons.size}, offIcons=${offIcons.size}, bgP=${portraitBgs.size}, sounds=${noiseUris.size})")

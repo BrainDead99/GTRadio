@@ -55,14 +55,14 @@ class RadioList : Fragment() {
     private var activeThemePack: DynamicThemePack? = null
     private var loadedStations: List<MediaBrowserCompat.MediaItem> = emptyList()
     private val stationIconViews = HashMap<String, ImageView>()
-    private val gta4StripSlots = ArrayList<StripSlot>()
-    private val gta4ViewsByMediaId = HashMap<String, MutableList<ImageView>>()
+    private val stripSlots = ArrayList<StripSlot>()
+    private val stripViewsByMediaId = HashMap<String, MutableList<ImageView>>()
     private val stationOnBitmaps = HashMap<String, Bitmap?>()
     private val stationOffBitmaps = HashMap<String, Bitmap?>()
     private var lastAutoScrolledMediaId: String = ""
 
-    private var gta4ItemSpanPx: Int = 0
-    private var gta4CycleWidthPx: Int = 0
+    private var stripItemSpanPx: Int = 0
+    private var stripCycleWidthPx: Int = 0
 
     private var selectedStationTitle: String = ""
     private var centeredMediaId: String = ""
@@ -81,7 +81,7 @@ class RadioList : Fragment() {
     private val scrollSnapRunnable = Runnable {
         if (_binding == null) return@Runnable
         val pack = activeThemePack ?: return@Runnable
-        if (!isGta4Style(pack)) return@Runnable
+        if (!isStripLayout(pack)) return@Runnable
 
         isUserScrollingStrip = false
         recenterInfiniteScrollIfNeeded()
@@ -156,8 +156,10 @@ class RadioList : Fragment() {
 
     private val binding get() = _binding!!
 
-    private fun isGta4Style(pack: DynamicThemePack): Boolean {
-        return pack.layoutStyle.equals("gta4", ignoreCase = true) || pack.stationOffIconUris.isNotEmpty()
+    private fun isStripLayout(pack: DynamicThemePack): Boolean {
+        return pack.layoutStyle.equals("strip", ignoreCase = true) ||
+            pack.layoutStyle.equals("gta4", ignoreCase = true) ||
+            pack.stationOffIconUris.isNotEmpty()
     }
 
     private fun startStationWithTuningNoise(playAction: () -> Unit) {
@@ -165,13 +167,13 @@ class RadioList : Fragment() {
     }
 
     private fun recenterInfiniteScrollIfNeeded() {
-        if (_binding == null || gta4CycleWidthPx <= 0) return
-        val scrollView = binding.themeGta4IconScroll
+        if (_binding == null || stripCycleWidthPx <= 0) return
+        val scrollView = binding.themeStripIconScroll
         val curX = scrollView.scrollX
-        val curCycle = curX / gta4CycleWidthPx
+        val curCycle = curX / stripCycleWidthPx
         if (curCycle < 2 || curCycle > REPEAT_CYCLES - 3) {
             val deltaCycles = MIDDLE_CYCLE - curCycle
-            val newX = (curX + deltaCycles * gta4CycleWidthPx).coerceAtLeast(0)
+            val newX = (curX + deltaCycles * stripCycleWidthPx).coerceAtLeast(0)
             isProgrammaticScroll = true
             scrollView.scrollTo(newX, 0)
             isProgrammaticScroll = false
@@ -179,13 +181,13 @@ class RadioList : Fragment() {
     }
 
     private fun findClosestCenteredSlot(): StripSlot? {
-        if (_binding == null || gta4StripSlots.isEmpty()) return null
-        val scrollView = binding.themeGta4IconScroll
+        if (_binding == null || stripSlots.isEmpty()) return null
+        val scrollView = binding.themeStripIconScroll
         val viewportCenter = scrollView.scrollX + (scrollView.width / 2)
         var bestSlot: StripSlot? = null
         var bestDist = Int.MAX_VALUE
 
-        for (slot in gta4StripSlots) {
+        for (slot in stripSlots) {
             val iv = slot.imageView
             val childCenter = (iv.left + iv.right) / 2
             val dist = abs(childCenter - viewportCenter)
@@ -198,13 +200,13 @@ class RadioList : Fragment() {
     }
 
     private fun findClosestSlotForMediaId(mediaId: String): StripSlot? {
-        if (_binding == null || mediaId.isBlank() || gta4StripSlots.isEmpty()) return null
-        val scrollView = binding.themeGta4IconScroll
+        if (_binding == null || mediaId.isBlank() || stripSlots.isEmpty()) return null
+        val scrollView = binding.themeStripIconScroll
         val viewportCenter = scrollView.scrollX + (scrollView.width / 2)
         var bestSlot: StripSlot? = null
         var bestDist = Int.MAX_VALUE
 
-        for (slot in gta4StripSlots) {
+        for (slot in stripSlots) {
             if (slot.mediaId != mediaId) continue
             val iv = slot.imageView
             val childCenter = (iv.left + iv.right) / 2
@@ -220,7 +222,7 @@ class RadioList : Fragment() {
     private fun scrollSlotToCenter(slot: StripSlot, smooth: Boolean = true) {
         if (_binding == null) return
         val iv = slot.imageView
-        val scrollView = binding.themeGta4IconScroll
+        val scrollView = binding.themeStripIconScroll
         scrollView.post {
             if (_binding == null) return@post
             val targetX = ((iv.left + iv.right) / 2 - (scrollView.width / 2)).coerceAtLeast(0)
@@ -243,7 +245,7 @@ class RadioList : Fragment() {
         scrollSlotToCenter(slot, smooth)
     }
 
-    private fun onGta4SlotTapped(slot: StripSlot) {
+    private fun onStripSlotTapped(slot: StripSlot) {
         val clickedItem = slot.item
         val clickedId = slot.mediaId
         val transportControls = musicServiceConnection?.transportControls
@@ -277,10 +279,10 @@ class RadioList : Fragment() {
 
     private fun onStationClicked(clickedItem: MediaBrowserCompat.MediaItem) {
         val pack = activeThemePack
-        if (pack != null && isGta4Style(pack)) {
+        if (pack != null && isStripLayout(pack)) {
             val slot = findClosestSlotForMediaId(clickedItem.mediaId ?: "")
             if (slot != null) {
-                onGta4SlotTapped(slot)
+                onStripSlotTapped(slot)
                 return
             }
         }
@@ -350,10 +352,10 @@ class RadioList : Fragment() {
         setupVolumeControls()
 
         binding.themeRadioState.setOnClickListener { toggleRadioPower() }
-        binding.themeGta4RadioState.setOnClickListener { toggleRadioPower() }
-        binding.themeGta4RadioLabel.setOnClickListener { toggleRadioPower() }
+        binding.themeStripRadioState.setOnClickListener { toggleRadioPower() }
+        binding.themeStripRadioLabel.setOnClickListener { toggleRadioPower() }
 
-        binding.themeGta4IconScroll.setOnTouchListener { _, event ->
+        binding.themeStripIconScroll.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     isUserScrollingStrip = true
@@ -372,10 +374,10 @@ class RadioList : Fragment() {
             false
         }
 
-        binding.themeGta4IconScroll.viewTreeObserver.addOnScrollChangedListener {
+        binding.themeStripIconScroll.viewTreeObserver.addOnScrollChangedListener {
             if (_binding == null || isProgrammaticScroll) return@addOnScrollChangedListener
             val pack = activeThemePack ?: return@addOnScrollChangedListener
-            if (!isGta4Style(pack)) return@addOnScrollChangedListener
+            if (!isStripLayout(pack)) return@addOnScrollChangedListener
 
             if (isUserScrollingStrip) {
                 val centerSlot = findClosestCenteredSlot()
@@ -385,8 +387,8 @@ class RadioList : Fragment() {
                     if (cId != centeredMediaId) {
                         centeredMediaId = cId
                         selectedStationTitle = cTitle
-                        binding.themeGta4ActiveStationName.text = cTitle
-                        updateGta4IconsHighlight(if (currentPlaybackState.isPlaying) centeredMediaId else "")
+                        binding.themeStripActiveStationName.text = cTitle
+                        updateStripIconsHighlight(if (currentPlaybackState.isPlaying) centeredMediaId else "")
                     }
                 }
                 scrollHandler.removeCallbacks(scrollSnapRunnable)
@@ -395,10 +397,10 @@ class RadioList : Fragment() {
         }
     }
 
-    private fun updateGta4IconsHighlight(activeId: String) {
+    private fun updateStripIconsHighlight(activeId: String) {
         val pack = activeThemePack ?: return
         val hasOffIcons = pack.stationOffIconUris.isNotEmpty()
-        for ((mId, views) in gta4ViewsByMediaId) {
+        for ((mId, views) in stripViewsByMediaId) {
             val isThisActive = activeId.isNotBlank() && mId == activeId
             val bmp = if (isThisActive) stationOnBitmaps[mId] else stationOffBitmaps[mId]
             val alphaVal = if (isThisActive || hasOffIcons) 1.0f else 0.28f
@@ -417,7 +419,7 @@ class RadioList : Fragment() {
             val curSys = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
             val bars = ((curSys.toFloat() / maxSys.toFloat()) * binding.themeVolumeBar.maxBars).roundToInt()
             binding.themeVolumeBar.currentBars = bars
-            binding.themeGta4VolumeBar.currentBars = bars
+            binding.themeStripVolumeBar.currentBars = bars
         }
         syncBarsFromSystem()
 
@@ -426,10 +428,10 @@ class RadioList : Fragment() {
             val targetVol = ((bars.toFloat() / maxBars.toFloat()) * maxSys).roundToInt().coerceIn(0, maxSys)
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
             binding.themeVolumeBar.currentBars = bars
-            binding.themeGta4VolumeBar.currentBars = bars
+            binding.themeStripVolumeBar.currentBars = bars
         }
         binding.themeVolumeBar.onVolumeBarsChanged = onVolumeChanged
-        binding.themeGta4VolumeBar.onVolumeBarsChanged = onVolumeChanged
+        binding.themeStripVolumeBar.onVolumeBarsChanged = onVolumeChanged
 
         val obs = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
@@ -457,9 +459,9 @@ class RadioList : Fragment() {
         binding.dynamicThemeRoot.visibility = View.VISIBLE
         (activity as? MainActivity)?.setFullscreenThemeMode(true)
 
-        val gta4Mode = isGta4Style(pack)
-        binding.themeControlsBlock.visibility = if (gta4Mode) View.GONE else View.VISIBLE
-        binding.themeGta4ControlsBlock.visibility = if (gta4Mode) View.VISIBLE else View.GONE
+        val stripMode = isStripLayout(pack)
+        binding.themeControlsBlock.visibility = if (stripMode) View.GONE else View.VISIBLE
+        binding.themeStripControlsBlock.visibility = if (stripMode) View.VISIBLE else View.GONE
 
         // Apply Header Title & Font
         binding.themeHeaderTitle.text = pack.headerTitle
@@ -476,11 +478,11 @@ class RadioList : Fragment() {
             binding.themeVolumeLabel,
             binding.themeRadioStationLabel,
             binding.themeActiveStationName,
-            binding.themeGta4RadioLabel,
-            binding.themeGta4RadioState,
-            binding.themeGta4VolumeLabel,
-            binding.themeGta4StationLabel,
-            binding.themeGta4ActiveStationName
+            binding.themeStripRadioLabel,
+            binding.themeStripRadioState,
+            binding.themeStripVolumeLabel,
+            binding.themeStripStationLabel,
+            binding.themeStripActiveStationName
         )
         pack.bodyTypeface?.let { tf ->
             bodyViews.forEach { it.typeface = tf }
@@ -489,11 +491,11 @@ class RadioList : Fragment() {
         binding.themeVolumeBar.continuousMode = false
         binding.themeVolumeBar.activeBarColor = pack.volumeBarColor
 
-        binding.themeGta4VolumeBar.continuousMode = true
-        binding.themeGta4VolumeBar.activeBarColor = pack.volumeBarColor
-        binding.themeGta4VolumeBar.inactiveBarColor = Color.parseColor("#3B3B3B")
+        binding.themeStripVolumeBar.continuousMode = true
+        binding.themeStripVolumeBar.activeBarColor = pack.volumeBarColor
+        binding.themeStripVolumeBar.inactiveBarColor = Color.parseColor("#3B3B3B")
 
-        if (!gta4Mode) {
+        if (!stripMode) {
             binding.themeNowPlayingLabel.setTextColor(pack.activeTextColor)
             binding.themeSongTitle.setTextColor(pack.headerColor)
             binding.themeSongArtist.setTextColor(pack.activeTextColor)
@@ -524,18 +526,18 @@ class RadioList : Fragment() {
         // Build Station Icons
         binding.themeIconRow1.removeAllViews()
         binding.themeIconRow2.removeAllViews()
-        binding.themeGta4IconRow.removeAllViews()
+        binding.themeStripIconRow.removeAllViews()
         stationIconViews.clear()
-        gta4StripSlots.clear()
-        gta4ViewsByMediaId.clear()
+        stripSlots.clear()
+        stripViewsByMediaId.clear()
         stationOnBitmaps.clear()
         stationOffBitmaps.clear()
 
         val density = resources.displayMetrics.density
-        val iconSizePx = ((if (gta4Mode) 64 else 52) * density).roundToInt()
-        val marginPx = ((if (gta4Mode) 4 else 3) * density).roundToInt()
-        gta4ItemSpanPx = iconSizePx + (marginPx * 2)
-        gta4CycleWidthPx = children.size * gta4ItemSpanPx
+        val iconSizePx = ((if (stripMode) 64 else 52) * density).roundToInt()
+        val marginPx = ((if (stripMode) 4 else 3) * density).roundToInt()
+        stripItemSpanPx = iconSizePx + (marginPx * 2)
+        stripCycleWidthPx = children.size * stripItemSpanPx
 
         for (item in children) {
             val mId = item.mediaId ?: continue
@@ -552,7 +554,7 @@ class RadioList : Fragment() {
             stationOffBitmaps[mId] = offBmp
         }
 
-        if (gta4Mode && children.isNotEmpty()) {
+        if (stripMode && children.isNotEmpty()) {
             val hasOffIcons = pack.stationOffIconUris.isNotEmpty()
             for (cycle in 0 until REPEAT_CYCLES) {
                 for (item in children) {
@@ -571,21 +573,21 @@ class RadioList : Fragment() {
                         alpha = if (hasOffIcons) 1.0f else 0.28f
                     }
                     val slot = StripSlot(item, mId, iv)
-                    iv.setOnClickListener { onGta4SlotTapped(slot) }
-                    gta4StripSlots.add(slot)
-                    gta4ViewsByMediaId.getOrPut(mId) { ArrayList() }.add(iv)
+                    iv.setOnClickListener { onStripSlotTapped(slot) }
+                    stripSlots.add(slot)
+                    stripViewsByMediaId.getOrPut(mId) { ArrayList() }.add(iv)
                     if (cycle == MIDDLE_CYCLE) {
                         stationIconViews[mId] = iv
                     }
-                    binding.themeGta4IconRow.addView(iv)
+                    binding.themeStripIconRow.addView(iv)
                 }
             }
 
-            binding.themeGta4IconScroll.post {
+            binding.themeStripIconScroll.post {
                 if (_binding == null) return@post
-                val sidePad = ((binding.themeGta4IconScroll.width - gta4ItemSpanPx) / 2).coerceAtLeast(0)
-                binding.themeGta4IconScroll.setPadding(0, 0, 0, 0)
-                binding.themeGta4IconRow.setPadding(sidePad, 0, sidePad, 0)
+                val sidePad = ((binding.themeStripIconScroll.width - stripItemSpanPx) / 2).coerceAtLeast(0)
+                binding.themeStripIconScroll.setPadding(0, 0, 0, 0)
+                binding.themeStripIconRow.setPadding(sidePad, 0, sidePad, 0)
                 val initialId = centeredMediaId.ifBlank {
                     currentMetadata.description.mediaId ?: children.firstOrNull()?.mediaId ?: ""
                 }
@@ -593,9 +595,9 @@ class RadioList : Fragment() {
                     centeredMediaId = initialId
                     val middleIv = stationIconViews[initialId]
                     if (middleIv != null) {
-                        val targetX = ((middleIv.left + middleIv.right) / 2 - (binding.themeGta4IconScroll.width / 2)).coerceAtLeast(0)
+                        val targetX = ((middleIv.left + middleIv.right) / 2 - (binding.themeStripIconScroll.width / 2)).coerceAtLeast(0)
                         isProgrammaticScroll = true
-                        binding.themeGta4IconScroll.scrollTo(targetX, 0)
+                        binding.themeStripIconScroll.scrollTo(targetX, 0)
                         isProgrammaticScroll = false
                     }
                 }
@@ -639,7 +641,7 @@ class RadioList : Fragment() {
         val pack = activeThemePack ?: return
         if (_binding == null) return
 
-        val gta4Mode = isGta4Style(pack)
+        val stripMode = isStripLayout(pack)
         val isPlaying = currentPlaybackState.isPlaying
         val activeMediaId = currentMetadata.description.mediaId ?: ""
         val activeStationFromMeta = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_WRITER)
@@ -647,16 +649,16 @@ class RadioList : Fragment() {
             ?: loadedStations.find { it.mediaId == centeredMediaId }?.description?.title?.toString()
             ?: selectedStationTitle
 
-        if (gta4Mode) {
+        if (stripMode) {
             val statusColor = if (isPlaying) pack.activeTextColor else pack.labelColor
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
             binding.themeNowPlayingLabel.setTextColor(statusColor)
 
-            binding.themeGta4RadioLabel.setTextColor(statusColor)
-            binding.themeGta4RadioState.text = if (isPlaying) "On" else "Off"
-            binding.themeGta4RadioState.setTextColor(statusColor)
-            binding.themeGta4VolumeLabel.setTextColor(statusColor)
-            binding.themeGta4StationLabel.setTextColor(statusColor)
+            binding.themeStripRadioLabel.setTextColor(statusColor)
+            binding.themeStripRadioState.text = if (isPlaying) "On" else "Off"
+            binding.themeStripRadioState.setTextColor(statusColor)
+            binding.themeStripVolumeLabel.setTextColor(statusColor)
+            binding.themeStripStationLabel.setTextColor(statusColor)
 
             val selectedItem = if (!isUserScrollingStrip && activeMediaId.isNotBlank() && loadedStations.any { it.mediaId == activeMediaId }) {
                 loadedStations.find { it.mediaId == activeMediaId }
@@ -675,11 +677,11 @@ class RadioList : Fragment() {
             } else {
                 selectedItem?.description?.title?.toString() ?: activeStationFromMeta
             }
-            binding.themeGta4ActiveStationName.text = displayStationTitle
-            binding.themeGta4ActiveStationName.setTextColor(statusColor)
+            binding.themeStripActiveStationName.text = displayStationTitle
+            binding.themeStripActiveStationName.setTextColor(statusColor)
 
             val highlightedId = if (isPlaying) (if (isUserScrollingStrip) centeredMediaId else activeMediaId) else ""
-            updateGta4IconsHighlight(highlightedId)
+            updateStripIconsHighlight(highlightedId)
 
             if (!isUserScrollingStrip && selectedMediaId.isNotBlank() && selectedMediaId != lastAutoScrolledMediaId) {
                 lastAutoScrolledMediaId = selectedMediaId
@@ -738,7 +740,7 @@ class RadioList : Fragment() {
             return
         }
 
-        // Standard GTA San Andreas Dynamic Theme UI
+        // Standard Dynamic Theme Grid UI
         binding.themeRadioState.text = if (isPlaying) "ON" else "OFF"
         binding.themeRadioState.setTextColor(if (isPlaying) pack.activeTextColor else pack.labelColor)
         binding.themeActiveStationName.text = activeStationFromMeta.uppercase()
