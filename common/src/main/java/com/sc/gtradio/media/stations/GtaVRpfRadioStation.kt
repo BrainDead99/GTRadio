@@ -411,15 +411,30 @@ data class GtaVClipRef(
             val path = uri.path
             if (path != null) {
                 val f = File(path)
-                if (f.exists() && f.length() > 44L) {
-                    RandomAccessFile(f, "r").use { raf ->
-                        val hdr = ByteArray(44)
-                        raf.readFully(hdr)
-                        val bb = ByteBuffer.wrap(hdr).order(ByteOrder.LITTLE_ENDIAN)
-                        val byteRate = bb.getInt(28)
-                        val dataBytes = (f.length() - 44L).coerceAtLeast(0L)
-                        if (byteRate > 0) {
-                            dur = (dataBytes * 1000L) / byteRate.toLong()
+                if (f.exists() && f.length() > 0L) {
+                    if (f.name.endsWith(".mp3", ignoreCase = true)) {
+                        val mmr = android.media.MediaMetadataRetriever()
+                        try {
+                            mmr.setDataSource(f.absolutePath)
+                            val dStr = mmr.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+                            if (dStr != null) {
+                                dur = dStr.toLong()
+                            }
+                        } catch (_: Exception) {
+                            dur = (f.length() * 1000L) / 12000L
+                        } finally {
+                            try { mmr.release() } catch (_: Exception) {}
+                        }
+                    } else if (f.length() > 44L) {
+                        RandomAccessFile(f, "r").use { raf ->
+                            val hdr = ByteArray(44)
+                            raf.readFully(hdr)
+                            val bb = ByteBuffer.wrap(hdr).order(ByteOrder.LITTLE_ENDIAN)
+                            val byteRate = bb.getInt(28)
+                            val dataBytes = (f.length() - 44L).coerceAtLeast(0L)
+                            if (byteRate > 0) {
+                                dur = (dataBytes * 1000L) / byteRate.toLong()
+                            }
                         }
                     }
                 }
@@ -451,7 +466,7 @@ data class GtaVClipRef(
         for (u in uris) {
             val p = u.path ?: return false
             val f = File(p)
-            if (!f.exists() || f.length() <= 44L) return false
+            if (!f.exists() || f.length() <= 0L) return false
         }
         return true
     }
@@ -526,14 +541,15 @@ data class GtaVClipRef(
         ) {
             val isContinuousMix = isContinuousMixStation || GtaVMetadataRepository.getTrackMeta(item.trackName).isContinuousMix
             val maxChunksBeforeBreak = if (isContinuousMix) 6 else 100
+            val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
             if (currentMultiChunksPlayedInRow < maxChunksBeforeBreak) {
                 val nextUri = item.archive.materializeBlockChunkUri(
                     item.trackName,
                     currentMultiChunkNextBlock,
-                    GtaVRpfArchive.CHUNK_BLOCKS
+                    chunkBlocks
                 )
                 if (nextUri != null) {
-                    currentMultiChunkNextBlock += GtaVRpfArchive.CHUNK_BLOCKS
+                    currentMultiChunkNextBlock += chunkBlocks
                     currentMultiChunksPlayedInRow += 1
                     currentSegmentUris = listOf(nextUri)
 
@@ -543,7 +559,7 @@ data class GtaVClipRef(
                         item.archive.prefetchBlockChunk(
                             item.trackName,
                             currentMultiChunkNextBlock,
-                            GtaVRpfArchive.CHUNK_BLOCKS
+                            chunkBlocks
                         ) { !_playing || prefetchGeneration != gen }
                     }
                     return true
@@ -716,19 +732,21 @@ data class GtaVClipRef(
 
         val item = songQueue.next()
         val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
-        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, intros=${item.introKeys.size})")
+        val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
+        val chunkThreshold = item.archive.getChunkThresholdFor(item.trackName)
+        GTRadioLogger.log("GtaVRpfRadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, chunkBlocks=$chunkBlocks, intros=${item.introKeys.size})")
 
         val mainUri: Uri
-        if (totalBlocks > GtaVRpfArchive.CHUNK_THRESHOLD_BLOCKS) {
+        if (totalBlocks > chunkThreshold) {
             val isContinuousMix = isContinuousMixStation || GtaVMetadataRepository.getTrackMeta(item.trackName).isContinuousMix
-            val startBlk = if (isContinuousMix && totalBlocks > GtaVRpfArchive.CHUNK_BLOCKS * 2) {
-                (rng.nextInt(totalBlocks / GtaVRpfArchive.CHUNK_BLOCKS) * GtaVRpfArchive.CHUNK_BLOCKS).coerceAtMost(totalBlocks - GtaVRpfArchive.CHUNK_BLOCKS)
+            val startBlk = if (isContinuousMix && totalBlocks > chunkBlocks * 2) {
+                (rng.nextInt(totalBlocks / chunkBlocks) * chunkBlocks).coerceAtMost(totalBlocks - chunkBlocks)
             } else {
                 0
             }
-            mainUri = item.archive.materializeBlockChunkUri(item.trackName, startBlk, GtaVRpfArchive.CHUNK_BLOCKS) ?: return false
+            mainUri = item.archive.materializeBlockChunkUri(item.trackName, startBlk, chunkBlocks) ?: return false
             currentMultiChunkTotalBlocks = totalBlocks
-            currentMultiChunkNextBlock = startBlk + GtaVRpfArchive.CHUNK_BLOCKS
+            currentMultiChunkNextBlock = startBlk + chunkBlocks
             currentMultiChunksPlayedInRow = 1
 
             // Prefetch next chunk with generation counter
@@ -736,7 +754,7 @@ data class GtaVClipRef(
             item.archive.prefetchBlockChunk(
                 item.trackName,
                 currentMultiChunkNextBlock,
-                GtaVRpfArchive.CHUNK_BLOCKS
+                chunkBlocks
             ) { !_playing || prefetchGeneration != gen }
         } else {
             mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false

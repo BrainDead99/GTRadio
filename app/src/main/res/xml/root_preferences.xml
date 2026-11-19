@@ -12,7 +12,7 @@
             android:clickable="true"
             app:key="game_key_folder_uri"
             app:title="Game Key Directory (GTA IV / EFLC / GTA V)"
-            app:summary="GTRadio does not include game keys. Tap to select a folder containing your own copy of GTAIV.exe, EFLC.exe, GTA5.exe, or extracted .dat key files." />
+            app:summary="GTRadio does not include game keys. Tap to select a folder containing your own copy of GTAIV.exe, EFLC.exe, GTA5.exe, GTA5_Enhanced.exe, or extracted .dat key files." />
     </PreferenceCategory>
 
     <PreferenceCategory app:title="@string/theme_header">

@@ -55,5 +55,5 @@
     <string name="nothing_playing">Nothing Playing</string>
     <string name="no_groups_available">No groups available. Double check the selected folder and your folder structure.</string>
     <string name="sad_face">Sad face</string>
-    <string name="library_setup_disclaimer">Note: GTRadio does not include any game audio files or encryption keys.\n\nTo play GTA IV, EFLC, or GTA V directly from .rpf archives, place your own legitimate copy of GTAIV.exe, EFLC.exe, or GTA5.exe (or extracted .dat key files) inside your audio folder for automatic scanning, or select your key folder later in Settings \u2192 Game Key Directory.</string>
+    <string name="library_setup_disclaimer">Note: GTRadio does not include any game audio files or encryption keys.\n\nTo play GTA IV, EFLC, or GTA V directly from .rpf archives, place your own legitimate copy of GTAIV.exe, EFLC.exe, GTA5.exe, or GTA5_Enhanced.exe (or extracted .dat key files) inside your audio folder for automatic scanning, or select your key folder later in Settings \u2192 Game Key Directory.</string>
 </resources>

@@ -1,6 +1,8 @@
 package com.sc.gtradio.media.stations
 
 import android.content.Context
+import android.media.MediaCodec
+import android.media.MediaFormat
 import android.net.Uri
 import com.sc.gtradio.common.GTRadioLogger
 import java.io.BufferedOutputStream
@@ -31,7 +33,8 @@ data class GtaVRpfEntry(
     val dataChunkSize: Long = 0L,
     val blockSize: Int = 0,
     val isMultiChannelEncrypt: Boolean = false,
-    val isWholeFileEncrypted: Boolean = false
+    val isWholeFileEncrypted: Boolean = false,
+    val codec: Int = 4
 )
 
 /**
@@ -357,6 +360,7 @@ class GtaVRpfArchive(
             var chCount = 2
             var chSampleRate = 48000
             var chSamples = 0
+            var chCodec = 4
             var dataChunkOff = dataOffset.toLong()
             var dataChunkSize = rpfSize - dataOffset
 
@@ -377,6 +381,7 @@ class GtaVRpfArchive(
                                 chSamples = sfBuf.int
                                 sfBuf.short // headroom
                                 chSampleRate = sfBuf.short.toInt() and 0xFFFF
+                                chCodec = sfBuf.get().toInt() and 0xFF
                             }
                         }
                     } else if (chunk.type == 0x55) { // Data chunk
@@ -401,26 +406,13 @@ class GtaVRpfArchive(
                 dataChunkSize = dataChunkSize,
                 blockSize = blkSize,
                 isMultiChannelEncrypt = multiChannelEncrypt,
-                isWholeFileEncrypted = wholeFileEncrypted
+                isWholeFileEncrypted = wholeFileEncrypted,
+                codec = chCodec
             )
             entries[entryName] = entry
         } else {
             // Single-channel voice bank (e.g. general.awc, intro.awc, to.awc)
-            val parentEntry = GtaVRpfEntry(
-                name = entryName,
-                offset = rpfOffset,
-                size = rpfSize,
-                isEncrypted = isEncrypted,
-                isCompressed = isCompressed,
-                isMultiChannel = false,
-                numBlocks = 1,
-                sampleRate = 48000,
-                channels = 1,
-                totalSamples = 0,
-                isWholeFileEncrypted = wholeFileEncrypted
-            )
-            entries[entryName] = parentEntry
-
+            var bankCodec = 4
             val baseName = entryName.removeSuffix(".awc")
             for (sIdx in 0 until streams.size) {
                 val sInfo = streams[sIdx]
@@ -444,6 +436,7 @@ class GtaVRpfArchive(
                         fmtBuf.short // playEnd
                         fmtBuf.get() // playBegin
                         val codec = fmtBuf.get().toInt() and 0xFF
+                        bankCodec = codec
 
                         val subKey = "${baseName}_sub$sIdx"
                         val hexKey = "${baseName}_0x${Integer.toHexString(sInfo.id).padStart(8, '0')}"
@@ -465,6 +458,22 @@ class GtaVRpfArchive(
                     }
                 }
             }
+
+            val parentEntry = GtaVRpfEntry(
+                name = entryName,
+                offset = rpfOffset,
+                size = rpfSize,
+                isEncrypted = isEncrypted,
+                isCompressed = isCompressed,
+                isMultiChannel = false,
+                numBlocks = 1,
+                sampleRate = 48000,
+                channels = 1,
+                totalSamples = 0,
+                isWholeFileEncrypted = wholeFileEncrypted,
+                codec = bankCodec
+            )
+            entries[entryName] = parentEntry
         }
     }
 
@@ -504,6 +513,21 @@ class GtaVRpfArchive(
         return entries.containsKey(cleanName) || entries.containsKey(name) || bankSubTracks.containsKey(name)
     }
 
+    fun isEnhancedMp3Archive(): Boolean {
+        ensureIndexed()
+        return entries.values.any { it.codec == 7 } || bankSubTracks.values.any { it.codec == 7 }
+    }
+
+    fun getChunkBlocksFor(entryName: String): Int {
+        val entry = getEntry(entryName)
+        return if (entry?.codec == 7) 2 else CHUNK_BLOCKS
+    }
+
+    fun getChunkThresholdFor(entryName: String): Int {
+        val entry = getEntry(entryName)
+        return if (entry?.codec == 7) 6 else CHUNK_THRESHOLD_BLOCKS
+    }
+
     // ------------------------------------------------------------------------
     // Audio Materialization (Decoding to 16-bit PCM WAV)
     // ------------------------------------------------------------------------
@@ -522,8 +546,10 @@ class GtaVRpfArchive(
         // 1. Check if it's a MultiChannel entry
         val entry = getEntry(cleanKey)
         if (entry != null && entry.isMultiChannel) {
-            return if (entry.numBlocks > CHUNK_THRESHOLD_BLOCKS) {
-                materializeBlockChunkUri(entry.name, 0, CHUNK_BLOCKS)
+            val threshold = getChunkThresholdFor(entry.name)
+            val chunkBlocks = getChunkBlocksFor(entry.name)
+            return if (entry.numBlocks > threshold) {
+                materializeBlockChunkUri(entry.name, 0, chunkBlocks)
             } else {
                 materializeBlockChunkUri(entry.name, 0, entry.numBlocks)
             }
@@ -546,7 +572,7 @@ class GtaVRpfArchive(
     fun materializeBlockChunkUri(
         entryName: String,
         startBlock: Int,
-        blockCount: Int = CHUNK_BLOCKS
+        blockCount: Int = getChunkBlocksFor(entryName)
     ): Uri? {
         ensureIndexed()
         val entry = getEntry(entryName) ?: return null
@@ -558,7 +584,7 @@ class GtaVRpfArchive(
 
         // Background prefetch next chunk if more blocks remain
         if (actualStart + actualCount < entry.numBlocks) {
-            prefetchBlockChunk(entry.name, actualStart + actualCount, CHUNK_BLOCKS)
+            prefetchBlockChunk(entry.name, actualStart + actualCount, getChunkBlocksFor(entry.name))
         }
 
         return uri
@@ -570,7 +596,7 @@ class GtaVRpfArchive(
     fun materializeAudioChunkUri(
         entryName: String,
         startBlock: Int,
-        blockCount: Int = CHUNK_BLOCKS
+        blockCount: Int = getChunkBlocksFor(entryName)
     ): Uri? = materializeBlockChunkUri(entryName, startBlock, blockCount)
 
     /**
@@ -579,7 +605,7 @@ class GtaVRpfArchive(
     fun prefetchBlockChunk(
         entryName: String,
         startBlock: Int,
-        blockCount: Int = CHUNK_BLOCKS,
+        blockCount: Int = getChunkBlocksFor(entryName),
         isCancelled: (() -> Boolean)? = null
     ) {
         val entry = getEntry(entryName) ?: return
@@ -600,10 +626,11 @@ class GtaVRpfArchive(
         val cacheDir = File(context.cacheDir, "gta5_rpf_tracks")
         if (!cacheDir.exists()) cacheDir.mkdirs()
 
+        val uriHash = Integer.toHexString(sourceUri.toString().hashCode())
         val isFullTrack = (startBlock == 0 && blockCount >= entry.numBlocks)
         val chunkSuffix = if (isFullTrack) "" else "_blk${startBlock}_${blockCount}"
         val safeBase = entry.name.removeSuffix(".awc").replace(Regex("[^A-Za-z0-9_]"), "_")
-        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${safeBase}$chunkSuffix.wav"
+        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${uriHash}_${safeBase}$chunkSuffix.wav"
         val outFile = File(cacheDir, safeFileName)
 
         // Cache hit
@@ -627,7 +654,11 @@ class GtaVRpfArchive(
 
                 context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                     FileInputStream(pfd.fileDescriptor).channel.use { channel ->
-                        decodeMultiChannelBlocks(channel, entry, startBlock, blockCount, keys, tempFile)
+                        if (entry.codec == 7) {
+                            decodeEnhancedMp3MultiChannelBlocks(channel, entry, startBlock, blockCount, keys, tempFile)
+                        } else {
+                            decodeMultiChannelBlocks(channel, entry, startBlock, blockCount, keys, tempFile)
+                        }
                     }
                 }
 
@@ -644,6 +675,195 @@ class GtaVRpfArchive(
             }
         }
         return null
+    }
+
+    private fun decodeEnhancedMp3MultiChannelBlocks(
+        channel: FileChannel,
+        entry: GtaVRpfEntry,
+        startBlock: Int,
+        blockCount: Int,
+        keys: GtaVKeySet,
+        tempFile: File
+    ) {
+        val blkSize = entry.blockSize
+        val baseDataOffset = entry.offset + entry.dataChunkOffset
+        val chCount = Math.max(1, entry.channels)
+        val dataEndPos = baseDataOffset + entry.dataChunkSize
+
+        val pcmDataBaos = java.io.ByteArrayOutputStream(blockCount * blkSize * 4)
+
+        for (b in 0 until blockCount) {
+            val curBlockIdx = startBlock + b
+            if (curBlockIdx >= entry.numBlocks) break
+
+            val blockOffset = baseDataOffset + curBlockIdx.toLong() * blkSize.toLong()
+            val actualBlockSize = Math.min(blkSize.toLong(), dataEndPos - blockOffset).toInt()
+            if (actualBlockSize <= 0) break
+
+            val blockBytes = ByteArray(actualBlockSize)
+            val buf = ByteBuffer.wrap(blockBytes)
+            channel.position(blockOffset)
+            val bytesRead = channel.read(buf)
+            if (bytesRead <= 0) break
+
+            // Decrypt block payload if encrypted
+            if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
+                GtaVCrypto.decryptRsxxtea(blockBytes, 0, actualBlockSize and -4, keys.awcKey)
+            }
+
+            // Parse 2048-byte Codec-7 block header
+            // For each channel: 6 int32s (24 bytes): startBlock, blockCount, samplesToSkip, sampleCount, frameCount, byteLength
+            val startBlocks = IntArray(chCount)
+            val blockCounts = IntArray(chCount)
+            val samplesToSkip = IntArray(chCount)
+            val sampleCounts = IntArray(chCount)
+            val frameCounts = IntArray(chCount)
+            val byteLengths = IntArray(chCount)
+
+            var descPos = 0
+            for (c in 0 until chCount) {
+                if (descPos + 24 <= actualBlockSize) {
+                    startBlocks[c] = readIntLe(blockBytes, descPos)
+                    blockCounts[c] = readIntLe(blockBytes, descPos + 4)
+                    samplesToSkip[c] = readIntLe(blockBytes, descPos + 8)
+                    sampleCounts[c] = readIntLe(blockBytes, descPos + 12)
+                    frameCounts[c] = readIntLe(blockBytes, descPos + 16)
+                    byteLengths[c] = readIntLe(blockBytes, descPos + 20)
+                }
+                descPos += 24
+            }
+
+            // Channel payloads start after header (2048 bytes)
+            var curPos = 2048
+            val channelPcm = ArrayList<ShortArray>(chCount)
+
+            for (c in 0 until chCount) {
+                val chByteLen = byteLengths[c]
+                val chOffset = curPos
+                // 16-byte alignment for next channel
+                curPos = (curPos + chByteLen + 15) and -16
+
+                val safeLen = Math.max(0, Math.min(chByteLen, actualBlockSize - chOffset))
+                val mp3Payload = ByteArray(safeLen)
+                if (safeLen > 0 && chOffset < actualBlockSize) {
+                    System.arraycopy(blockBytes, chOffset, mp3Payload, 0, safeLen)
+                }
+
+                val decoded = decodeMp3ChannelToPcm(mp3Payload, entry.sampleRate)
+                val trimStart = samplesToSkip[c].coerceIn(0, decoded.size)
+                val trimEnd = if (sampleCounts[c] > trimStart) sampleCounts[c].coerceAtMost(decoded.size) else decoded.size
+                val trimmed = if (trimStart < trimEnd) {
+                    decoded.copyOfRange(trimStart, trimEnd)
+                } else {
+                    decoded
+                }
+                channelPcm.add(trimmed)
+            }
+
+            // Interleave PCM frames (Left, Right for stereo, or Mono)
+            if (chCount >= 2) {
+                val left = channelPcm[0]
+                val right = channelPcm[1]
+                val n = Math.min(left.size, right.size)
+                for (f in 0 until n) {
+                    val l = left[f].toInt()
+                    pcmDataBaos.write(l and 0xFF)
+                    pcmDataBaos.write((l ushr 8) and 0xFF)
+                    val r = right[f].toInt()
+                    pcmDataBaos.write(r and 0xFF)
+                    pcmDataBaos.write((r ushr 8) and 0xFF)
+                }
+            } else if (channelPcm.isNotEmpty()) {
+                val mono = channelPcm[0]
+                for (f in 0 until mono.size) {
+                    val m = mono[f].toInt()
+                    pcmDataBaos.write(m and 0xFF)
+                    pcmDataBaos.write((m ushr 8) and 0xFF)
+                }
+            }
+        }
+
+        // Write final WAV file
+        val pcmBytes = pcmDataBaos.toByteArray()
+        BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
+            writeWavHeader(out, pcmBytes.size, entry.sampleRate, chCount)
+            out.write(pcmBytes)
+        }
+    }
+
+    private fun decodeMp3ChannelToPcm(mp3Bytes: ByteArray, sampleRate: Int): ShortArray {
+        if (mp3Bytes.isEmpty()) return ShortArray(0)
+        var codec: MediaCodec? = null
+        try {
+            codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_MPEG)
+            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_MPEG, sampleRate, 1)
+            codec.configure(format, null, null, 0)
+            codec.start()
+
+            val info = MediaCodec.BufferInfo()
+            var inputOffset = 0
+            var sawInputEos = false
+            var sawOutputEos = false
+
+            val outBaos = java.io.ByteArrayOutputStream(mp3Bytes.size * 12)
+            var emptyCount = 0
+
+            while (!sawOutputEos && emptyCount < 100) {
+                if (!sawInputEos) {
+                    val inputIndex = codec.dequeueInputBuffer(10_000L)
+                    if (inputIndex >= 0) {
+                        val inputBuf = codec.getInputBuffer(inputIndex)
+                        if (inputBuf != null) {
+                            inputBuf.clear()
+                            val bytesRemaining = mp3Bytes.size - inputOffset
+                            val toWrite = Math.min(inputBuf.remaining(), bytesRemaining)
+                            if (toWrite > 0) {
+                                inputBuf.put(mp3Bytes, inputOffset, toWrite)
+                                inputOffset += toWrite
+                            }
+                            if (inputOffset >= mp3Bytes.size) {
+                                codec.queueInputBuffer(inputIndex, 0, toWrite, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                sawInputEos = true
+                            } else {
+                                codec.queueInputBuffer(inputIndex, 0, toWrite, 0L, 0)
+                            }
+                        }
+                    }
+                }
+
+                val outputIndex = codec.dequeueOutputBuffer(info, 10_000L)
+                if (outputIndex >= 0) {
+                    emptyCount = 0
+                    val outputBuf = codec.getOutputBuffer(outputIndex)
+                    if (outputBuf != null && info.size > 0) {
+                        outputBuf.position(info.offset)
+                        outputBuf.limit(info.offset + info.size)
+                        val chunk = ByteArray(info.size)
+                        outputBuf.get(chunk)
+                        outBaos.write(chunk)
+                    }
+                    codec.releaseOutputBuffer(outputIndex, false)
+                    if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        sawOutputEos = true
+                    }
+                } else if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    emptyCount++
+                }
+            }
+
+            val pcmBytes = outBaos.toByteArray()
+            val numShorts = pcmBytes.size / 2
+            val shorts = ShortArray(numShorts)
+            val byteBuf = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
+            byteBuf.asShortBuffer().get(shorts)
+            return shorts
+        } catch (e: Exception) {
+            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed decoding MP3 channel to PCM", e)
+            return ShortArray(0)
+        } finally {
+            try { codec?.stop() } catch (_: Exception) {}
+            try { codec?.release() } catch (_: Exception) {}
+        }
     }
 
     private fun decodeMultiChannelBlocks(
@@ -746,17 +966,20 @@ class GtaVRpfArchive(
         val cacheDir = File(context.cacheDir, "gta5_rpf_tracks")
         if (!cacheDir.exists()) cacheDir.mkdirs()
 
+        val uriHash = Integer.toHexString(sourceUri.toString().hashCode())
         val safeParent = subTrack.parentEntryName.removeSuffix(".awc").replace(Regex("[^A-Za-z0-9_]"), "_")
-        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${safeParent}_0x${Integer.toHexString(subTrack.streamId).padStart(8, '0')}.wav"
+        val isMp3 = (subTrack.codec == 7)
+        val ext = if (isMp3) "mp3" else "wav"
+        val safeFileName = "${rpfName.removeSuffix(".rpf")}_${uriHash}_${safeParent}_0x${Integer.toHexString(subTrack.streamId).padStart(8, '0')}.$ext"
         val outFile = File(cacheDir, safeFileName)
 
-        if (outFile.exists() && outFile.length() > 44) {
+        if (outFile.exists() && outFile.length() > 0) {
             outFile.setLastModified(System.currentTimeMillis())
             return Uri.fromFile(outFile)
         }
 
         synchronized(decodeLock) {
-            if (outFile.exists() && outFile.length() > 44) {
+            if (outFile.exists() && outFile.length() > 0) {
                 outFile.setLastModified(System.currentTimeMillis())
                 return Uri.fromFile(outFile)
             }
@@ -779,29 +1002,35 @@ class GtaVRpfArchive(
 
                 // Decrypt SingleChannelEncrypt payload
                 if (subTrack.isEncrypted) {
-                    GtaVCrypto.decryptRsxxtea(clipRaw, 0, clipRaw.size, keys.awcKey)
+                    GtaVCrypto.decryptRsxxtea(clipRaw, 0, clipRaw.size and -4, keys.awcKey)
                 }
 
-                val pcmBytes: ByteArray = if (subTrack.codec == 0 || subTrack.codec == 1) {
-                    clipRaw
-                } else {
-                    val outPcm = ShortArray(subTrack.numSamples + 2048)
-                    val decodedCount = decodeAdpcm(clipRaw, 0, clipRaw.size, subTrack.numSamples, outPcm, 0)
-                    val out = ByteArray(decodedCount * 2)
-                    for (i in 0 until decodedCount) {
-                        val s = outPcm[i].toInt()
-                        out[i * 2] = (s and 0xFF).toByte()
-                        out[i * 2 + 1] = ((s ushr 8) and 0xFF).toByte()
+                if (isMp3) {
+                    FileOutputStream(tempFile).use { out ->
+                        out.write(clipRaw)
                     }
-                    out
+                } else {
+                    val pcmBytes: ByteArray = if (subTrack.codec == 0 || subTrack.codec == 1) {
+                        clipRaw
+                    } else {
+                        val outPcm = ShortArray(subTrack.numSamples + 2048)
+                        val decodedCount = decodeAdpcm(clipRaw, 0, clipRaw.size, subTrack.numSamples, outPcm, 0)
+                        val out = ByteArray(decodedCount * 2)
+                        for (i in 0 until decodedCount) {
+                            val s = outPcm[i].toInt()
+                            out[i * 2] = (s and 0xFF).toByte()
+                            out[i * 2 + 1] = ((s ushr 8) and 0xFF).toByte()
+                        }
+                        out
+                    }
+
+                    BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
+                        writeWavHeader(out, pcmBytes.size, subTrack.sampleRate, 1)
+                        out.write(pcmBytes)
+                    }
                 }
 
-                BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
-                    writeWavHeader(out, pcmBytes.size, subTrack.sampleRate, 1)
-                    out.write(pcmBytes)
-                }
-
-                if (tempFile.exists() && tempFile.length() > 44) {
+                if (tempFile.exists() && tempFile.length() > 0) {
                     if (outFile.exists()) outFile.delete()
                     if (tempFile.renameTo(outFile)) {
                         return Uri.fromFile(outFile)

@@ -466,11 +466,41 @@ init {
         return matched
     }
 
+    private fun detectIsEnhanced(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>): Boolean {
+        val folderName = folderDoc.name?.lowercase(Locale.ROOT) ?: ""
+        if (folderName.contains("enhanced") || folderName.contains("gen9")) return true
+
+        for (f in allFiles) {
+            val name = f.name.lowercase(Locale.ROOT)
+            if (name == "gta5_enhanced.exe" || name.contains("enhanced.exe")) return true
+        }
+
+        // Check RPF size thresholds (Enhanced archives are compressed with MP3 and significantly smaller)
+        for (f in allFiles) {
+            val name = f.name.lowercase(Locale.ROOT)
+            if (name == "radio_01_class_rock.rpf" || name == "radio_02_pop.rpf") {
+                val sz = try {
+                    context.contentResolver.openFileDescriptor(f.uri, "r")?.use { it.statSize } ?: -1L
+                } catch (_: Exception) { -1L }
+                if (sz in 1L until 300L * 1024L * 1024L) return true
+            } else if (name == "radio_adverts.rpf") {
+                val sz = try {
+                    context.contentResolver.openFileDescriptor(f.uri, "r")?.use { it.statSize } ?: -1L
+                } catch (_: Exception) { -1L }
+                if (sz in 1L until 115L * 1024L * 1024L) return true
+            }
+        }
+
+        return false
+    }
+
     private fun setupGtaVRpfGroup(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
         isGtaVRpfGroup = true
         generation = 3
-        groupName = "GTA V (RPF Audio)"
-        mediaId = UUID.randomUUID().toString()
+        val isEnhanced = detectIsEnhanced(allFiles, stationRpfFiles)
+        groupName = if (isEnhanced) "GTA V Enhanced (RPF Audio)" else "GTA V (RPF Audio)"
+        val idPrefix = if (isEnhanced) "gtav_enh_" else "gtav_"
+        mediaId = "$idPrefix${UUID.randomUUID()}"
 
         // Automatic First-Startup Key Discovery
         if (!GtaVKeyManager.isUnlocked(context)) {
@@ -502,7 +532,7 @@ init {
             val stKey = stFile.name.lowercase()
             val info = GtaVMetadataRepository.getStationInfo(stKey)
             val stDisplayName = info?.stationName ?: stFile.name
-            val stMediaId = UUID.randomUUID().toString()
+            val stMediaId = "$idPrefix${UUID.randomUUID()}"
 
             val arch = GtaVRpfArchive(context, stFile.name, stFile.uri)
 

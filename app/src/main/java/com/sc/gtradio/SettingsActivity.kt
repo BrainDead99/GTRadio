@@ -90,7 +90,7 @@ class SettingsActivity : AppCompatActivity() {
         private fun buildKeyStatusSummary(ctx: Context, folderName: String? = null): String {
             val ivStatus = GtaIvKeyManager.getStatusLabel(ctx)
             val vStatus = if (GtaVKeyManager.isUnlocked(ctx)) "Unlocked" else "Locked"
-            val base = "GTA IV/EFLC: $ivStatus • GTA V: $vStatus\nGTRadio does not bundle game keys. Select a folder with your own GTAIV.exe, EFLC.exe, GTA5.exe, or .dat key files to unlock playback."
+            val base = "GTA IV/EFLC: $ivStatus • GTA V: $vStatus\nGTRadio does not bundle game keys. Select a folder with your own GTAIV.exe, EFLC.exe, GTA5.exe, GTA5_Enhanced.exe, or .dat key files to unlock playback."
             return if (!folderName.isNullOrBlank()) {
                 "$base\nFolder: $folderName"
             } else {
@@ -175,7 +175,7 @@ class SettingsActivity : AppCompatActivity() {
                         ivNewlyUnlocked -> "GTA IV/EFLC Key Unlocked! (GTA V: $vStatus)"
                         vNewlyUnlocked -> "GTA V Keys Unlocked! (GTA IV/EFLC: $ivStatus)"
                         GtaIvKeyManager.isUnlocked(ctx) && GtaVKeyManager.isUnlocked(ctx) -> "All game keys already unlocked! (GTA IV/EFLC: Unlocked, GTA V: Unlocked)"
-                        vMissingMagic -> "GTA5.exe detected, but magic.dat could not be downloaded (offline?). Check internet connection. (GTA IV/EFLC: $ivStatus)"
+                        vMissingMagic -> "GTA5.exe / GTA5_Enhanced.exe detected, but magic.dat could not be downloaded (offline?). Check internet connection. (GTA IV/EFLC: $ivStatus)"
                         else -> "No game keys found in selected folder. (GTA IV/EFLC: $ivStatus • GTA V: $vStatus)"
                     }
                     Toast.makeText(ctx, toastMsg, Toast.LENGTH_LONG).show()

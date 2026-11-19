@@ -46,9 +46,11 @@ object GtaVKeyManager {
     const val PC_NG_KEY_0_SHA1 = "eb0915120397ce2e17828dd77e3218d977a185f7"
     const val PC_NG_DECRYPT_TABLE_0_SHA1 = "ceab9716bdec4eb6b028d35639e45f2f3d8ac03a"
 
-    // Known PE raw offsets for GTA5.exe Legacy PC build
+    // Known PE raw offsets for GTA5.exe Legacy and Enhanced PC builds
     private const val KNOWN_OFFSET_AES_KEY = 0x01E34C98L
+    private const val KNOWN_OFFSET_AES_KEY_ENHANCED = 0x0289C3E0L
     private const val KNOWN_OFFSET_LUT = 0x01B7BCC0L
+    private const val KNOWN_OFFSET_LUT_ENHANCED = 0x02488880L
 
     private const val MAGIC_DAT_URL =
         "https://raw.githubusercontent.com/dexyfex/CodeWalker/master/CodeWalker.Core/Resources/magic.dat"
@@ -337,7 +339,7 @@ object GtaVKeyManager {
 
         for (f in files) {
             val name = f.name?.lowercase(Locale.ROOT) ?: continue
-            if (exeDoc == null && name.endsWith(".exe") && (name == "gta5.exe" || name.contains("gta5"))) {
+            if (exeDoc == null && name.endsWith(".exe") && (name == "gta5.exe" || name == "gta5_enhanced.exe" || name.contains("gta5"))) {
                 exeDoc = f
             }
             if (magicDoc == null && name == "magic.dat") {
@@ -348,6 +350,8 @@ object GtaVKeyManager {
         if (exeDoc == null) {
             return ImportResult.NoKeysFound
         }
+
+        val exeName = exeDoc.name ?: "GTA5.exe"
 
         // Check for magic.dat in folder, then private cache, or download if permitted
         var magicBytes: ByteArray? = null
@@ -376,32 +380,32 @@ object GtaVKeyManager {
         }
 
         if (magicBytes == null) {
-            GTRadioLogger.log("GtaVKeyManager: GTA5.exe found but magic.dat is missing")
+            GTRadioLogger.log("GtaVKeyManager: $exeName found but magic.dat is missing")
             return ImportResult.MissingMagicDat
         }
 
-        // Extract AES Key & LUT from GTA5.exe
+        // Extract AES Key & LUT from GTA5.exe / GTA5_Enhanced.exe
         val (aesKey, lutFromExe) = try {
             extractKeysFromExe(context, exeDoc)
         } catch (e: Exception) {
-            return ImportResult.Error("Failed scanning GTA5.exe: ${e.message}", e)
+            return ImportResult.Error("Failed scanning $exeName: ${e.message}", e)
         }
 
         if (aesKey == null) {
-            return ImportResult.Error("PC_AES_KEY was not found inside GTA5.exe")
+            return ImportResult.Error("PC_AES_KEY was not found inside $exeName")
         }
 
         // Derive NG keys, decrypt tables, LUT, AWC key using magic.dat
         return try {
             val keySet = deriveKeysWithMagic(context, aesKey, magicBytes, lutFromExe)
-            ImportResult.Success(keySet, "Extracted from GTA5.exe + magic.dat")
+            ImportResult.Success(keySet, "Extracted from $exeName + magic.dat")
         } catch (e: Exception) {
             ImportResult.Error("Key derivation from magic.dat failed: ${e.message}", e)
         }
     }
 
     /**
-     * Extracts PC_AES_KEY and PC_LUT from GTA5.exe.
+     * Extracts PC_AES_KEY and PC_LUT from GTA5.exe or GTA5_Enhanced.exe.
      * Uses fast-path known offsets first, falling back to buffered PE section streaming.
      */
     private fun extractKeysFromExe(context: Context, exeDoc: DocumentFile): Pair<ByteArray?, ByteArray?> {
@@ -412,30 +416,41 @@ object GtaVKeyManager {
             FileInputStream(pfd.fileDescriptor).channel.use { channel ->
                 val size = channel.size()
 
-                // Fast path: Known offsets
-                if (KNOWN_OFFSET_AES_KEY + 32 <= size) {
-                    val bufAes = ByteBuffer.allocate(32)
-                    channel.position(KNOWN_OFFSET_AES_KEY)
-                    channel.read(bufAes)
-                    val candidate = bufAes.array()
-                    if (sha1Hex(candidate).equals(PC_AES_KEY_SHA1, ignoreCase = true)) {
-                        foundAes = candidate
-                        GTRadioLogger.log("GtaVKeyManager: PC_AES_KEY found at fast-path offset 0x${KNOWN_OFFSET_AES_KEY.toString(16)}")
+                // Fast path: Known offsets (Legacy and Enhanced)
+                val candidateAesOffsets = longArrayOf(KNOWN_OFFSET_AES_KEY, KNOWN_OFFSET_AES_KEY_ENHANCED)
+                for (off in candidateAesOffsets) {
+                    if (off + 32 <= size) {
+                        val bufAes = ByteBuffer.allocate(32)
+                        channel.position(off)
+                        channel.read(bufAes)
+                        val candidate = bufAes.array()
+                        if (sha1Hex(candidate).equals(PC_AES_KEY_SHA1, ignoreCase = true)) {
+                            foundAes = candidate
+                            GTRadioLogger.log("GtaVKeyManager: PC_AES_KEY found at fast-path offset 0x${off.toString(16)}")
+                            break
+                        }
                     }
                 }
 
-                if (KNOWN_OFFSET_LUT + 256 <= size) {
-                    val bufLut = ByteBuffer.allocate(256)
-                    channel.position(KNOWN_OFFSET_LUT)
-                    channel.read(bufLut)
-                    val candidate = bufLut.array()
-                    if (sha1Hex(candidate).equals(PC_LUT_SHA1, ignoreCase = true)) {
-                        foundLut = candidate
-                        GTRadioLogger.log("GtaVKeyManager: PC_LUT found at fast-path offset 0x${KNOWN_OFFSET_LUT.toString(16)}")
+                val candidateLutOffsets = longArrayOf(KNOWN_OFFSET_LUT, KNOWN_OFFSET_LUT_ENHANCED)
+                for (off in candidateLutOffsets) {
+                    if (off + 256 <= size) {
+                        val bufLut = ByteBuffer.allocate(256)
+                        channel.position(off)
+                        channel.read(bufLut)
+                        val candidate = bufLut.array()
+                        if (sha1Hex(candidate).equals(PC_LUT_SHA1, ignoreCase = true)) {
+                            foundLut = candidate
+                            GTRadioLogger.log("GtaVKeyManager: PC_LUT found at fast-path offset 0x${off.toString(16)}")
+                            break
+                        }
                     }
                 }
 
                 if (foundAes != null) {
+                    if (foundLut == null) {
+                        GTRadioLogger.log("GtaVKeyManager: PC_LUT not found at fast-path offsets; will source directly from magic.dat")
+                    }
                     return Pair(foundAes, foundLut)
                 }
 
@@ -635,7 +650,11 @@ object GtaVKeyManager {
             throw IllegalStateException("Derived PC_LUT failed SHA-1 verification")
         }
 
-        val finalLut = lutFromExe ?: lutBytes
+        val finalLut = if (lutFromExe != null && sha1Hex(lutFromExe).equals(PC_LUT_SHA1, ignoreCase = true)) {
+            lutFromExe
+        } else {
+            lutBytes
+        }
         saveToPrivateCache(context, aesKey, finalLut, ngKeysBytes, ngTablesBytes, awcKeyBytes)
 
         val keySet = buildKeySet(aesKey, finalLut, ngKeysBytes, ngTablesBytes, awcKeyBytes)
