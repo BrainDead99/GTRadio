@@ -557,15 +557,22 @@ object Rpf7MetadataRepository {
         try {
             val cleanSong = songTitle.replace(Regex("\\(.*?\\)"), "").trim()
             val q = URLEncoder.encode("$artist $cleanSong", "UTF-8")
+            GTRadioLogger.logVerbose("ART") { "iTunes search: '$artist - $cleanSong' [maxYear=$maxYear]" }
             val url = URL("https://itunes.apple.com/search?term=$q&media=music&entity=song&limit=15")
             val conn = (url.openConnection() as HttpURLConnection).apply {
                 connectTimeout = 6000
                 readTimeout = 6000
             }
-            if (conn.responseCode != 200) return false
+            if (conn.responseCode != 200) {
+                GTRadioLogger.logVerbose("ART") { "iTunes art HTTP failure: code=${conn.responseCode} for '$artist - $cleanSong'" }
+                return false
+            }
             val body = conn.inputStream.bufferedReader().readText()
             val results = JSONObject(body).optJSONArray("results") ?: return false
-            if (results.length() == 0) return false
+            if (results.length() == 0) {
+                GTRadioLogger.logVerbose("ART") { "iTunes art 0 results for '$artist - $cleanSong'" }
+                return false
+            }
 
             var bestItem: JSONObject? = null
             var bestScore = -9999
@@ -600,6 +607,9 @@ object Rpf7MetadataRepository {
                 if (rawCol.isNotBlank()) {
                     File(dir, "$key.txt").writeText(rawCol)
                     albumNameCache[key] = rawCol
+                }
+                GTRadioLogger.logVerbose("ART") {
+                    "iTunes art match: '$artist - $cleanSong' -> '$rawCol' (candidates=${results.length()}, score=$bestScore)"
                 }
                 return true
             }

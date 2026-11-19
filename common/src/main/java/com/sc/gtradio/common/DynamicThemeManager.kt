@@ -494,11 +494,20 @@ object DynamicThemeManager {
         }
     }
 
+    private var tuningStartTime = 0L
+
     fun getBitmap(context: Context, uri: Uri?, maxDim: Int = 1080): Bitmap? = loadBitmap(context, uri, maxDim)
 
     fun isPlayingTuningNoise(): Boolean = noisePlayer != null
 
-    fun stopTuningNoise() {
+    fun stopTuningNoise(trigger: String = "stopped") {
+        val durationMs = if (tuningStartTime > 0L) System.currentTimeMillis() - tuningStartTime else 0L
+        if (noisePlayer != null) {
+            GTRadioLogger.logVerbose("TUNE") {
+                "Stopped tuning static noise: trigger='$trigger', duration=${durationMs}ms"
+            }
+        }
+        tuningStartTime = 0L
         noiseCheckRunnable?.let { mainHandler.removeCallbacks(it) }
         noiseCheckRunnable = null
         try {
@@ -516,7 +525,7 @@ object DynamicThemeManager {
         isRadioReady: () -> Boolean,
         onComplete: () -> Unit
     ) {
-        stopTuningNoise()
+        stopTuningNoise("rapid_switch")
         if (pack.noiseSoundUris.isEmpty()) {
             onComplete()
             return
@@ -524,6 +533,10 @@ object DynamicThemeManager {
 
         val chosenUri = pack.noiseSoundUris[rng.nextInt(pack.noiseSoundUris.size)]
         val startTime = System.currentTimeMillis()
+        tuningStartTime = startTime
+        GTRadioLogger.logVerbose("TUNE") {
+            "Starting tuning static noise for pack '${pack.seriesName}', chosen URI: $chosenUri"
+        }
         val minNoiseMs = 550L
         val maxNoiseMs = 2800L
 
@@ -542,7 +555,7 @@ object DynamicThemeManager {
             mp.prepareAsync()
             noisePlayer = mp
         } catch (_: Exception) {
-            stopTuningNoise()
+            stopTuningNoise("error")
             onComplete()
             return
         }
@@ -550,8 +563,11 @@ object DynamicThemeManager {
         val checkTask = object : Runnable {
             override fun run() {
                 val elapsed = System.currentTimeMillis() - startTime
-                if ((elapsed >= minNoiseMs && isRadioReady()) || elapsed >= maxNoiseMs) {
-                    stopTuningNoise()
+                if (elapsed >= minNoiseMs && isRadioReady()) {
+                    stopTuningNoise("player_ready")
+                    onComplete()
+                } else if (elapsed >= maxNoiseMs) {
+                    stopTuningNoise("timeout")
                     onComplete()
                 } else {
                     mainHandler.postDelayed(this, 80L)

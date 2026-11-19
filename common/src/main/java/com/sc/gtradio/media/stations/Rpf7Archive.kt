@@ -634,12 +634,15 @@ class Rpf7Archive(
         // Cache hit
         if (outFile.exists() && outFile.length() > 44) {
             outFile.setLastModified(System.currentTimeMillis())
+            GTRadioLogger.logVerbose("DECODE") { "RPF7 cache HIT: $safeFileName" }
             return Uri.fromFile(outFile)
         }
 
+        val decodeStart = System.currentTimeMillis()
         synchronized(decodeLock) {
             if (outFile.exists() && outFile.length() > 44) {
                 outFile.setLastModified(System.currentTimeMillis())
+                GTRadioLogger.logVerbose("DECODE") { "RPF7 cache HIT: $safeFileName" }
                 return Uri.fromFile(outFile)
             }
 
@@ -663,6 +666,15 @@ class Rpf7Archive(
                 if (tempFile.exists() && tempFile.length() > 44) {
                     if (outFile.exists()) outFile.delete()
                     if (tempFile.renameTo(outFile)) {
+                        val decodeMs = System.currentTimeMillis() - decodeStart
+                        val codecName = when (entry.codec) {
+                            7 -> "MP3"
+                            4 -> "ADPCM"
+                            else -> "PCM"
+                        }
+                        GTRadioLogger.logVerbose("DECODE") {
+                            "RPF7 cache MISS: decoded $safeFileName in ${decodeMs}ms ($codecName, ${outFile.length() / 1024} KB)"
+                        }
                         return Uri.fromFile(outFile)
                     }
                 }
@@ -908,12 +920,15 @@ class Rpf7Archive(
 
         if (outFile.exists() && outFile.length() > 0) {
             outFile.setLastModified(System.currentTimeMillis())
+            GTRadioLogger.logVerbose("DECODE") { "RPF7 cache HIT: $safeFileName" }
             return Uri.fromFile(outFile)
         }
 
+        val decodeStart = System.currentTimeMillis()
         synchronized(decodeLock) {
             if (outFile.exists() && outFile.length() > 0) {
                 outFile.setLastModified(System.currentTimeMillis())
+                GTRadioLogger.logVerbose("DECODE") { "RPF7 cache HIT: $safeFileName" }
                 return Uri.fromFile(outFile)
             }
 
@@ -966,6 +981,11 @@ class Rpf7Archive(
                 if (tempFile.exists() && tempFile.length() > 0) {
                     if (outFile.exists()) outFile.delete()
                     if (tempFile.renameTo(outFile)) {
+                        val decodeMs = System.currentTimeMillis() - decodeStart
+                        val codecName = if (isMp3) "MP3" else if (subTrack.codec == 4) "ADPCM" else "PCM"
+                        GTRadioLogger.logVerbose("DECODE") {
+                            "RPF7 cache MISS: decoded $safeFileName in ${decodeMs}ms ($codecName, ${outFile.length() / 1024} KB)"
+                        }
                         return Uri.fromFile(outFile)
                     }
                 }
@@ -1039,13 +1059,24 @@ class Rpf7Archive(
         if (totalBytes > MAX_CACHE_BYTES) {
             val now = System.currentTimeMillis()
             val sorted = allFiles.sortedBy { it.lastModified() }
+            var evictedFiles = 0
+            var evictedBytes = 0L
             for (f in sorted) {
                 if (totalBytes <= TARGET_CACHE_BYTES) break
                 val ageMs = now - f.lastModified()
                 // Never delete active file or files modified within the last 15 seconds
                 if (f.name != currentSafeFileName && ageMs > 15_000L) {
                     val len = f.length()
-                    if (f.delete()) totalBytes -= len
+                    if (f.delete()) {
+                        totalBytes -= len
+                        evictedBytes += len
+                        evictedFiles++
+                    }
+                }
+            }
+            if (evictedFiles > 0) {
+                GTRadioLogger.logVerbose("DECODE") {
+                    "Cache eviction (RPF7): pruned $evictedFiles file(s), ${evictedBytes / 1024} KB freed (limit ${MAX_CACHE_BYTES / 1024 / 1024}MB)"
                 }
             }
         }

@@ -71,6 +71,8 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
 
         fun scanRootDirectory(rootDoc: DocumentFile?, context: Context): ArrayList<StationGroup> {
             GTRadioLogger.init(context)
+            val scanStart = System.currentTimeMillis()
+            val threadName = Thread.currentThread().name
             val results = ArrayList<StationGroup>()
             if (rootDoc == null || !rootDoc.isDirectory) {
                 GTRadioLogger.log("scanRootDirectory: rootDoc is null or not a directory (${rootDoc?.uri})")
@@ -80,6 +82,10 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
             GTRadioLogger.log("scanRootDirectory: Starting scan at '${rootDoc.name}' (${rootDoc.uri})")
             scanRecursive(rootDoc, context, results, depth = 0, maxDepth = 7)
             results.sortBy { it.groupName }
+            val scanElapsed = System.currentTimeMillis() - scanStart
+            GTRadioLogger.logVerbose("SCAN") {
+                "scanRootDirectory complete: ${scanElapsed}ms on thread '$threadName', found ${results.size} group(s)"
+            }
             GTRadioLogger.log("scanRootDirectory: Finished scan. Found ${results.size} station group(s): ${results.map { it.groupName }}")
             return results
         }
@@ -95,7 +101,14 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
             val dirNameUpper = (dir.name ?: "").uppercase()
             if (depth > 0 && dirNameUpper in SKIP_DIRS) return
 
+            val folderStart = System.currentTimeMillis()
             val candidate = StationGroup(dir, context)
+            val folderElapsed = System.currentTimeMillis() - folderStart
+            if (folderElapsed > 50L) {
+                GTRadioLogger.logVerbose("SCAN") {
+                    "Slow folder scan: '${dir.name}' took ${folderElapsed}ms [d=$depth]"
+                }
+            }
             if (candidate.generation in 1..3 && candidate.stationList.isNotEmpty()) {
                 GTRadioLogger.log("scanRecursive[d=$depth]: Found valid group '${candidate.groupName}' with ${candidate.stationList.size} stations at '${dir.name}'")
                 results.add(candidate)

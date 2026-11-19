@@ -159,8 +159,11 @@ class At3AudioArchive(
         val now = System.currentTimeMillis()
         if (outFile.exists() && outFile.length() > 44L) {
             outFile.setLastModified(now)
+            GTRadioLogger.logVerbose("DECODE") { "AT3 cache HIT: $safeFileName" }
             return Uri.fromFile(outFile)
         }
+
+        val decodeStart = System.currentTimeMillis()
 
         // Enforce shared 95 MB audio cache cap across AT3, GTA IV RPF, and GTA SA caches
         try {
@@ -180,6 +183,8 @@ class At3AudioArchive(
             for (f in allCached) totalBytes += f.length()
 
             if (totalBytes > maxCacheBytes) {
+                var evictedFiles = 0
+                var evictedBytes = 0L
                 allCached.sortBy { it.lastModified() }
                 val targetBytes = 65L * 1024L * 1024L
                 for (f in allCached) {
@@ -187,7 +192,16 @@ class At3AudioArchive(
                     val ageMs = now - f.lastModified()
                     if (f.name != safeFileName && ageMs > 25_000L) {
                         val len = f.length()
-                        if (f.delete()) totalBytes -= len
+                        if (f.delete()) {
+                            totalBytes -= len
+                            evictedBytes += len
+                            evictedFiles++
+                        }
+                    }
+                }
+                if (evictedFiles > 0) {
+                    GTRadioLogger.logVerbose("DECODE") {
+                        "Cache eviction (AT3): pruned $evictedFiles file(s), ${evictedBytes / 1024} KB freed"
                     }
                 }
             }
@@ -225,6 +239,11 @@ class At3AudioArchive(
 
             if (ok && tempFile.exists() && tempFile.length() > 44L) {
                 tempFile.renameTo(outFile)
+                val decodeMs = System.currentTimeMillis() - decodeStart
+                val codec = if (isAtrac3Plus) "ATRAC3+" else "ATRAC3"
+                GTRadioLogger.logVerbose("DECODE") {
+                    "AT3 cache MISS: decoded $safeFileName in ${decodeMs}ms ($codec, ${outFile.length() / 1024} KB)"
+                }
                 return Uri.fromFile(outFile)
             }
         } catch (t: Throwable) {

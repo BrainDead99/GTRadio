@@ -322,8 +322,11 @@ class Rpf3Archive(
         val now = System.currentTimeMillis()
         if (outFile.exists() && outFile.length() > 44L) {
             outFile.setLastModified(now)
+            GTRadioLogger.logVerbose("DECODE") { "RPF3 cache HIT: $safeFileName" }
             return Uri.fromFile(outFile)
         }
+
+        val decodeStart = System.currentTimeMillis()
 
         // Keep decoded audio cache under 95 MB (total app storage ~115-135 MB) and never delete active/recent files
         try {
@@ -342,6 +345,8 @@ class Rpf3Archive(
             for (f in allCached) totalBytes += f.length()
 
             if (totalBytes > maxCacheBytes) {
+                var evictedFiles = 0
+                var evictedBytes = 0L
                 allCached.sortBy { it.lastModified() }
                 val targetBytes = 65L * 1024L * 1024L
                 for (f in allCached) {
@@ -349,7 +354,16 @@ class Rpf3Archive(
                     val ageMs = now - f.lastModified()
                     if (f.name != safeFileName && ageMs > 25_000L) {
                         val len = f.length()
-                        if (f.delete()) totalBytes -= len
+                        if (f.delete()) {
+                            totalBytes -= len
+                            evictedBytes += len
+                            evictedFiles++
+                        }
+                    }
+                }
+                if (evictedFiles > 0) {
+                    GTRadioLogger.logVerbose("DECODE") {
+                        "Cache eviction (RPF3): pruned $evictedFiles file(s), ${evictedBytes / 1024} KB freed"
                     }
                 }
             }
@@ -377,6 +391,10 @@ class Rpf3Archive(
             }
             if (tempFile.exists() && tempFile.length() > 44L) {
                 tempFile.renameTo(outFile)
+                val decodeMs = System.currentTimeMillis() - decodeStart
+                GTRadioLogger.logVerbose("DECODE") {
+                    "RPF3 cache MISS: decoded $safeFileName in ${decodeMs}ms (WAV, ${outFile.length() / 1024} KB)"
+                }
                 return Uri.fromFile(outFile)
             }
         } catch (t: Throwable) {

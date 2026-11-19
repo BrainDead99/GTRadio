@@ -199,8 +199,11 @@ class Gen2StreamArchive(
         val cacheDir = File(context.cacheDir, "gen2_stream_tracks").apply { mkdirs() }
         val outFile = File(cacheDir, "${streamCode}_${trackNum}.$ext")
         if (outFile.exists() && outFile.length() == slice.dataLength) {
+            GTRadioLogger.logVerbose("DECODE") { "Gen2 cache HIT: ${outFile.name}" }
             return Uri.fromFile(outFile)
         }
+
+        val decodeStart = System.currentTimeMillis()
 
         // Keep cache folder tidy so extracted segments never bloat phone storage
         try {
@@ -215,8 +218,19 @@ class Gen2StreamArchive(
             File(context.cacheDir, "sa_raw_tracks").listFiles()?.let { allCached.addAll(it) }
             if (allCached.size > 60) {
                 allCached.sortBy { it.lastModified() }
+                var evictedFiles = 0
+                var evictedBytes = 0L
                 for (i in 0 until 20) {
-                    allCached[i].delete()
+                    val len = allCached[i].length()
+                    if (allCached[i].delete()) {
+                        evictedFiles++
+                        evictedBytes += len
+                    }
+                }
+                if (evictedFiles > 0) {
+                    GTRadioLogger.logVerbose("DECODE") {
+                        "Cache eviction (Gen2): pruned $evictedFiles file(s), ${evictedBytes / 1024} KB freed (file count > 60)"
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -232,6 +246,11 @@ class Gen2StreamArchive(
                 }
             }
             if (outFile.exists() && outFile.length() > 0L) {
+                val decodeMs = System.currentTimeMillis() - decodeStart
+                val format = if (containerType == Gen2ContainerType.MOBILE_OSW) "MP3" else "OGG"
+                GTRadioLogger.logVerbose("DECODE") {
+                    "Gen2 cache MISS: extracted ${outFile.name} in ${decodeMs}ms ($format, ${outFile.length() / 1024} KB)"
+                }
                 return Uri.fromFile(outFile)
             }
         } catch (e: Exception) {

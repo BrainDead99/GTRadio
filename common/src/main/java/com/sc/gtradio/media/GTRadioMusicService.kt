@@ -138,6 +138,9 @@ import java.util.ArrayList
         }
 
         private fun startStationWithGlobalTuningNoise(group: StationGroup, station: RadioStation, stationIndex: Int) {
+            GTRadioLogger.logVerbose("TUNE") {
+                "Station switch -> '${station.stationName}' (index=$stationIndex) in group '${group.groupName}' (gen=${group.generation})"
+            }
             val playbackActions = configureLoopingNavigationActions(group, stationIndex)
             val noisePack = DynamicThemeManager.findNoisePackForSeries(applicationContext, group.groupName)
             val shouldPlayNoise = noisePack != null &&
@@ -355,7 +358,13 @@ import java.util.ArrayList
         if (radioPath.isBlank()) { return ArrayList() }
         val dir = DocumentFile.fromTreeUri(applicationContext, Uri.parse(radioPath))
         stationCache.clear()
-        return StationGroup.scanRootDirectory(dir, applicationContext)
+        val scanStart = System.currentTimeMillis()
+        val groups = StationGroup.scanRootDirectory(dir, applicationContext)
+        val scanElapsed = System.currentTimeMillis() - scanStart
+        GTRadioLogger.logVerbose("SCAN") {
+            "getStationGroups: Scanned ${groups.size} group(s) in ${scanElapsed}ms"
+        }
+        return groups
     }
 
     private fun getFullStationList(): ArrayList<MediaItem> {

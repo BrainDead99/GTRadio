@@ -48,6 +48,9 @@
     <string name="scan_album_art_summary">Tap to download original release-era album covers and album titles for offline use.</string>
 
     <string name="diagnostics_header">Diagnostics</string>
+    <string name="verbose_logging_key">verbose_logging_enabled</string>
+    <string name="verbose_logging_title">Enable Verbose Diagnostics</string>
+    <string name="verbose_logging_summary">Enables detailed timing probes, audio decode metrics, and main-thread stall monitoring.</string>
     <string name="view_logs_key">view_diagnostic_logs</string>
     <string name="view_logs_title">View / Copy Diagnostic Logs</string>
     <string name="view_logs_summary">Inspect folder detection, key status, and audio playback logs.</string>

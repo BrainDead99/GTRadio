@@ -70,6 +70,12 @@
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/diagnostics_header">
+        <SwitchPreference
+            android:defaultValue="false"
+            android:key="@string/verbose_logging_key"
+            android:summary="@string/verbose_logging_summary"
+            android:title="@string/verbose_logging_title" />
+
         <Preference
             android:clickable="true"
             app:key="@string/view_logs_key"

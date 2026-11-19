@@ -223,6 +223,17 @@ class SettingsActivity : AppCompatActivity() {
                 true
             }
 
+            val verbosePref = findPreference<Preference>(getString(R.string.verbose_logging_key))
+            verbosePref?.setOnPreferenceChangeListener { _, newValue ->
+                val enabled = newValue as? Boolean ?: false
+                GTRadioLogger.setVerboseEnabled(enabled)
+                GTRadioLogger.syncMainThreadWatchdog()
+                if (enabled) {
+                    GTRadioLogger.checkHistoricalExitReasons(requireContext())
+                }
+                true
+            }
+
             val logsPref = findPreference<Preference>(getString(R.string.view_logs_key))
             logsPref?.setOnPreferenceClickListener {
                 showDiagnosticLogsDialog()
@@ -232,9 +243,9 @@ class SettingsActivity : AppCompatActivity() {
 
         private fun showDiagnosticLogsDialog() {
             val ctx = requireContext()
-            val logText = GTRadioLogger.getLogsText()
+            var reportText = GTRadioLogger.buildDiagnosticReport(ctx)
             val tv = TextView(ctx).apply {
-                text = logText
+                text = reportText
                 textSize = 11f
                 setPadding(32, 24, 32, 24)
                 setTextIsSelectable(true)
@@ -244,13 +255,15 @@ class SettingsActivity : AppCompatActivity() {
             AlertDialog.Builder(ctx)
                 .setTitle("Diagnostic Logs")
                 .setView(scroll)
-                .setPositiveButton("Copy Logs") { _, _ ->
+                .setPositiveButton("Copy Report") { _, _ ->
                     val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    cm.setPrimaryClip(ClipData.newPlainText("GTRadio Logs", logText))
-                    Toast.makeText(ctx, "Logs copied to clipboard!", Toast.LENGTH_SHORT).show()
+                    cm.setPrimaryClip(ClipData.newPlainText("GTRadio Diagnostic Report", reportText))
+                    Toast.makeText(ctx, "Diagnostic report copied to clipboard!", Toast.LENGTH_SHORT).show()
                 }
-                .setNeutralButton("Clear") { _, _ ->
-                    GTRadioLogger.clear(ctx)
+                .setNeutralButton("Clear Logs") { _, _ ->
+                    GTRadioLogger.clearLogs(ctx)
+                    reportText = GTRadioLogger.buildDiagnosticReport(ctx)
+                    tv.text = reportText
                     Toast.makeText(ctx, "Logs cleared.", Toast.LENGTH_SHORT).show()
                 }
                 .setNegativeButton("Close", null)

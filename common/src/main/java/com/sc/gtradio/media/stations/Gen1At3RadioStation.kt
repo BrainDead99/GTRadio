@@ -91,6 +91,14 @@ class Gen1At3RadioStation(
 
         if (newKey != activeCueKey) {
             activeCueKey = newKey
+            val totalPosMs = (chunkStartMs + trackPosMs) % durMs
+            GTRadioLogger.logVerbose("GEN1") {
+                if (cue != null) {
+                    "Cue change [pos=${totalPosMs}ms, window=${cue.startSec}s..${cue.endSec}s]: '${cue.title}' by '${cue.artist}'"
+                } else {
+                    "Cue change [pos=${totalPosMs}ms]: Station Host / DJ chatter window"
+                }
+            }
             val cachedArt = if (cue != null && isAlbumArtEnabled()) {
                 Gen1MetadataRepository.getCachedAlbumArt(cue.artist, cue.title)
             } else null
