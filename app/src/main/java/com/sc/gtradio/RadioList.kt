@@ -10,6 +10,7 @@ import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
@@ -67,6 +68,8 @@ class RadioList : Fragment() {
 
     private var selectedStationTitle: String = ""
     private var centeredMediaId: String = ""
+    private var pendingTappedMediaId: String? = null
+    private var pendingTapTimestampMs: Long = 0L
     private var isUserScrollingStrip: Boolean = false
     private var isProgrammaticScroll: Boolean = false
 
@@ -245,28 +248,32 @@ class RadioList : Fragment() {
         val clickedId = slot.mediaId
         val transportControls = musicServiceConnection?.transportControls
         val activeMediaId = currentMetadata.description.mediaId ?: ""
-        val currentCenterId = centeredMediaId.ifBlank { activeMediaId }
 
         scrollHandler.removeCallbacks(scrollSnapRunnable)
         isUserScrollingStrip = false
 
-        if (clickedId == currentCenterId || clickedId == activeMediaId) {
-            centeredMediaId = clickedId
-            selectedStationTitle = clickedItem.description.title?.toString() ?: ""
-            scrollSlotToCenter(slot, smooth = true)
-            if (currentPlaybackState.isPlaying && clickedId == activeMediaId) {
-                DynamicThemeManager.stopTuningNoise("user_stop")
-                musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
-                transportControls?.stop()
-            } else {
-                lastAutoScrolledMediaId = clickedId
-                transportControls?.playFromMediaId(clickedId, null)
-            }
+        val title = clickedItem.description.title?.toString() ?: ""
+        selectedStationTitle = title
+
+        if (currentPlaybackState.isPlaying && clickedId == activeMediaId) {
+            pendingTappedMediaId = null
+            DynamicThemeManager.stopTuningNoise("user_stop")
+            musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
+            transportControls?.stop()
         } else {
+            pendingTappedMediaId = clickedId
+            pendingTapTimestampMs = SystemClock.elapsedRealtime()
             centeredMediaId = clickedId
-            selectedStationTitle = clickedItem.description.title?.toString() ?: ""
             lastAutoScrolledMediaId = clickedId
+
             scrollSlotToCenter(slot, smooth = true)
+            updateStripIconsHighlight(clickedId)
+
+            if (binding.themeStripActiveStationName.text.toString() != title) {
+                binding.themeStripActiveStationName.text = title
+            }
+            binding.themeStripActiveStationName.isSelected = true
+
             transportControls?.playFromMediaId(clickedId, null)
         }
         updateDynamicThemePlaybackUi()
@@ -353,11 +360,13 @@ class RadioList : Fragment() {
         binding.themeStripIconScroll.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    pendingTappedMediaId = null
                     isUserScrollingStrip = true
                     scrollHandler.removeCallbacks(scrollSnapRunnable)
                     recenterInfiniteScrollIfNeeded()
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    pendingTappedMediaId = null
                     isUserScrollingStrip = true
                     scrollHandler.removeCallbacks(scrollSnapRunnable)
                 }
@@ -382,7 +391,10 @@ class RadioList : Fragment() {
                     if (cId != centeredMediaId) {
                         centeredMediaId = cId
                         selectedStationTitle = cTitle
-                        binding.themeStripActiveStationName.text = cTitle
+                        if (binding.themeStripActiveStationName.text.toString() != cTitle) {
+                            binding.themeStripActiveStationName.text = cTitle
+                        }
+                        binding.themeStripActiveStationName.isSelected = true
                         updateStripIconsHighlight(if (currentPlaybackState.isPlaying) centeredMediaId else "")
                     }
                 }
@@ -447,12 +459,16 @@ class RadioList : Fragment() {
 
         val cachedPack = DynamicThemeManager.getCachedThemeForSeries(seriesName)
         if (cachedPack != null) {
-            applyDynamicTheme(cachedPack, children)
+            if (cachedPack.hasFullThemeUi) {
+                applyDynamicTheme(cachedPack, children)
+            } else {
+                applyDynamicTheme(null, children)
+            }
         } else {
             val ctx = context?.applicationContext ?: return
             Executors.newSingleThreadExecutor().submit {
                 val pack = DynamicThemeManager.findThemeForSeries(ctx, seriesName)
-                if (pack != null) {
+                if (pack != null && pack.hasFullThemeUi) {
                     val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
                     val bgList = if (isLandscape && pack.landscapeBgUris.isNotEmpty()) pack.landscapeBgUris else pack.portraitBgUris
                     if (bgList.isNotEmpty()) {
@@ -468,7 +484,11 @@ class RadioList : Fragment() {
                 }
                 Handler(Looper.getMainLooper()).post {
                     if (_binding != null && isAdded) {
-                        applyDynamicTheme(pack, children)
+                        if (pack != null && pack.hasFullThemeUi) {
+                            applyDynamicTheme(pack, children)
+                        } else {
+                            applyDynamicTheme(null, children)
+                        }
                     }
                 }
             }
@@ -477,14 +497,15 @@ class RadioList : Fragment() {
 
     private fun applyDynamicTheme(pack: DynamicThemePack?, children: List<MediaBrowserCompat.MediaItem>) {
         if (_binding == null) return
-        activeThemePack = pack
 
-        if (pack == null) {
+        if (pack == null || !pack.hasFullThemeUi) {
+            activeThemePack = null
             binding.dynamicThemeRoot.visibility = View.GONE
             binding.defaultRadioContainer.visibility = View.VISIBLE
             (activity as? MainActivity)?.setFullscreenThemeMode(false)
             return
         }
+        activeThemePack = pack
 
         binding.defaultRadioContainer.visibility = View.GONE
         binding.dynamicThemeRoot.visibility = View.VISIBLE
@@ -675,59 +696,80 @@ class RadioList : Fragment() {
         val stripMode = isStripLayout(pack)
         val isPlaying = currentPlaybackState.isPlaying
         val activeMediaId = currentMetadata.description.mediaId ?: ""
-        val activeStationFromMeta = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_WRITER)
-            ?: loadedStations.find { it.mediaId == activeMediaId }?.description?.title?.toString()
-            ?: loadedStations.find { it.mediaId == centeredMediaId }?.description?.title?.toString()
-            ?: selectedStationTitle
+
+        // Check if pending tapped station should expire or cleared
+        if (pendingTappedMediaId != null) {
+            if (activeMediaId == pendingTappedMediaId || SystemClock.elapsedRealtime() - pendingTapTimestampMs > 4500L) {
+                pendingTappedMediaId = null
+            }
+        }
+
+        val activeBelongsToThisSeries = activeMediaId.isNotBlank() && loadedStations.any { it.mediaId == activeMediaId }
+        val effectivePlaying = isPlaying && activeBelongsToThisSeries
+
+        val activeStationFromMeta = if (activeBelongsToThisSeries) {
+            currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_WRITER)
+                ?: loadedStations.find { it.mediaId == activeMediaId }?.description?.title?.toString()
+                ?: ""
+        } else ""
 
         if (stripMode) {
-            val statusColor = if (isPlaying) pack.activeTextColor else pack.labelColor
+            val statusColor = if (effectivePlaying) pack.activeTextColor else pack.labelColor
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
             binding.themeNowPlayingLabel.setTextColor(statusColor)
 
             binding.themeStripRadioLabel.setTextColor(statusColor)
-            binding.themeStripRadioState.text = if (isPlaying) "On" else "Off"
+            binding.themeStripRadioState.text = if (effectivePlaying) "On" else "Off"
             binding.themeStripRadioState.setTextColor(statusColor)
             binding.themeStripVolumeLabel.setTextColor(statusColor)
             binding.themeStripStationLabel.setTextColor(statusColor)
 
-            val selectedItem = if (!isUserScrollingStrip && activeMediaId.isNotBlank() && loadedStations.any { it.mediaId == activeMediaId }) {
+            val selectedItem = if (pendingTappedMediaId != null) {
+                loadedStations.find { it.mediaId == pendingTappedMediaId }
+            } else if (!isUserScrollingStrip && activeBelongsToThisSeries) {
                 loadedStations.find { it.mediaId == activeMediaId }
             } else {
                 loadedStations.find { it.mediaId == centeredMediaId }
-                    ?: loadedStations.find { it.description.title?.toString().equals(activeStationFromMeta, ignoreCase = true) }
                     ?: loadedStations.firstOrNull()
             }
             val selectedMediaId = selectedItem?.mediaId ?: ""
+            val previouslyCenteredId = centeredMediaId
             if (!isUserScrollingStrip && selectedMediaId.isNotBlank()) {
                 centeredMediaId = selectedMediaId
             }
 
             val displayStationTitle = if (isUserScrollingStrip) {
-                loadedStations.find { it.mediaId == centeredMediaId }?.description?.title?.toString() ?: activeStationFromMeta
+                loadedStations.find { it.mediaId == centeredMediaId }?.description?.title?.toString() ?: ""
             } else {
-                selectedItem?.description?.title?.toString() ?: activeStationFromMeta
+                selectedItem?.description?.title?.toString() ?: ""
             }
-            binding.themeStripActiveStationName.text = displayStationTitle
+            if (binding.themeStripActiveStationName.text.toString() != displayStationTitle) {
+                binding.themeStripActiveStationName.text = displayStationTitle
+            }
+            binding.themeStripActiveStationName.isSelected = true
             binding.themeStripActiveStationName.setTextColor(statusColor)
 
-            val highlightedId = if (isPlaying) (if (isUserScrollingStrip) centeredMediaId else activeMediaId) else ""
+            val highlightedId = if (effectivePlaying || pendingTappedMediaId != null) {
+                if (isUserScrollingStrip) centeredMediaId else selectedMediaId
+            } else ""
             updateStripIconsHighlight(highlightedId)
 
-            if (!isUserScrollingStrip && selectedMediaId.isNotBlank() && selectedMediaId != lastAutoScrolledMediaId) {
+            if (!isUserScrollingStrip && selectedMediaId.isNotBlank() &&
+                selectedMediaId != lastAutoScrolledMediaId &&
+                selectedMediaId != previouslyCenteredId) {
                 lastAutoScrolledMediaId = selectedMediaId
                 scrollIconToCenter(selectedMediaId, smooth = true)
             }
 
-            val isSongOrShow = isPlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
+            val isSongOrShow = effectivePlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
                 currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
 
-            if (isPlaying) {
+            if (effectivePlaying) {
                 binding.themeSongTitle.setTextColor(pack.activeTextColor)
                 binding.themeSongArtist.setTextColor(pack.activeTextColor)
                 binding.themeSongAlbum.setTextColor(pack.activeTextColor)
 
-                if (isSongOrShow && activeMediaId.isNotBlank()) {
+                if (isSongOrShow) {
                     val songTitle = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: ""
                     val cleanArtist = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ARTIST) ?: ""
                     val cleanAlbum = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST) ?: ""
@@ -772,18 +814,32 @@ class RadioList : Fragment() {
         }
 
         // Standard Dynamic Theme Grid UI
-        binding.themeRadioState.text = if (isPlaying) "ON" else "OFF"
-        binding.themeRadioState.setTextColor(if (isPlaying) pack.activeTextColor else pack.labelColor)
-        binding.themeActiveStationName.text = activeStationFromMeta.uppercase()
+        binding.themeRadioState.text = if (effectivePlaying) "ON" else "OFF"
+        binding.themeRadioState.setTextColor(if (effectivePlaying) pack.activeTextColor else pack.labelColor)
+
+        val gridStationTitle = if (effectivePlaying) {
+            activeStationFromMeta.ifBlank {
+                loadedStations.find { it.mediaId == activeMediaId }?.description?.title?.toString() ?: ""
+            }
+        } else {
+            loadedStations.find { it.mediaId == centeredMediaId }?.description?.title?.toString()
+                ?: loadedStations.firstOrNull()?.description?.title?.toString()
+                ?: ""
+        }
+        val gridStationUpper = gridStationTitle.uppercase()
+        if (binding.themeActiveStationName.text.toString() != gridStationUpper) {
+            binding.themeActiveStationName.text = gridStationUpper
+        }
+        binding.themeActiveStationName.isSelected = true
 
         for ((mediaId, iv) in stationIconViews) {
-            val isThisActive = isPlaying && mediaId == activeMediaId
+            val isThisActive = effectivePlaying && mediaId == activeMediaId
             iv.alpha = if (isThisActive) 1.0f else 0.28f
         }
 
-        val isSongOrShow = isPlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
+        val isSongOrShow = effectivePlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
             currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
-        if (isSongOrShow && activeMediaId.isNotBlank()) {
+        if (isSongOrShow) {
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
             binding.themeSongArt.alpha = 1.0f
             val songTitle = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: ""
@@ -808,6 +864,9 @@ class RadioList : Fragment() {
             }
         } else {
             binding.themeNowPlayingGroup.visibility = View.INVISIBLE
+            binding.themeSongTitle.text = ""
+            binding.themeSongArtist.text = ""
+            binding.themeSongAlbum.text = ""
         }
     }
 

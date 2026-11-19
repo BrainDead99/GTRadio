@@ -39,7 +39,10 @@ data class DynamicThemePack(
     val noiseSoundUris: List<Uri> = emptyList(),
     val layoutStyle: String = "grid",
     val hasThemeJson: Boolean = true
-)
+) {
+    val hasFullThemeUi: Boolean
+        get() = hasThemeJson && (portraitBgUris.isNotEmpty() || landscapeBgUris.isNotEmpty())
+}
 
 object DynamicThemeManager {
     private val packCache = HashMap<String, DynamicThemePack>()
