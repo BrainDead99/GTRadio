@@ -21,13 +21,13 @@ import androidx.preference.PreferenceManager
 import java.io.File
 import java.util.*
 
-@UnstableApi class SaRawRadioStation(
+@UnstableApi class Gen2RawRadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
     override val mediaItem: MediaBrowserCompat.MediaItem,
-    private val stationArchive: SaStreamArchive,
-    private val advertsArchive: SaStreamArchive?,
-    private val stationMeta: SaStationMeta,
+    private val stationArchive: Gen2StreamArchive,
+    private val advertsArchive: Gen2StreamArchive?,
+    private val stationMeta: Gen2StationMeta,
     private val player: GTRadioPlayer,
     private val context: Context,
     override var adsEnabled: Boolean,
@@ -64,7 +64,7 @@ import java.util.*
     private val callerStoryQueue = RandomizedDualHeadQueue<Int>(stationMeta.djCallerStoryTracks, rng)
     private val timeOfDayQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
     private val weatherQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
-    private val songQueue = RandomizedDualHeadQueue<SaSongGroup>(stationMeta.songGroups, rng)
+    private val songQueue = RandomizedDualHeadQueue<Gen2SongGroup>(stationMeta.songGroups, rng)
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -77,7 +77,7 @@ import java.util.*
 
     // Real-time radio state tracking
     private var currentSegmentUris: List<Uri> = emptyList()
-    private var currentSongGroup: SaSongGroup? = null
+    private var currentSongGroup: Gen2SongGroup? = null
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedWindowIndex: Int = 0
     private var stoppedPositionMs: Long = 0L
@@ -86,7 +86,7 @@ import java.util.*
 
     init {
         if (advertsArchive != null) {
-            val adMeta = SaMetadataRepository.getByStreamCode(context, "ADVERTS")
+            val adMeta = Gen2MetadataRepository.getByStreamCode(context, "ADVERTS")
             val adTrackList = (adMeta?.tracks?.keys ?: advertsArchive.getTrackNumbers()).toList()
             advertQueue.reset(adTrackList)
         }
@@ -149,7 +149,7 @@ import java.util.*
         }
     }
 
-    private fun applySongMetadata(song: SaSongGroup) {
+    private fun applySongMetadata(song: Gen2SongGroup) {
         if (!isMetadataEnabled()) {
             setStationOnlyMetadata()
             return
@@ -170,16 +170,16 @@ import java.util.*
 
         var art: Bitmap? = stationLogo
         if (isAlbumArtEnabled()) {
-            val cached = SaMetadataRepository.getCachedAlbumArt(context, song.artist, song.cleanTitle)
+            val cached = Gen2MetadataRepository.getCachedAlbumArt(context, song.artist, song.cleanTitle)
             if (cached != null) {
                 art = cached
             } else {
-                SaMetadataRepository.fetchEraAccurateArtAsync(context, song.artist, song.cleanTitle) {
+                Gen2MetadataRepository.fetchEraAccurateArtAsync(context, song.artist, song.cleanTitle) {
                     mainHandler.post {
                         if (_playing && lastSegment == RadioSegmentType.Song && currentSongGroup == song) {
-                            val newArt = SaMetadataRepository.getCachedAlbumArt(context, song.artist, song.cleanTitle) ?: stationLogo
+                            val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, song.artist, song.cleanTitle) ?: stationLogo
                             val sub = buildSongSubtitle(song)
-                            val alb = SaMetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle) ?: ""
+                            val alb = Gen2MetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle) ?: ""
                             _currentMetadata = buildStationMetadata(song.cleanTitle, sub, newArt, isSongOrShow = true, cleanArtist = song.artist, cleanAlbum = alb)
                             onMetadataChanged?.invoke(_currentMetadata)
                         }
@@ -189,13 +189,13 @@ import java.util.*
         }
 
         val subtitle = buildSongSubtitle(song)
-        val eraAlbum = SaMetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle) ?: ""
+        val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle) ?: ""
         _currentMetadata = buildStationMetadata(song.cleanTitle, subtitle, art, isSongOrShow = true, cleanArtist = song.artist, cleanAlbum = eraAlbum)
         onMetadataChanged?.invoke(_currentMetadata)
     }
 
-    private fun buildSongSubtitle(song: SaSongGroup): String {
-        val eraAlbum = SaMetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle)
+    private fun buildSongSubtitle(song: Gen2SongGroup): String {
+        val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, song.artist, song.cleanTitle)
         return if (!eraAlbum.isNullOrBlank()) {
             "${song.artist} • $eraAlbum"
         } else {

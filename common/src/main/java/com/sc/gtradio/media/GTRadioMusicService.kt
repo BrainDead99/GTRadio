@@ -501,12 +501,12 @@ import java.util.ArrayList
                 newsReportsEnabled
             )
         }
-        if (group.isRawSaGroup && mediaId.contains("#SA_RAW#")) {
+        if (group.isGen2RawGroup && mediaId.contains("#SA_RAW#")) {
             val code = mediaId.substringAfter("#SA_RAW#")
             val stationArch = group.getOrCreateArchive(code) ?: return null
             val advertsArch = group.getOrCreateArchive("ADVERTS")
-            val stMeta = SaMetadataRepository.getByStreamCode(applicationContext, code) ?: return null
-            return SaRawRadioStation(
+            val stMeta = Gen2MetadataRepository.getByStreamCode(applicationContext, code) ?: return null
+            return Gen2RawRadioStation(
                 group.mediaItem.mediaId!!,
                 stationMedia.mediaId!!,
                 stationMedia,

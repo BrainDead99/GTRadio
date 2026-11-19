@@ -12,25 +12,25 @@ import java.nio.channels.FileChannel
 import java.util.zip.Inflater
 import java.util.zip.InflaterInputStream
 
-enum class SaContainerType {
+enum class Gen2ContainerType {
     MOBILE_OSW,
     PC_STREAM
 }
 
-data class SaTrackSlice(
+data class Gen2TrackSlice(
     val trackNumber: Int,
     val dataOffset: Long,
     val dataLength: Long,
     val compressionMethod: Int = 0
 )
 
-class SaStreamArchive(
+class Gen2StreamArchive(
     private val context: Context,
     val streamCode: String,
     val sourceUri: Uri,
-    val containerType: SaContainerType
+    val containerType: Gen2ContainerType
 ) {
-    private val slices = HashMap<Int, SaTrackSlice>()
+    private val slices = HashMap<Int, Gen2TrackSlice>()
     private var indexed = false
     private var pcXorKey: ByteArray = intArrayOf(0xEA, 0x3A, 0xC4, 0xA1, 0x9A, 0xA8, 0x14, 0xF3, 0x48, 0xB0, 0xD7, 0x23, 0x9D, 0xE8, 0xFF, 0xF1).map { it.toByte() }.toByteArray()
 
@@ -41,16 +41,16 @@ class SaStreamArchive(
         try {
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 FileInputStream(pfd.fileDescriptor).channel.use { ch ->
-                    if (containerType == SaContainerType.MOBILE_OSW) {
+                    if (containerType == Gen2ContainerType.MOBILE_OSW) {
                         indexOswZip(ch)
                     } else {
                         indexPcStream(ch)
                     }
                 }
             }
-            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexed ${slices.size} tracks ($containerType)")
+            GTRadioLogger.log("Gen2StreamArchive[$streamCode]: Indexed ${slices.size} tracks ($containerType)")
         } catch (e: Exception) {
-            GTRadioLogger.log("SaStreamArchive[$streamCode]: Indexing failed", e)
+            GTRadioLogger.log("Gen2StreamArchive[$streamCode]: Indexing failed", e)
         }
     }
 
@@ -125,7 +125,7 @@ class SaStreamArchive(
             val m = numRegex.find(entryName)
             val trackNum = m?.groupValues?.get(1)?.toIntOrNull()
             if (trackNum != null && compSize > 0) {
-                slices[trackNum] = SaTrackSlice(trackNum, localHeaderOffset, compSize, method)
+                slices[trackNum] = Gen2TrackSlice(trackNum, localHeaderOffset, compSize, method)
             }
             pos += 46 + nameLen + extraLen + commentLen
         }
@@ -182,11 +182,11 @@ class SaStreamArchive(
             }
 
             if (oggLen <= 0L) {
-                GTRadioLogger.log("SaStreamArchive[$streamCode]: Stopped at offset $offset (invalid oggLen=$oggLen)")
+                GTRadioLogger.log("Gen2StreamArchive[$streamCode]: Stopped at offset $offset (invalid oggLen=$oggLen)")
                 break
             }
 
-            slices[trackNum] = SaTrackSlice(trackNum, offset + 8068L, oggLen, 0)
+            slices[trackNum] = Gen2TrackSlice(trackNum, offset + 8068L, oggLen, 0)
             offset += 8068L + oggLen
             trackNum++
         }
@@ -195,8 +195,8 @@ class SaStreamArchive(
     fun materializeTrackUri(trackNum: Int): Uri? {
         ensureIndexed()
         val slice = slices[trackNum] ?: return null
-        val ext = if (containerType == SaContainerType.MOBILE_OSW) "mp3" else "ogg"
-        val cacheDir = File(context.cacheDir, "sa_stream_tracks").apply { mkdirs() }
+        val ext = if (containerType == Gen2ContainerType.MOBILE_OSW) "mp3" else "ogg"
+        val cacheDir = File(context.cacheDir, "gen2_stream_tracks").apply { mkdirs() }
         val outFile = File(cacheDir, "${streamCode}_${trackNum}.$ext")
         if (outFile.exists() && outFile.length() == slice.dataLength) {
             return Uri.fromFile(outFile)
@@ -204,11 +204,14 @@ class SaStreamArchive(
 
         // Keep cache folder tidy so extracted segments never bloat phone storage
         try {
-            val cachedFiles = cacheDir.listFiles()
-            if (cachedFiles != null && cachedFiles.size > 60) {
-                cachedFiles.sortBy { it.lastModified() }
+            val allCached = ArrayList<File>()
+            cacheDir.listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "sa_stream_tracks").listFiles()?.let { allCached.addAll(it) }
+            File(context.cacheDir, "sa_raw_tracks").listFiles()?.let { allCached.addAll(it) }
+            if (allCached.size > 60) {
+                allCached.sortBy { it.lastModified() }
                 for (i in 0 until 20) {
-                    cachedFiles[i].delete()
+                    allCached[i].delete()
                 }
             }
         } catch (_: Exception) {}
@@ -216,7 +219,7 @@ class SaStreamArchive(
         try {
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 FileInputStream(pfd.fileDescriptor).channel.use { ch ->
-                    if (containerType == SaContainerType.MOBILE_OSW) {
+                    if (containerType == Gen2ContainerType.MOBILE_OSW) {
                         extractOswSlice(ch, slice, outFile)
                     } else {
                         extractPcSlice(ch, slice, outFile)
@@ -227,12 +230,12 @@ class SaStreamArchive(
                 return Uri.fromFile(outFile)
             }
         } catch (e: Exception) {
-            GTRadioLogger.log("SaStreamArchive[$streamCode]: Failed extracting track $trackNum", e)
+            GTRadioLogger.log("Gen2StreamArchive[$streamCode]: Failed extracting track $trackNum", e)
         }
         return null
     }
 
-    private fun extractOswSlice(ch: FileChannel, slice: SaTrackSlice, outFile: File) {
+    private fun extractOswSlice(ch: FileChannel, slice: Gen2TrackSlice, outFile: File) {
         val lfh = ByteBuffer.allocate(30).order(ByteOrder.LITTLE_ENDIAN)
         readFully(ch, lfh, slice.dataOffset)
         val nameLen = lfh.getShort(26).toInt() and 0xFFFF
@@ -253,7 +256,7 @@ class SaStreamArchive(
         }
     }
 
-    private fun extractPcSlice(ch: FileChannel, slice: SaTrackSlice, outFile: File) {
+    private fun extractPcSlice(ch: FileChannel, slice: Gen2TrackSlice, outFile: File) {
         val raw = ByteArray(slice.dataLength.toInt())
         readFully(ch, ByteBuffer.wrap(raw), slice.dataOffset)
         val baseMod = (slice.dataOffset % 16L).toInt()

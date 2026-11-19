@@ -29,7 +29,7 @@ class Gen1RawRadioStation(
     override val mediaItem: MediaBrowserCompat.MediaItem,
     private val fileName: String,
     private val sourceUri: Uri,
-    private val isVcAdf: Boolean,
+    private val isXorAdf: Boolean,
     private val stationInfo: Gen1StationInfo?,
     private val player: GTRadioPlayer,
     private val context: Context,
@@ -42,9 +42,9 @@ class Gen1RawRadioStation(
     override var stationName: String = (mediaItem.description.title ?: stationInfo?.displayName ?: fileName).toString()
 
     private val stationTitle: String = stationName
-    private val groupTitle: String = (mediaItem.description.subtitle ?: if (isVcAdf) "GTA Vice City" else "GTA III").toString()
+    private val groupTitle: String = (mediaItem.description.subtitle ?: if (isXorAdf) "GTA Vice City" else "GTA III").toString()
     private val stationLogo: Bitmap? = mediaItem.description.iconBitmap
-    private val gameCode: Int = if (isVcAdf) 1 else 2
+    private val gameCode: Int = if (isXorAdf) 1 else 2
     private val rng = Random()
 
     private var _playing = false
@@ -102,7 +102,7 @@ class Gen1RawRadioStation(
             onMetadataChanged?.invoke(_currentMetadata)
 
             if (cue != null && cachedArt == null && isAlbumArtEnabled()) {
-                val maxYear = stationInfo?.maxYear ?: if (isVcAdf) 1986 else 2001
+                val maxYear = stationInfo?.maxYear ?: if (isXorAdf) 1986 else 2001
                 val expectedKey = newKey
                 Gen1MetadataRepository.fetchAlbumArtAsync(cue.artist, cue.title, maxYear) { fetchedBmp ->
                     if (_playing && activeCueKey == expectedKey && fetchedBmp != null) {
@@ -168,7 +168,7 @@ class Gen1RawRadioStation(
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 val fileSize = pfd.statSize
                 FileInputStream(pfd.fileDescriptor).channel.use { ch ->
-                    if (!isVcAdf) {
+                    if (!isXorAdf) {
                         val hdr = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
                         ch.read(hdr, 0L)
                         val byteRate = hdr.getInt(28)
@@ -201,7 +201,7 @@ class Gen1RawRadioStation(
     }
 
     override fun play() {
-        GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: play() called (file=$fileName, isVcAdf=$isVcAdf)")
+        GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: play() called (file=$fileName, isXorAdf=$isXorAdf)")
         _playing = true
         activeCueKey = "__INIT__"
         mainHandler.removeCallbacks(metadataTickRunnable)
@@ -217,15 +217,15 @@ class Gen1RawRadioStation(
             rng.nextInt(30_000).toLong()
         }
 
-        val dataSourceFactory = VcAdfDataSource.Factory(
+        val dataSourceFactory = AdfXorDataSource.Factory(
             context = context,
-            xorMask = if (isVcAdf) 0x22 else 0x00
+            xorMask = if (isXorAdf) 0x22 else 0x00
         )
         val extractorsFactory = DefaultExtractorsFactory()
             .setConstantBitrateSeekingEnabled(true)
 
         val mediaItemBuilder = MediaItem.Builder().setUri(sourceUri)
-        if (isVcAdf) {
+        if (isXorAdf) {
             mediaItemBuilder.setMimeType(MimeTypes.AUDIO_MPEG)
         } else {
             mediaItemBuilder.setMimeType(MimeTypes.AUDIO_WAV)

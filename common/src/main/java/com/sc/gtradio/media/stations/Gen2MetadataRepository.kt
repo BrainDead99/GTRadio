@@ -15,14 +15,14 @@ import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-data class SaTrackMeta(
+data class Gen2TrackMeta(
     val trackNumber: Int,
     val rawTitle: String,
     val cleanTitle: String,
     val artist: String
 )
 
-data class SaSongGroup(
+data class Gen2SongGroup(
     val cleanTitle: String,
     val artist: String,
     val midTrack: Int,
@@ -32,11 +32,11 @@ data class SaSongGroup(
     val djOutroTracks: List<Int>
 )
 
-class SaStationMeta(
+class Gen2StationMeta(
     val streamCode: String,
     val stationName: String,
     val defaultArtist: String,
-    val tracks: Map<Int, SaTrackMeta>
+    val tracks: Map<Int, Gen2TrackMeta>
 ) {
     val idTracks = ArrayList<Int>()
     val djMorningTracks = ArrayList<Int>()
@@ -45,13 +45,13 @@ class SaStationMeta(
     val djOtherTracks = ArrayList<Int>()
     val djCallerStoryTracks = ArrayList<Int>()
     val djWeatherTracks = ArrayList<Int>()
-    val songGroups = ArrayList<SaSongGroup>()
+    val songGroups = ArrayList<Gen2SongGroup>()
 }
 
-object SaMetadataRepository {
+object Gen2MetadataRepository {
     private var loaded = false
-    private val byStreamCode = HashMap<String, SaStationMeta>()
-    private val byStationName = HashMap<String, SaStationMeta>()
+    private val byStreamCode = HashMap<String, Gen2StationMeta>()
+    private val byStationName = HashMap<String, Gen2StationMeta>()
     private val albumNameCache = ConcurrentHashMap<String, String>()
     private val bgExecutor = Executors.newSingleThreadExecutor()
 
@@ -83,21 +83,21 @@ object SaMetadataRepository {
 
         // 1. Seed default stations first so station list never fails
         for ((code, info) in defaultStations) {
-            val st = SaStationMeta(code, info.first, info.second, emptyMap())
+            val st = Gen2StationMeta(code, info.first, info.second, emptyMap())
             byStreamCode[code] = st
             byStationName[info.first.uppercase()] = st
         }
 
-        // 2. Load detailed track metadata from bundled assets/sa_metadata.ini
+        // 2. Load detailed track metadata from bundled assets/gen2_metadata.ini
         try {
-            context.assets.open("sa_metadata.ini").use { input ->
+            context.assets.open("gen2_metadata.ini").use { input ->
                 BufferedReader(InputStreamReader(input)).use { reader ->
                     parseIni(reader)
                 }
             }
-            GTRadioLogger.log("SaMetadataRepository: Loaded sa_metadata.ini (${byStreamCode.size} streams)")
+            GTRadioLogger.log("Gen2MetadataRepository: Loaded gen2_metadata.ini (${byStreamCode.size} streams)")
         } catch (e: Exception) {
-            GTRadioLogger.log("SaMetadataRepository: Failed to open assets/sa_metadata.ini", e)
+            GTRadioLogger.log("Gen2MetadataRepository: Failed to open assets/gen2_metadata.ini", e)
         }
     }
 
@@ -109,14 +109,14 @@ object SaMetadataRepository {
 
         fun flushSection() {
             if (curStream.isNotBlank() && curStation.isNotBlank()) {
-                val metaMap = HashMap<Int, SaTrackMeta>()
+                val metaMap = HashMap<Int, Gen2TrackMeta>()
                 for ((num, pair) in curTracks) {
                     val rawT = pair.first
                     val cleanT = suffixRegex.replace(rawT, "").trim()
                     val art = pair.second.ifBlank { curDefaultArtist }
-                    metaMap[num] = SaTrackMeta(num, rawT, cleanT, art)
+                    metaMap[num] = Gen2TrackMeta(num, rawT, cleanT, art)
                 }
-                val stMeta = SaStationMeta(curStream.uppercase(), curStation, curDefaultArtist, metaMap)
+                val stMeta = Gen2StationMeta(curStream.uppercase(), curStation, curDefaultArtist, metaMap)
                 classifyTracks(stMeta)
                 byStreamCode[curStream.uppercase()] = stMeta
                 byStationName[curStation.uppercase()] = stMeta
@@ -159,7 +159,7 @@ object SaMetadataRepository {
         flushSection()
     }
 
-    private fun classifyTracks(st: SaStationMeta) {
+    private fun classifyTracks(st: Gen2StationMeta) {
         val isWctr = st.streamCode == "TK" || st.stationName.uppercase() == "WCTR"
         val songBuckets = LinkedHashMap<String, Triple<MutableList<Int>, MutableList<Int>, MutableList<Int>>>()
         val cleanIntros = HashMap<String, Int>()
@@ -204,7 +204,7 @@ object SaMetadataRepository {
         for ((title, triple) in songBuckets) {
             val mid = triple.second.firstOrNull() ?: continue
             st.songGroups.add(
-                SaSongGroup(
+                Gen2SongGroup(
                     cleanTitle = title,
                     artist = songArtists[title] ?: st.defaultArtist,
                     midTrack = mid,
@@ -217,7 +217,7 @@ object SaMetadataRepository {
         }
     }
 
-    fun getByStreamCode(context: Context, code: String): SaStationMeta? {
+    fun getByStreamCode(context: Context, code: String): Gen2StationMeta? {
         ensureLoaded(context)
         return byStreamCode[code.uppercase()]
     }

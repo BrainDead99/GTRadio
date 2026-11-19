@@ -25,7 +25,7 @@ import com.sc.gtradio.media.stations.GtaIvMetadataRepository
 import com.sc.gtradio.media.stations.GtaVKeyManager
 import com.sc.gtradio.media.stations.GtaVMetadataRepository
 import com.sc.gtradio.media.stations.ImportResult
-import com.sc.gtradio.media.stations.SaMetadataRepository
+import com.sc.gtradio.media.stations.Gen2MetadataRepository
 import java.util.concurrent.Executors
 
 class SettingsActivity : AppCompatActivity() {
@@ -264,14 +264,14 @@ class SettingsActivity : AppCompatActivity() {
             scanPref.summary = "Preparing GTA SA, GTA IV & GTA V tracklists..."
 
             Executors.newSingleThreadExecutor().submit {
-                SaMetadataRepository.ensureLoaded(ctx)
+                Gen2MetadataRepository.ensureLoaded(ctx)
                 GtaIvMetadataRepository.ensureLoaded(ctx)
 
                 // Tuple: (artist, title, maxYear)
                 val allSongs = ArrayList<Triple<String, String, Int>>()
                 val codes = listOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG")
                 for (code in codes) {
-                    val st = SaMetadataRepository.getByStreamCode(ctx, code) ?: continue
+                    val st = Gen2MetadataRepository.getByStreamCode(ctx, code) ?: continue
                     for (s in st.songGroups) {
                         allSongs.add(Triple(s.artist, s.cleanTitle, 2004))
                     }
@@ -295,7 +295,7 @@ class SettingsActivity : AppCompatActivity() {
                     val fetched = if (maxYear == 2013) {
                         GtaVMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, 2013)
                     } else {
-                        SaMetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, maxYear)
+                        Gen2MetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, maxYear)
                     }
                     if (fetched) {
                         okCount++

@@ -55,13 +55,13 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     private var gtaVNewsArchive: GtaVRpfArchive? = null
     var mediaId: String = ""
     var isValid: Boolean = true
-    var isRawSaGroup: Boolean = false
-    var rawContainerType: SaContainerType? = null
+    var isGen2RawGroup: Boolean = false
+    var rawContainerType: Gen2ContainerType? = null
     private val rawStreamUris = HashMap<String, Uri>()
-    private val archiveCache = HashMap<String, SaStreamArchive>()
+    private val archiveCache = HashMap<String, Gen2StreamArchive>()
 
     companion object {
-        private val SA_STREAM_CODES = setOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG", "TK", "ADVERTS")
+        private val GEN2_STREAM_CODES = setOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG", "TK", "ADVERTS")
         private val SKIP_DIRS = setOf(
             "SFX", "CONFIG", "ANIM", "TEXT", "MODELS", "DATA", "MOVIES",
             "DYNAMIC THEME", "BACKGROUND", "FONT", "ICON", "SONGS",
@@ -151,13 +151,13 @@ init {
             }
         }
 
-        if (!detectRawSaStreams(simpleFiles)) {
+        if (!detectGen2RawStreams(simpleFiles)) {
             setupDataFromJson(folderDoc, simpleFiles)
         }
 
         mediaItem = getMediaItem(folderDoc, simpleFiles, groupName)
-        stationList = if (isRawSaGroup || isGtaIvRpfGroup || isGen1RawGroup || isGtaVRpfGroup) {
-            getRawSaStationsList()
+        stationList = if (isGen2RawGroup || isGtaIvRpfGroup || isGen1RawGroup || isGtaVRpfGroup) {
+            getGen2RawStationsList()
         } else {
             getStationsList(folderDoc)
         }
@@ -300,7 +300,7 @@ init {
             mediaItem = stMediaItem,
             fileName = fileInfo.name,
             sourceUri = fileInfo.uri,
-            isVcAdf = (gen1GameCode == 1),
+            isXorAdf = (gen1GameCode == 1),
             stationInfo = stInfo,
             player = player,
             context = ctx,
@@ -717,7 +717,7 @@ init {
         )
     }
 
-    private fun detectRawSaStreams(files: Array<SimpleFileInfo>): Boolean {
+    private fun detectGen2RawStreams(files: Array<SimpleFileInfo>): Boolean {
         val oswMatches = HashMap<String, Uri>()
         val pcMatches = HashMap<String, Uri>()
 
@@ -726,16 +726,16 @@ init {
             val cleanName = f.name.trim().uppercase()
             if (cleanName.endsWith(".OSW")) {
                 val code = cleanName.removeSuffix(".OSW")
-                if (code in SA_STREAM_CODES) {
+                if (code in GEN2_STREAM_CODES) {
                     oswMatches[code] = f.uri
                 }
             } else if (!cleanName.contains(".")) {
-                if (cleanName in SA_STREAM_CODES) {
+                if (cleanName in GEN2_STREAM_CODES) {
                     pcMatches[cleanName] = f.uri
                 }
             } else if (cleanName.endsWith(".WAV") || cleanName.endsWith(".OGG")) {
                 val code = cleanName.substringBeforeLast(".")
-                if (code in SA_STREAM_CODES) {
+                if (code in GEN2_STREAM_CODES) {
                     pcMatches[code] = f.uri
                 }
             }
@@ -745,44 +745,44 @@ init {
         val radioPcCount = pcMatches.keys.count { it != "ADVERTS" }
 
         if (radioOswCount >= 1) {
-            isRawSaGroup = true
-            rawContainerType = SaContainerType.MOBILE_OSW
+            isGen2RawGroup = true
+            rawContainerType = Gen2ContainerType.MOBILE_OSW
             rawStreamUris.putAll(oswMatches)
             generation = 2
             groupName = "GTA San Andreas (Mobile OSW)"
-            GTRadioLogger.log("detectRawSaStreams: Detected Mobile OSW in '${folderDoc.name}' (${oswMatches.keys})")
+            GTRadioLogger.log("detectGen2RawStreams: Detected Mobile OSW in '${folderDoc.name}' (${oswMatches.keys})")
             return true
         } else if (radioPcCount >= 1) {
-            isRawSaGroup = true
-            rawContainerType = SaContainerType.PC_STREAM
+            isGen2RawGroup = true
+            rawContainerType = Gen2ContainerType.PC_STREAM
             rawStreamUris.putAll(pcMatches)
             generation = 2
             groupName = "GTA San Andreas (PC Streams)"
-            GTRadioLogger.log("detectRawSaStreams: Detected PC Streams in '${folderDoc.name}' (${pcMatches.keys})")
+            GTRadioLogger.log("detectGen2RawStreams: Detected PC Streams in '${folderDoc.name}' (${pcMatches.keys})")
             return true
         }
         return false
     }
 
     @Synchronized
-    fun getOrCreateArchive(streamCode: String): SaStreamArchive? {
+    fun getOrCreateArchive(streamCode: String): Gen2StreamArchive? {
         val code = streamCode.uppercase()
         archiveCache[code]?.let { return it }
         val uri = rawStreamUris[code] ?: return null
         val type = rawContainerType ?: return null
-        val arch = SaStreamArchive(context, code, uri, type)
+        val arch = Gen2StreamArchive(context, code, uri, type)
         archiveCache[code] = arch
         return arch
     }
 
-    private fun getRawSaStationsList(): ArrayList<MediaBrowserCompat.MediaItem> {
+    private fun getGen2RawStationsList(): ArrayList<MediaBrowserCompat.MediaItem> {
         val list = ArrayList<MediaBrowserCompat.MediaItem>()
-        SaMetadataRepository.ensureLoaded(context)
+        Gen2MetadataRepository.ensureLoaded(context)
 
         for ((code, _) in rawStreamUris) {
             if (code == "ADVERTS") continue
-            val stMeta = SaMetadataRepository.getByStreamCode(context, code)
-            val stName = stMeta?.stationName ?: SaMetadataRepository.defaultStations[code]?.first ?: code
+            val stMeta = Gen2MetadataRepository.getByStreamCode(context, code)
+            val stName = stMeta?.stationName ?: Gen2MetadataRepository.defaultStations[code]?.first ?: code
             val mediaId = "${folderDoc.uri}#SA_RAW#$code"
 
             val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)

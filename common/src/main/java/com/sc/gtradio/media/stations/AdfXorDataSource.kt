@@ -6,7 +6,7 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
 
 @UnstableApi
-class VcAdfDataSource(
+class AdfXorDataSource(
     private val upstream: DataSource,
     private val xorMask: Int
 ) : DataSource by upstream {
@@ -27,7 +27,7 @@ class VcAdfDataSource(
     ) : DataSource.Factory {
         private val defaultFactory = DefaultDataSource.Factory(context)
         override fun createDataSource(): DataSource {
-            return VcAdfDataSource(defaultFactory.createDataSource(), xorMask)
+            return AdfXorDataSource(defaultFactory.createDataSource(), xorMask)
         }
     }
 }

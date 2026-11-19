@@ -256,7 +256,7 @@ import java.util.*
         } else {
             val cleanTitle = suffixRegex.replace(rawTitle, "").trim()
             val artistStr = rawArtist ?: ""
-            val cachedAlb = SaMetadataRepository.getCachedAlbumName(context, artistStr, cleanTitle)
+            val cachedAlb = Gen2MetadataRepository.getCachedAlbumName(context, artistStr, cleanTitle)
             val finalAlbum = if (!cachedAlb.isNullOrBlank()) cachedAlb else if (!rawAlbum.startsWith("GTA", ignoreCase = true)) rawAlbum else ""
             val subtitle = if (artistStr.isNotBlank()) "$artistStr • $stationTitle" else stationTitle
             _currentMetadata = buildStationMetadata(

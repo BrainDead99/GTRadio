@@ -398,15 +398,15 @@ data class GtaIvClipRef(
         val maxYear = if (groupTitle.uppercase().contains("EPISODES") || groupTitle.uppercase().contains("EFLC")) 2009 else 2008
         var art: Bitmap? = stationLogo
         if (isAlbumArtEnabled()) {
-            val cached = SaMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
+            val cached = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
             if (cached != null) {
                 art = cached
             } else {
-                SaMetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
+                Gen2MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
                     mainHandler.post {
                         if (_playing && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
-                            val newArt = SaMetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
-                            val alb = SaMetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+                            val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
+                            val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
                             val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
                             _currentMetadata = buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb)
                             onMetadataChanged?.invoke(_currentMetadata)
@@ -416,7 +416,7 @@ data class GtaIvClipRef(
             }
         }
 
-        val eraAlbum = SaMetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+        val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
         val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
         _currentMetadata = buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum)
         onMetadataChanged?.invoke(_currentMetadata)

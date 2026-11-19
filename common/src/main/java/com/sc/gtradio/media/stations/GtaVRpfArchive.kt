@@ -1023,13 +1023,18 @@ class GtaVRpfArchive(
     }
 
     private fun cleanCacheIfNeeded(cacheDir: File, currentSafeFileName: String) {
-        val files = cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") } ?: return
+        val allFiles = ArrayList<File>()
+        cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        File(context.cacheDir, "gen2_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        File(context.cacheDir, "sa_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        File(context.cacheDir, "sa_raw_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
+        if (allFiles.isEmpty()) return
         var totalBytes = 0L
-        for (f in files) totalBytes += f.length()
+        for (f in allFiles) totalBytes += f.length()
 
         if (totalBytes > MAX_CACHE_BYTES) {
             val now = System.currentTimeMillis()
-            val sorted = files.sortedBy { it.lastModified() }
+            val sorted = allFiles.sortedBy { it.lastModified() }
             for (f in sorted) {
                 if (totalBytes <= TARGET_CACHE_BYTES) break
                 val ageMs = now - f.lastModified()
