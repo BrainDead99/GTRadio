@@ -46,6 +46,8 @@
     <string name="scan_album_art_key">scan_download_album_art</string>
     <string name="scan_album_art_title">Scan &amp; Download All Album Art</string>
     <string name="scan_album_art_summary">Tap to download original release-era album covers and album titles for offline use.</string>
+    <string name="clear_album_art_title">Clear Album Art Cache</string>
+    <string name="clear_album_art_summary">Delete cached album covers and album titles so they can be re-downloaded.</string>
 
     <string name="diagnostics_header">Diagnostics</string>
     <string name="verbose_logging_key">verbose_logging_enabled</string>

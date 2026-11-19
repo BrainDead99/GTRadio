@@ -25,7 +25,9 @@ import com.sc.gtradio.media.stations.Rpf3MetadataRepository
 import com.sc.gtradio.media.stations.Rpf7KeyManager
 import com.sc.gtradio.media.stations.Rpf7MetadataRepository
 import com.sc.gtradio.media.stations.ImportResult
+import com.sc.gtradio.media.stations.AlbumArtDownloader
 import com.sc.gtradio.media.stations.Gen2MetadataRepository
+import java.util.Locale
 import java.util.concurrent.Executors
 
 class SettingsActivity : AppCompatActivity() {
@@ -241,6 +243,35 @@ class SettingsActivity : AppCompatActivity() {
                 true
             }
 
+            val clearArtPref = findPreference<Preference>("clear_album_art_cache")
+            clearArtPref?.let { pref ->
+                updateClearArtSummary(pref)
+                pref.setOnPreferenceClickListener {
+                    val ctx = requireContext()
+                    val (count, _) = AlbumArtDownloader.getAlbumArtCacheStats(ctx)
+                    if (count == 0) {
+                        Toast.makeText(ctx, "Album art cache is already empty.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        AlertDialog.Builder(ctx)
+                            .setTitle(R.string.clear_album_art_title)
+                            .setMessage("Delete all cached album covers and album titles? You can re-download them anytime via Scan & Download All Album Art.")
+                            .setPositiveButton("Delete") { _, _ ->
+                                Executors.newSingleThreadExecutor().submit {
+                                    val (_, delBytes) = AlbumArtDownloader.clearAlbumArtCache(ctx)
+                                    val freedMb = String.format(Locale.US, "%.2f MB", delBytes / (1024.0 * 1024.0))
+                                    mainHandler.post {
+                                        updateClearArtSummary(pref)
+                                        Toast.makeText(ctx, "Album art cache cleared ($freedMb freed).", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                            .setNegativeButton("Cancel", null)
+                            .show()
+                    }
+                    true
+                }
+            }
+
             val verbosePref = findPreference<Preference>(getString(R.string.verbose_logging_key))
             verbosePref?.setOnPreferenceChangeListener { _, newValue ->
                 val enabled = newValue as? Boolean ?: false
@@ -256,6 +287,14 @@ class SettingsActivity : AppCompatActivity() {
             logsPref?.setOnPreferenceClickListener {
                 showDiagnosticLogsDialog()
                 true
+            }
+        }
+
+        override fun onResume() {
+            super.onResume()
+            val clearArtPref = findPreference<Preference>("clear_album_art_cache")
+            if (clearArtPref != null) {
+                updateClearArtSummary(clearArtPref)
             }
         }
 
@@ -288,6 +327,17 @@ class SettingsActivity : AppCompatActivity() {
                 .show()
         }
 
+        private fun updateClearArtSummary(pref: Preference) {
+            val ctx = context ?: return
+            val (count, bytes) = AlbumArtDownloader.getAlbumArtCacheStats(ctx)
+            if (count == 0) {
+                pref.summary = "Cache is empty (0.00 MB)."
+            } else {
+                val sizeStr = String.format(Locale.US, "%.2f MB", bytes / (1024.0 * 1024.0))
+                pref.summary = "$count file(s) • $sizeStr cached offline. Tap to delete."
+            }
+        }
+
         private fun startEraArtworkScan(scanPref: Preference) {
             if (isScanning) return
             val ctx = context?.applicationContext ?: return
@@ -298,46 +348,62 @@ class SettingsActivity : AppCompatActivity() {
                 Gen2MetadataRepository.ensureLoaded(ctx)
                 Rpf3MetadataRepository.ensureLoaded(ctx)
 
-                // Tuple: (artist, title, maxYear)
-                val allSongs = ArrayList<Triple<String, String, Int>>()
+                // Tuple: (artist, title, preferredYear, maxYear)
+                val allSongs = ArrayList<ScanTrackItem>()
                 val codes = listOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG")
                 for (code in codes) {
                     val st = Gen2MetadataRepository.getByStreamCode(ctx, code) ?: continue
                     for (s in st.songGroups) {
-                        allSongs.add(Triple(s.artist, s.cleanTitle, 2004))
+                        allSongs.add(ScanTrackItem(s.artist, s.cleanTitle, 1993, 2004))
                     }
                 }
                 for ((artist, title) in Rpf3MetadataRepository.getAllMusicSongs(ctx)) {
-                    allSongs.add(Triple(artist, title, 2008))
+                    allSongs.add(ScanTrackItem(artist, title, 2009, 2009))
                 }
                 for ((artist, title) in Rpf7MetadataRepository.getAllMusicSongs()) {
-                    allSongs.add(Triple(artist, title, 2013))
+                    allSongs.add(ScanTrackItem(artist, title, 2013, 2021))
                 }
+
+                val total = allSongs.size
+                GTRadioLogger.log("AlbumArtScan: Starting bulk scan for $total tracks across Gen2, RPF3, and RPF7...")
 
                 var done = 0
                 var okCount = 0
-                val total = allSongs.size
-                for ((artist, title, maxYear) in allSongs) {
+                for (item in allSongs) {
                     done++
                     val cur = done
                     mainHandler.post {
-                        scanPref.summary = "Scanning ($cur / $total): $artist - $title"
+                        scanPref.summary = "Scanning ($cur / $total): ${item.artist} - ${item.title}"
                     }
-                    val fetched = if (maxYear == 2013) {
-                        Rpf7MetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, 2013)
-                    } else {
-                        Gen2MetadataRepository.fetchEraAccurateArtSync(ctx, artist, title, maxYear)
-                    }
+                    val fetched = AlbumArtDownloader.fetchEraAccurateArtSync(
+                        context = ctx,
+                        artist = item.artist,
+                        songTitle = item.title,
+                        preferredYear = item.preferredYear,
+                        maxYear = item.maxYear
+                    )
                     if (fetched) {
                         okCount++
                     }
                 }
                 val finalOk = okCount
+                GTRadioLogger.log("AlbumArtScan: Bulk scan complete. Cached $finalOk / $total era-accurate album covers.")
                 mainHandler.post {
                     isScanning = false
                     scanPref.summary = "Complete! Cached $finalOk / $total era-accurate album covers offline."
+                    val clearArtPref = findPreference<Preference>("clear_album_art_cache")
+                    if (clearArtPref != null) {
+                        updateClearArtSummary(clearArtPref)
+                    }
                 }
             }
         }
     }
 }
+
+private data class ScanTrackItem(
+    val artist: String,
+    val title: String,
+    val preferredYear: Int,
+    val maxYear: Int
+)

@@ -2,18 +2,10 @@ package com.sc.gtradio.media.stations
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.sc.gtradio.common.GTRadioLogger
-import org.json.JSONObject
 import java.io.BufferedReader
-import java.io.File
-import java.io.FileOutputStream
 import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 
 data class Gen2TrackMeta(
     val trackNumber: Int,
@@ -53,7 +45,6 @@ object Gen2MetadataRepository {
     private val byStreamCode = HashMap<String, Gen2StationMeta>()
     private val byStationName = HashMap<String, Gen2StationMeta>()
     private val albumNameCache = ConcurrentHashMap<String, String>()
-    private val bgExecutor = Executors.newSingleThreadExecutor()
 
     private val suffixRegex = Regex("\\s*\\((?:Mid|Intro(?:\\s*DJ\\s*#?\\d+)?|Outro(?:\\s*DJ\\s*#?\\d+)?)\\)\\s*$", RegexOption.IGNORE_CASE)
     private val remasterBanRegex = Regex("remaster|deluxe|expanded|anniversary|reissue|greatest hits|best of|anthology|edition|live", RegexOption.IGNORE_CASE)
@@ -78,6 +69,7 @@ object Gen2MetadataRepository {
     @Synchronized
     fun ensureLoaded(context: Context) {
         GTRadioLogger.init(context)
+        AlbumArtDownloader.init(context)
         if (loaded && byStreamCode.isNotEmpty()) return
         loaded = true
 
@@ -222,169 +214,53 @@ object Gen2MetadataRepository {
         return byStreamCode[code.uppercase()]
     }
 
+    fun clearMemoryCache() {
+        albumNameCache.clear()
+    }
+
     private fun cacheKey(artist: String, songTitle: String): String {
-        return "${artist.lowercase()}_${songTitle.lowercase()}".replace(Regex("[^a-z0-9_]+"), "")
+        return AlbumArtDownloader.cacheKey(artist, songTitle)
     }
 
     fun getCachedAlbumArt(context: Context, artist: String, songTitle: String): Bitmap? {
-        val dir = File(context.filesDir, "era_album_art")
-        val f = File(dir, "${cacheKey(artist, songTitle)}.jpg")
-        if (f.exists() && f.length() > 0) {
-            return BitmapFactory.decodeFile(f.absolutePath)
-        }
-        return null
+        return AlbumArtDownloader.getCachedAlbumArt(context, artist, songTitle)
     }
 
     fun getCachedAlbumName(context: Context, artist: String, songTitle: String): String? {
-        val key = cacheKey(artist, songTitle)
-        albumNameCache[key]?.let { return it }
-        val f = File(File(context.filesDir, "era_album_art"), "$key.txt")
-        if (f.exists()) {
-            val txt = f.readText().trim()
-            if (txt.isNotBlank()) {
-                albumNameCache[key] = txt
-                return txt
-            }
-        }
-        return null
+        return AlbumArtDownloader.getCachedAlbumName(context, artist, songTitle)
     }
 
-    fun fetchEraAccurateArtAsync(context: Context, artist: String, songTitle: String,
-        maxYear: Int = 2004, onDone: (() -> Unit)? = null) {
-        val key = cacheKey(artist, songTitle)
-        val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
-        val imgFile = File(dir, "$key.jpg")
-        if (imgFile.exists() && imgFile.length() > 0) return
-
-        bgExecutor.submit {
-            try {
-                val success = fetchFromItunesEraFiltered(artist, songTitle, dir, key) ||
-                              fetchFromMusicBrainzEraFiltered(artist, songTitle, dir, key)
-                if (success) onDone?.invoke()
-            } catch (_: Exception) {}
-        }
+    fun fetchEraAccurateArtAsync(
+        context: Context,
+        artist: String,
+        songTitle: String,
+        maxYear: Int = 2004,
+        onDone: (() -> Unit)? = null
+    ) {
+        val prefYear = if (maxYear in 2008..2010) 2009 else 1993
+        AlbumArtDownloader.fetchEraAccurateArtAsync(
+            context = context,
+            artist = artist,
+            songTitle = songTitle,
+            preferredYear = prefYear,
+            maxYear = maxYear,
+            onDone = onDone
+        )
     }
 
-    fun fetchEraAccurateArtSync(context: Context, artist: String, songTitle: String, maxYear: Int = 2004): Boolean {
-        val key = cacheKey(artist, songTitle)
-        val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
-        val imgFile = File(dir, "$key.jpg")
-        if (imgFile.exists() && imgFile.length() > 0) return true
-        return fetchFromItunesEraFiltered(artist, songTitle, dir, key) ||
-               fetchFromMusicBrainzEraFiltered(artist, songTitle, dir, key)
-    }
-
-    private fun fetchFromItunesEraFiltered(artist: String, songTitle: String, dir: File, key: String, maxYear: Int = 2004): Boolean {
-        try {
-            val cleanSong = songTitle.replace(Regex("\\(.*?\\)"), "").trim()
-            val q = URLEncoder.encode("$artist $cleanSong", "UTF-8")
-            GTRadioLogger.logVerbose("ART") { "iTunes search: '$artist - $cleanSong' [maxYear=$maxYear]" }
-            val url = URL("https://itunes.apple.com/search?term=$q&media=music&entity=song&limit=15")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 6000
-                readTimeout = 6000
-            }
-            if (conn.responseCode != 200) {
-                GTRadioLogger.logVerbose("ART") { "iTunes art HTTP failure: code=${conn.responseCode} for '$artist - $cleanSong'" }
-                return false
-            }
-            val body = conn.inputStream.bufferedReader().readText()
-            val results = JSONObject(body).optJSONArray("results") ?: return false
-            if (results.length() == 0) {
-                GTRadioLogger.logVerbose("ART") { "iTunes art 0 results for '$artist - $cleanSong'" }
-                return false
-            }
-
-            var bestItem: JSONObject? = null
-            var bestScore = -9999
-
-            for (i in 0 until results.length()) {
-                val item = results.getJSONObject(i)
-                val colName = item.optString("collectionName", "")
-                val relDate = item.optString("releaseDate", "")
-                val year = yearRegex.find(relDate)?.groupValues?.get(1)?.toIntOrNull() ?: 9999
-
-                var score = 0
-                if (year <= 1993) score += 50
-                else if (year <= 2004) score += 30
-                else score -= 40
-
-                if (!remasterBanRegex.containsMatchIn(colName)) score += 35 else score -= 35
-
-                if (score > bestScore) {
-                    bestScore = score
-                    bestItem = item
-                }
-            }
-
-            val chosen = bestItem ?: return false
-            val rawCol = chosen.optString("collectionName", "")
-                .replace(Regex("\\s*\\([^)]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue)[^)]*\\)", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("\\s*-\\s*(?:Single|EP)\\s*$", RegexOption.IGNORE_CASE), "")
-                .trim()
-            val artUrl = chosen.optString("artworkUrl100", "").replace("100x100bb.jpg", "600x600bb.jpg")
-            if (artUrl.isBlank()) return false
-
-            val imgBytes = URL(artUrl).openStream().use { it.readBytes() }
-            if (imgBytes.isNotEmpty()) {
-                FileOutputStream(File(dir, "$key.jpg")).use { it.write(imgBytes) }
-                if (rawCol.isNotBlank()) {
-                    File(dir, "$key.txt").writeText(rawCol)
-                    albumNameCache[key] = rawCol
-                }
-                GTRadioLogger.logVerbose("ART") {
-                    "iTunes art match: '$artist - $cleanSong' -> '$rawCol' (candidates=${results.length()}, score=$bestScore)"
-                }
-                return true
-            }
-        } catch (e: Exception) {
-            GTRadioLogger.log("iTunes art fetch error for $artist - $songTitle", e)
-        }
-        return false
-    }
-
-    private fun fetchFromMusicBrainzEraFiltered(artist: String, songTitle: String, dir: File, key: String, maxYear: Int = 2004): Boolean {
-        try {
-            val cleanSong = songTitle.replace(Regex("\\(.*?\\)"), "").trim()
-            val q = URLEncoder.encode("recording:\"$cleanSong\" AND artist:\"$artist\" AND date:[1950 TO 2004]", "UTF-8")
-            val url = URL("https://musicbrainz.org/ws/2/recording/?query=$q&fmt=json&limit=5")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                setRequestProperty("User-Agent", "GTRadioAndroid/1.2 (https://github.com/BrainDead99/GTRadio)")
-                connectTimeout = 6000
-                readTimeout = 6000
-            }
-            if (conn.responseCode != 200) return false
-            val recordings = JSONObject(conn.inputStream.bufferedReader().readText()).optJSONArray("recordings") ?: return false
-            for (i in 0 until recordings.length()) {
-                val rec = recordings.getJSONObject(i)
-                val releases = rec.optJSONArray("releases") ?: continue
-                for (j in 0 until releases.length()) {
-                    val rel = releases.getJSONObject(j)
-                    val title = rel.optString("title", "")
-                    if (remasterBanRegex.containsMatchIn(title)) continue
-                    val mbid = rel.optString("id", "")
-                    if (mbid.isBlank()) continue
-                    try {
-                        val artConn = (URL("https://coverartarchive.org/release/$mbid/front-500").openConnection() as HttpURLConnection).apply {
-                            instanceFollowRedirects = true
-                            connectTimeout = 5000
-                            readTimeout = 5000
-                        }
-                        if (artConn.responseCode == 200) {
-                            val bytes = artConn.inputStream.use { it.readBytes() }
-                            if (bytes.isNotEmpty()) {
-                                FileOutputStream(File(dir, "$key.jpg")).use { it.write(bytes) }
-                                if (title.isNotBlank()) {
-                                    File(dir, "$key.txt").writeText(title)
-                                    albumNameCache[key] = title
-                                }
-                                return true
-                            }
-                        }
-                    } catch (_: Exception) {}
-                }
-            }
-        } catch (_: Exception) {}
-        return false
+    fun fetchEraAccurateArtSync(
+        context: Context,
+        artist: String,
+        songTitle: String,
+        maxYear: Int = 2004
+    ): Boolean {
+        val prefYear = if (maxYear in 2008..2010) 2009 else 1993
+        return AlbumArtDownloader.fetchEraAccurateArtSync(
+            context = context,
+            artist = artist,
+            songTitle = songTitle,
+            preferredYear = prefYear,
+            maxYear = maxYear
+        )
     }
 }

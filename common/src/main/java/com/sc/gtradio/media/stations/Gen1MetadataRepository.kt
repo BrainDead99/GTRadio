@@ -556,13 +556,47 @@ object Gen1MetadataRepository {
         return list.firstOrNull { posSec >= it.startSec && posSec < it.endSec }
     }
 
+    fun clearMemoryCache() {
+        synchronized(artCache) {
+            artCache.evictAll()
+            failedKeys.clear()
+        }
+    }
+
     fun getCachedAlbumArt(artist: String, title: String): Bitmap? {
+        val ctx = AlbumArtDownloader.appContext
+        if (ctx != null) {
+            val diskBmp = AlbumArtDownloader.getCachedAlbumArt(ctx, artist, title)
+            if (diskBmp != null) return diskBmp
+        }
         val key = "${artist.lowercase().trim()}|${title.lowercase().trim()}"
         return synchronized(artCache) { artCache.get(key) }
     }
 
     fun fetchAlbumArtAsync(artist: String, title: String, maxYear: Int, onResult: (Bitmap?) -> Unit) {
         val key = "${artist.lowercase().trim()}|${title.lowercase().trim()}"
+        val ctx = AlbumArtDownloader.appContext
+        if (ctx != null) {
+            val prefYear = if (maxYear in 1950..2025) maxYear else 2001
+            AlbumArtDownloader.fetchEraAccurateArtAsync(
+                context = ctx,
+                artist = artist,
+                songTitle = title,
+                preferredYear = prefYear,
+                maxYear = prefYear,
+                onDone = {
+                    val bmp = AlbumArtDownloader.getCachedAlbumArt(ctx, artist, title)
+                    if (bmp != null) {
+                        synchronized(artCache) {
+                            artCache.put(key, bmp)
+                        }
+                    }
+                    mainHandler.post { onResult(bmp) }
+                }
+            )
+            return
+        }
+
         synchronized(artCache) {
             val cached = artCache.get(key)
             if (cached != null) {

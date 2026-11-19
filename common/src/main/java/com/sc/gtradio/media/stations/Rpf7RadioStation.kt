@@ -354,7 +354,7 @@ data class Rpf7ClipRef(
             return
         }
 
-        // Regular songs: query era-accurate album art (cutoff <= 2013)
+        // Regular songs: query era-accurate album art (cutoff <= 2021, preferred <= 2013)
         var art: Bitmap? = stationLogo
         if (isAlbumArtEnabled()) {
             val cached = Rpf7MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
@@ -362,7 +362,7 @@ data class Rpf7ClipRef(
                 art = cached
             } else {
                 val expectedGen = playGeneration.get()
-                Rpf7MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear = 2013) {
+                Rpf7MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear = 2021) {
                     mainHandler.post {
                         if (_playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
                             val newArt = Rpf7MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo

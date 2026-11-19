@@ -87,6 +87,13 @@
             app:key="@string/scan_album_art_key"
             app:title="@string/scan_album_art_title"
             app:summary="@string/scan_album_art_summary" />
+
+        <Preference
+            android:clickable="true"
+            app:iconSpaceReserved="false"
+            app:key="clear_album_art_cache"
+            app:title="@string/clear_album_art_title"
+            app:summary="@string/clear_album_art_summary" />
     </PreferenceCategory>
 
     <PreferenceCategory

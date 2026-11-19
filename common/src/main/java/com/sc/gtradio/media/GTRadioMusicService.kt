@@ -369,6 +369,8 @@ import java.util.concurrent.Executors
 
     override fun onCreate() {
         super.onCreate()
+        GTRadioLogger.init(applicationContext)
+        AlbumArtDownloader.init(applicationContext)
 
         //Subscribe to any SharedPref changes for things like the base folder, ads, and weather chatter
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)

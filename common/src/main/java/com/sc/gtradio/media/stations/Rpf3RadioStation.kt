@@ -395,7 +395,7 @@ data class Rpf3ClipRef(
             return
         }
 
-        val maxYear = if (groupTitle.uppercase().contains("EPISODES") || groupTitle.uppercase().contains("EFLC")) 2009 else 2008
+        val maxYear = 2009
         var art: Bitmap? = stationLogo
         if (isAlbumArtEnabled()) {
             val cached = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)

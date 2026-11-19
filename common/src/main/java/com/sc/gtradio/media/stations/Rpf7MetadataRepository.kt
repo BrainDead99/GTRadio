@@ -2,17 +2,9 @@ package com.sc.gtradio.media.stations
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import com.sc.gtradio.common.GTRadioLogger
-import org.json.JSONObject
-import java.io.File
-import java.io.FileOutputStream
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 
 data class Rpf7StationInfo(
     val rpfName: String,
@@ -33,7 +25,6 @@ data class Rpf7TrackMeta(
 object Rpf7MetadataRepository {
 
     private val albumNameCache = ConcurrentHashMap<String, String>()
-    private val bgExecutor = Executors.newSingleThreadExecutor()
     private val remasterBanRegex = Regex("remaster|deluxe|expanded|anniversary|reissue|greatest hits|best of|anthology|edition|live", RegexOption.IGNORE_CASE)
     private val yearRegex = Regex("^(\\d{4})")
 
@@ -488,134 +479,56 @@ object Rpf7MetadataRepository {
     // ========================================================================
     // Era-Accurate Album Art Caching & Fetching (Cutoff: maxYear = 2013)
     // ========================================================================
+    // Artwork & Metadata
+    // ========================================================================
+
+    fun clearMemoryCache() {
+        albumNameCache.clear()
+    }
 
     private fun cacheKey(artist: String, songTitle: String): String {
-        val raw = "${artist.lowercase(Locale.ROOT).trim()}_${songTitle.lowercase(Locale.ROOT).trim()}"
-        return raw.replace(Regex("[^a-z0-9_]"), "_").take(80)
+        return AlbumArtDownloader.cacheKey(artist, songTitle)
     }
 
     fun getCachedAlbumArt(context: Context, artist: String, songTitle: String): Bitmap? {
-        val key = cacheKey(artist, songTitle)
-        val f = File(File(context.filesDir, "era_album_art"), "$key.jpg")
-        return if (f.exists() && f.length() > 0) BitmapFactory.decodeFile(f.absolutePath) else null
+        return AlbumArtDownloader.getCachedAlbumArt(context, artist, songTitle)
     }
 
     fun getCachedAlbumName(context: Context, artist: String, songTitle: String): String? {
-        val key = cacheKey(artist, songTitle)
-        albumNameCache[key]?.let { return it }
-        val f = File(File(context.filesDir, "era_album_art"), "$key.txt")
-        if (f.exists()) {
-            val txt = f.readText().trim()
-            if (txt.isNotBlank()) {
-                albumNameCache[key] = txt
-                return txt
-            }
-        }
-        return null
+        return AlbumArtDownloader.getCachedAlbumName(context, artist, songTitle)
     }
 
     fun fetchEraAccurateArtAsync(
         context: Context,
         artist: String,
         songTitle: String,
-        maxYear: Int = 2013,
+        maxYear: Int = 2021,
         onDone: (() -> Unit)? = null
     ) {
-        val key = cacheKey(artist, songTitle)
-        val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
-        val imgFile = File(dir, "$key.jpg")
-        if (imgFile.exists() && imgFile.length() > 0) return
-
-        bgExecutor.submit {
-            try {
-                val success = fetchFromItunesEraFiltered(artist, songTitle, dir, key, maxYear)
-                if (success) onDone?.invoke()
-            } catch (_: Exception) {}
-        }
+        val effMaxYear = if (maxYear <= 2013) 2021 else maxYear
+        AlbumArtDownloader.fetchEraAccurateArtAsync(
+            context = context,
+            artist = artist,
+            songTitle = songTitle,
+            preferredYear = 2013,
+            maxYear = effMaxYear,
+            onDone = onDone
+        )
     }
 
     fun fetchEraAccurateArtSync(
         context: Context,
         artist: String,
         songTitle: String,
-        maxYear: Int = 2013
+        maxYear: Int = 2021
     ): Boolean {
-        val key = cacheKey(artist, songTitle)
-        val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
-        val imgFile = File(dir, "$key.jpg")
-        if (imgFile.exists() && imgFile.length() > 0) return true
-        return fetchFromItunesEraFiltered(artist, songTitle, dir, key, maxYear)
-    }
-
-    private fun fetchFromItunesEraFiltered(
-        artist: String,
-        songTitle: String,
-        dir: File,
-        key: String,
-        maxYear: Int
-    ): Boolean {
-        try {
-            val cleanSong = songTitle.replace(Regex("\\(.*?\\)"), "").trim()
-            val q = URLEncoder.encode("$artist $cleanSong", "UTF-8")
-            GTRadioLogger.logVerbose("ART") { "iTunes search: '$artist - $cleanSong' [maxYear=$maxYear]" }
-            val url = URL("https://itunes.apple.com/search?term=$q&media=music&entity=song&limit=15")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                connectTimeout = 6000
-                readTimeout = 6000
-            }
-            if (conn.responseCode != 200) {
-                GTRadioLogger.logVerbose("ART") { "iTunes art HTTP failure: code=${conn.responseCode} for '$artist - $cleanSong'" }
-                return false
-            }
-            val body = conn.inputStream.bufferedReader().readText()
-            val results = JSONObject(body).optJSONArray("results") ?: return false
-            if (results.length() == 0) {
-                GTRadioLogger.logVerbose("ART") { "iTunes art 0 results for '$artist - $cleanSong'" }
-                return false
-            }
-
-            var bestItem: JSONObject? = null
-            var bestScore = -9999
-
-            for (i in 0 until results.length()) {
-                val item = results.getJSONObject(i)
-                val colName = item.optString("collectionName", "")
-                val relDate = item.optString("releaseDate", "")
-                val year = yearRegex.find(relDate)?.groupValues?.get(1)?.toIntOrNull() ?: 9999
-
-                var score = 0
-                if (year <= maxYear) score += 50 else score -= 50
-                if (!remasterBanRegex.containsMatchIn(colName)) score += 35 else score -= 35
-
-                if (score > bestScore) {
-                    bestScore = score
-                    bestItem = item
-                }
-            }
-
-            val chosen = bestItem ?: return false
-            val rawCol = chosen.optString("collectionName", "")
-                .replace(Regex("\\s*\\([^)]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue)[^)]*\\)", RegexOption.IGNORE_CASE), "")
-                .replace(Regex("\\s*-\\s*(?:Single|EP)\\s*$", RegexOption.IGNORE_CASE), "")
-                .trim()
-            val artUrl = chosen.optString("artworkUrl100", "").replace("100x100bb.jpg", "600x600bb.jpg")
-            if (artUrl.isBlank()) return false
-
-            val imgBytes = URL(artUrl).openStream().use { it.readBytes() }
-            if (imgBytes.isNotEmpty()) {
-                FileOutputStream(File(dir, "$key.jpg")).use { it.write(imgBytes) }
-                if (rawCol.isNotBlank()) {
-                    File(dir, "$key.txt").writeText(rawCol)
-                    albumNameCache[key] = rawCol
-                }
-                GTRadioLogger.logVerbose("ART") {
-                    "iTunes art match: '$artist - $cleanSong' -> '$rawCol' (candidates=${results.length()}, score=$bestScore)"
-                }
-                return true
-            }
-        } catch (e: Exception) {
-            GTRadioLogger.log("Rpf7MetadataRepository: iTunes art fetch error for $artist - $songTitle", e)
-        }
-        return false
+        val effMaxYear = if (maxYear <= 2013) 2021 else maxYear
+        return AlbumArtDownloader.fetchEraAccurateArtSync(
+            context = context,
+            artist = artist,
+            songTitle = songTitle,
+            preferredYear = 2013,
+            maxYear = effMaxYear
+        )
     }
 }
