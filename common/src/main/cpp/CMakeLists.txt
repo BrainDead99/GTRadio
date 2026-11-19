@@ -5,6 +5,7 @@ set(AT3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/at3_standalone)
 
 add_library(gtradio_at3 SHARED
     at3_jni.cpp
+    minimp3_jni.cpp
     ${AT3_DIR}/atrac.cpp
     ${AT3_DIR}/atrac3.cpp
     ${AT3_DIR}/atrac3plus.cpp
@@ -16,7 +17,7 @@ add_library(gtradio_at3 SHARED
     ${AT3_DIR}/mem.cpp
 )
 
-target_include_directories(gtradio_at3 PRIVATE ${AT3_DIR})
+target_include_directories(gtradio_at3 PRIVATE ${AT3_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(gtradio_at3 PRIVATE -O2 -fPIC -Wno-deprecated-declarations -Wno-unused-parameter -Wno-unused-variable)
 
 find_library(log-lib log)

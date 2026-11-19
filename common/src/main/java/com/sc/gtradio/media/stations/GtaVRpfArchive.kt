@@ -1,8 +1,6 @@
 package com.sc.gtradio.media.stations
 
 import android.content.Context
-import android.media.MediaCodec
-import android.media.MediaFormat
 import android.net.Uri
 import com.sc.gtradio.common.GTRadioLogger
 import java.io.BufferedOutputStream
@@ -793,76 +791,11 @@ class GtaVRpfArchive(
 
     private fun decodeMp3ChannelToPcm(mp3Bytes: ByteArray, sampleRate: Int): ShortArray {
         if (mp3Bytes.isEmpty()) return ShortArray(0)
-        var codec: MediaCodec? = null
-        try {
-            codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_AUDIO_MPEG)
-            val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_MPEG, sampleRate, 1)
-            codec.configure(format, null, null, 0)
-            codec.start()
-
-            val info = MediaCodec.BufferInfo()
-            var inputOffset = 0
-            var sawInputEos = false
-            var sawOutputEos = false
-
-            val outBaos = java.io.ByteArrayOutputStream(mp3Bytes.size * 12)
-            var emptyCount = 0
-
-            while (!sawOutputEos && emptyCount < 100) {
-                if (!sawInputEos) {
-                    val inputIndex = codec.dequeueInputBuffer(10_000L)
-                    if (inputIndex >= 0) {
-                        val inputBuf = codec.getInputBuffer(inputIndex)
-                        if (inputBuf != null) {
-                            inputBuf.clear()
-                            val bytesRemaining = mp3Bytes.size - inputOffset
-                            val toWrite = Math.min(inputBuf.remaining(), bytesRemaining)
-                            if (toWrite > 0) {
-                                inputBuf.put(mp3Bytes, inputOffset, toWrite)
-                                inputOffset += toWrite
-                            }
-                            if (inputOffset >= mp3Bytes.size) {
-                                codec.queueInputBuffer(inputIndex, 0, toWrite, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                sawInputEos = true
-                            } else {
-                                codec.queueInputBuffer(inputIndex, 0, toWrite, 0L, 0)
-                            }
-                        }
-                    }
-                }
-
-                val outputIndex = codec.dequeueOutputBuffer(info, 10_000L)
-                if (outputIndex >= 0) {
-                    emptyCount = 0
-                    val outputBuf = codec.getOutputBuffer(outputIndex)
-                    if (outputBuf != null && info.size > 0) {
-                        outputBuf.position(info.offset)
-                        outputBuf.limit(info.offset + info.size)
-                        val chunk = ByteArray(info.size)
-                        outputBuf.get(chunk)
-                        outBaos.write(chunk)
-                    }
-                    codec.releaseOutputBuffer(outputIndex, false)
-                    if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        sawOutputEos = true
-                    }
-                } else if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                    emptyCount++
-                }
-            }
-
-            val pcmBytes = outBaos.toByteArray()
-            val numShorts = pcmBytes.size / 2
-            val shorts = ShortArray(numShorts)
-            val byteBuf = ByteBuffer.wrap(pcmBytes).order(ByteOrder.LITTLE_ENDIAN)
-            byteBuf.asShortBuffer().get(shorts)
-            return shorts
+        return try {
+            GtaVMp3Decoder.nativeDecodeMonoMp3(mp3Bytes)
         } catch (e: Exception) {
-            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Failed decoding MP3 channel to PCM", e)
-            return ShortArray(0)
-        } finally {
-            try { codec?.stop() } catch (_: Exception) {}
-            try { codec?.release() } catch (_: Exception) {}
+            GTRadioLogger.log("GtaVRpfArchive[$rpfName]: Native MP3 decoding failed", e)
+            ShortArray(0)
         }
     }
 
