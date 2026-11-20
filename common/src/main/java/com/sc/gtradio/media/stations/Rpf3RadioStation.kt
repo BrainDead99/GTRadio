@@ -107,6 +107,11 @@ data class Rpf3ClipRef(
     private var stoppedPositionMs: Long = 0L
     private val durationCache = HashMap<Uri, Long>()
 
+    private var activeMixMarkers: List<Rpf3TrackMarker> = emptyList()
+    private var activeMixChunkStartMs: Long = 0L
+    private var lastDisplayedMixTrackId: Int = -1
+    private var mixPollerRunnable: Runnable? = null
+
     private fun materializeClip(keyOrScoped: String): Uri? {
         stationArchive.materializeAudioUri(keyOrScoped)?.let { return it }
         ep1SfxArchive?.materializeAudioUri(keyOrScoped)?.let { return it }
@@ -376,6 +381,11 @@ data class Rpf3ClipRef(
             return
         }
 
+        if (activeMixMarkers.isNotEmpty()) {
+            updateMixTrackMetadata()
+            return
+        }
+
         val meta = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)
         val displayTitle = meta?.title ?: item.trackName.replace('_', ' ')
         val displayArtist = meta?.artist ?: stationTitle
@@ -456,6 +466,7 @@ data class Rpf3ClipRef(
     }
 
     override fun stop() {
+        stopMixPoller()
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
             stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
@@ -546,12 +557,16 @@ data class Rpf3ClipRef(
             val isContinuousMix = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow == true && !isTalkRadio
             val maxChunksBeforeBreak = if (isContinuousMix) 3 else 100
             if (currentMultiChunksPlayedInRow < maxChunksBeforeBreak) {
+                val nextStart = currentMultiChunkNextBlock
                 val nextUri = item.archive.materializeAudioChunkUri(
                     item.trackName,
-                    currentMultiChunkNextBlock,
+                    nextStart,
                     Rpf3Archive.CHUNK_BLOCKS
                 )
                 if (nextUri != null) {
+                    if (activeMixMarkers.isNotEmpty()) {
+                        activeMixChunkStartMs = item.archive.getChunkStartMs(item.trackName, nextStart)
+                    }
                     currentMultiChunkNextBlock += Rpf3Archive.CHUNK_BLOCKS
                     currentMultiChunksPlayedInRow += 1
                     currentSegmentUris = listOf(nextUri)
@@ -639,6 +654,7 @@ data class Rpf3ClipRef(
     }
 
     private fun prepareAnnouncerOrSoloSegment(): Boolean {
+        stopMixPoller()
         lastSegment = RadioSegmentType.Announcer
         val useId = if (idQueue.isNotEmpty() && soloQueue.isNotEmpty()) {
             isTalkRadio || rng.nextBoolean()
@@ -658,6 +674,7 @@ data class Rpf3ClipRef(
     }
 
     private fun prepareDjOrWeatherSegment(): Boolean {
+        stopMixPoller()
         if (weatherChatterEnabled && weatherArchive != null && weatherQueue.isNotEmpty() && rng.nextInt(100) < 22) {
             return prepareWeatherSegment()
         }
@@ -678,6 +695,7 @@ data class Rpf3ClipRef(
     }
 
     private fun prepareWeatherSegment(): Boolean {
+        stopMixPoller()
         lastSegment = RadioSegmentType.WeatherReport
         if (!weatherChatterEnabled || weatherQueue.isEmpty()) return false
         val wRef = weatherQueue.next()
@@ -697,6 +715,7 @@ data class Rpf3ClipRef(
     }
 
     private fun prepareAdvertOrNewsSegment(): Boolean {
+        stopMixPoller()
         songsSinceLastBreak = 0
         val canAd = adsEnabled && advertQueue.isNotEmpty()
         val canNews = newsReportsEnabled && newsQueue.isNotEmpty()
@@ -759,11 +778,29 @@ data class Rpf3ClipRef(
             currentMultiChunkTotalBlocks = totalBlocks
             currentMultiChunkNextBlock = startBlk + Rpf3Archive.CHUNK_BLOCKS
             currentMultiChunksPlayedInRow = 1
+
+            val markers = item.archive.readTrackMarkers(item.trackName)
+            if (markers.isNotEmpty()) {
+                activeMixMarkers = markers
+                activeMixChunkStartMs = item.archive.getChunkStartMs(item.trackName, startBlk)
+                lastDisplayedMixTrackId = -1
+            } else {
+                stopMixPoller()
+            }
         } else {
             mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false
             currentMultiChunkTotalBlocks = totalBlocks
             currentMultiChunkNextBlock = totalBlocks
             currentMultiChunksPlayedInRow = 1
+
+            val markers = item.archive.readTrackMarkers(item.trackName)
+            if (markers.isNotEmpty()) {
+                activeMixMarkers = markers
+                activeMixChunkStartMs = 0L
+                lastDisplayedMixTrackId = -1
+            } else {
+                stopMixPoller()
+            }
         }
 
         val list = ArrayList<Uri>(2)
@@ -809,5 +846,95 @@ data class Rpf3ClipRef(
         player.addListener(activeListener!!)
         player.prepare()
         player.play()
+
+        if (activeMixMarkers.isNotEmpty()) {
+            startMixPoller()
+        } else {
+            stopMixPoller()
+        }
+    }
+
+    private fun startMixPoller() {
+        mixPollerRunnable?.let { mainHandler.removeCallbacks(it) }
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!_playing || activeMixMarkers.isEmpty()) {
+                    return
+                }
+                updateMixTrackMetadata()
+                mainHandler.postDelayed(this, 1000L)
+            }
+        }
+        mixPollerRunnable = runnable
+        mainHandler.post(runnable)
+    }
+
+    private fun stopMixPoller() {
+        mixPollerRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            mixPollerRunnable = null
+        }
+        activeMixMarkers = emptyList()
+        activeMixChunkStartMs = 0L
+        lastDisplayedMixTrackId = -1
+    }
+
+    private fun updateMixTrackMetadata() {
+        if (!_playing || activeMixMarkers.isEmpty()) return
+        if (!isMetadataEnabled()) {
+            setStationOnlyMetadata()
+            return
+        }
+        val currentTrackPosMs = player.getCurrentTrackPosition().coerceAtLeast(0L)
+        val currentMs = activeMixChunkStartMs + currentTrackPosMs
+
+        var resolvedTrackId = -1
+        for (m in activeMixMarkers) {
+            if (m.timeOffsetMs <= currentMs) {
+                resolvedTrackId = m.trackId
+            } else {
+                break
+            }
+        }
+
+        if (resolvedTrackId == lastDisplayedMixTrackId) return
+        lastDisplayedMixTrackId = resolvedTrackId
+
+        GTRadioLogger.logVerbose("TRACKID") {
+            "Rpf3RadioStation[$stationTitle]: TRACKID transition -> $resolvedTrackId at ${currentMs}ms"
+        }
+
+        val meta = if (resolvedTrackId > 0) Rpf3MetadataRepository.getTrackByTrackId(resolvedTrackId) else null
+        if (meta != null) {
+            val displayTitle = meta.title
+            val displayArtist = meta.artist
+            val maxYear = 2009
+            var art: Bitmap? = stationLogo
+            if (isAlbumArtEnabled()) {
+                val cached = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
+                if (cached != null) {
+                    art = cached
+                } else {
+                    val currentTid = resolvedTrackId
+                    Gen2MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
+                        mainHandler.post {
+                            if (_playing && lastDisplayedMixTrackId == currentTid) {
+                                val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
+                                val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+                                val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
+                                _currentMetadata = buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb)
+                                onMetadataChanged?.invoke(_currentMetadata)
+                            }
+                        }
+                    }
+                }
+            }
+            val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+            val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
+            _currentMetadata = buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum)
+            onMetadataChanged?.invoke(_currentMetadata)
+        } else {
+            setStationOnlyMetadata()
+        }
     }
 }

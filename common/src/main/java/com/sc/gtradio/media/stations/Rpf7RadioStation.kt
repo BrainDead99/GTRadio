@@ -118,6 +118,12 @@ data class Rpf7ClipRef(
     private var stoppedPositionMs: Long = 0L
     private val durationCache = HashMap<Uri, Long>()
 
+    private var activeMixMarkers: List<Rpf7TrackMarker> = emptyList()
+    private var activeMixChunkStartSample: Long = 0L
+    private var activeMixSampleRate: Int = 48000
+    private var lastDisplayedMixTrackId: Int = -1
+    private var mixPollerRunnable: Runnable? = null
+
     @Volatile private var prefetchGeneration = 0
     private val playGeneration = AtomicInteger(0)
 
@@ -333,6 +339,11 @@ data class Rpf7ClipRef(
             return
         }
 
+        if (activeMixMarkers.isNotEmpty()) {
+            updateMixTrackMetadata()
+            return
+        }
+
         val meta = Rpf7MetadataRepository.getTrackMeta(item.trackName, stationTitle)
         val displayTitle = meta.title
         val displayArtist = meta.artist
@@ -447,6 +458,7 @@ data class Rpf7ClipRef(
     override fun stop() {
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: stop() called (gen=$gen)")
+        stopMixPoller()
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
             stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
@@ -543,12 +555,16 @@ data class Rpf7ClipRef(
             val maxChunksBeforeBreak = if (isContinuousMix) 6 else 100
             val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
             if (currentMultiChunksPlayedInRow < maxChunksBeforeBreak) {
+                val nextStart = currentMultiChunkNextBlock
                 val nextUri = item.archive.materializeBlockChunkUri(
                     item.trackName,
-                    currentMultiChunkNextBlock,
+                    nextStart,
                     chunkBlocks
                 )
                 if (nextUri != null) {
+                    if (activeMixMarkers.isNotEmpty()) {
+                        activeMixChunkStartSample = item.archive.getChunkStartSample(item.trackName, nextStart)
+                    }
                     currentMultiChunkNextBlock += chunkBlocks
                     currentMultiChunksPlayedInRow += 1
                     currentSegmentUris = listOf(nextUri)
@@ -648,6 +664,7 @@ data class Rpf7ClipRef(
     }
 
     private fun prepareAnnouncerOrSoloSegment(): Boolean {
+        stopMixPoller()
         lastSegment = RadioSegmentType.Announcer
         val useId = if (idQueue.isNotEmpty() && soloQueue.isNotEmpty()) {
             isTalkRadio || rng.nextBoolean()
@@ -667,6 +684,7 @@ data class Rpf7ClipRef(
     }
 
     private fun prepareDjOrWeatherSegment(): Boolean {
+        stopMixPoller()
         lastSegment = RadioSegmentType.DJChatter
         if (getHourBucket() != activeHourBucket) rebuildTimeOfDayQueue()
 
@@ -684,6 +702,7 @@ data class Rpf7ClipRef(
     }
 
     private fun prepareAdvertOrNewsSegment(): Boolean {
+        stopMixPoller()
         songsSinceLastBreak = 0
         val canAd = adsEnabled && advertQueue.isNotEmpty()
         val canNews = newsReportsEnabled && newsQueue.isNotEmpty()
@@ -749,6 +768,16 @@ data class Rpf7ClipRef(
             currentMultiChunkNextBlock = startBlk + chunkBlocks
             currentMultiChunksPlayedInRow = 1
 
+            val markers = item.archive.readTrackMarkers(item.trackName)
+            if (markers.isNotEmpty()) {
+                activeMixMarkers = markers
+                activeMixChunkStartSample = item.archive.getChunkStartSample(item.trackName, startBlk)
+                activeMixSampleRate = item.archive.getEntrySampleRate(item.trackName)
+                lastDisplayedMixTrackId = -1
+            } else {
+                stopMixPoller()
+            }
+
             // Prefetch next chunk with generation counter
             val gen = prefetchGeneration
             item.archive.prefetchBlockChunk(
@@ -761,6 +790,16 @@ data class Rpf7ClipRef(
             currentMultiChunkTotalBlocks = totalBlocks
             currentMultiChunkNextBlock = totalBlocks
             currentMultiChunksPlayedInRow = 1
+
+            val markers = item.archive.readTrackMarkers(item.trackName)
+            if (markers.isNotEmpty()) {
+                activeMixMarkers = markers
+                activeMixChunkStartSample = 0L
+                activeMixSampleRate = item.archive.getEntrySampleRate(item.trackName)
+                lastDisplayedMixTrackId = -1
+            } else {
+                stopMixPoller()
+            }
         }
 
         val list = ArrayList<Uri>(2)
@@ -831,5 +870,110 @@ data class Rpf7ClipRef(
         if (!_playing || playGeneration.get() != expectedGen) return
         player.prepare()
         player.play()
+
+        if (activeMixMarkers.isNotEmpty()) {
+            startMixPoller(expectedGen)
+        } else {
+            stopMixPoller()
+        }
+    }
+
+    private fun startMixPoller(expectedGen: Int) {
+        mixPollerRunnable?.let { mainHandler.removeCallbacks(it) }
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!_playing || playGeneration.get() != expectedGen || activeMixMarkers.isEmpty()) {
+                    return
+                }
+                updateMixTrackMetadata()
+                mainHandler.postDelayed(this, 1000L)
+            }
+        }
+        mixPollerRunnable = runnable
+        mainHandler.post(runnable)
+    }
+
+    private fun stopMixPoller() {
+        mixPollerRunnable?.let {
+            mainHandler.removeCallbacks(it)
+            mixPollerRunnable = null
+        }
+        activeMixMarkers = emptyList()
+        activeMixChunkStartSample = 0L
+        lastDisplayedMixTrackId = -1
+    }
+
+    private fun updateMixTrackMetadata() {
+        if (!_playing || activeMixMarkers.isEmpty()) return
+        if (!isMetadataEnabled()) {
+            setStationOnlyMetadata()
+            return
+        }
+        val currentTrackPosMs = player.getCurrentTrackPosition().coerceAtLeast(0L)
+        val currentSample = activeMixChunkStartSample + (currentTrackPosMs * activeMixSampleRate / 1000L)
+
+        var resolvedTrackId = -1
+        for (m in activeMixMarkers) {
+            if (m.sampleOffset <= currentSample) {
+                resolvedTrackId = m.trackId
+            } else {
+                break
+            }
+        }
+
+        if (resolvedTrackId == lastDisplayedMixTrackId) return
+        lastDisplayedMixTrackId = resolvedTrackId
+
+        GTRadioLogger.logVerbose("TRACKID") {
+            "Rpf7RadioStation[$stationTitle]: TRACKID transition -> $resolvedTrackId at sample $currentSample (${currentSample / activeMixSampleRate.toDouble()}s)"
+        }
+
+        val meta = if (resolvedTrackId > 0) Rpf7MetadataRepository.getTrackByTrackId(resolvedTrackId) else null
+        if (meta != null) {
+            val displayTitle = meta.title
+            val displayArtist = meta.artist
+            var art: Bitmap? = stationLogo
+            if (isAlbumArtEnabled()) {
+                val cached = Rpf7MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
+                if (cached != null) {
+                    art = cached
+                } else {
+                    val expectedGen = playGeneration.get()
+                    val currentTid = resolvedTrackId
+                    Rpf7MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear = 2021) {
+                        mainHandler.post {
+                            if (_playing && playGeneration.get() == expectedGen && lastDisplayedMixTrackId == currentTid) {
+                                val newArt = Rpf7MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
+                                val alb = Rpf7MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+                                val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
+                                _currentMetadata = buildStationMetadata(
+                                    trackTitle = displayTitle,
+                                    trackSubtitle = sub,
+                                    art = newArt,
+                                    isSongOrShow = true,
+                                    cleanArtist = displayArtist,
+                                    cleanAlbum = alb
+                                )
+                                onMetadataChanged?.invoke(_currentMetadata)
+                            }
+                        }
+                    }
+                }
+            }
+
+            val eraAlbum = Rpf7MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+            val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
+            _currentMetadata = buildStationMetadata(
+                trackTitle = displayTitle,
+                trackSubtitle = subtitle,
+                art = art,
+                isSongOrShow = true,
+                cleanArtist = displayArtist,
+                cleanAlbum = eraAlbum
+            )
+            onMetadataChanged?.invoke(_currentMetadata)
+        } else {
+            setStationOnlyMetadata()
+        }
     }
 }

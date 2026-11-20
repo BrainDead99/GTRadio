@@ -15,6 +15,14 @@ import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
 
+/**
+ * Metadata record for a continuous-mix trackid marker inside an IVAUD marker table.
+ */
+data class Rpf3TrackMarker(
+    val timeOffsetMs: Long,
+    val trackId: Int
+)
+
 data class Rpf3Entry(
     val name: String,
     val offset: Long,
@@ -41,6 +49,7 @@ class Rpf3Archive(
     private val entries = LinkedHashMap<String, Rpf3Entry>()
     private val bankSubTracks = LinkedHashMap<String, Rpf3BankSubTrack>()
     private val chunkStates = ConcurrentHashMap<String, IntArray>()
+    private val trackMarkersCache = ConcurrentHashMap<String, List<Rpf3TrackMarker>>()
     private var indexed = false
 
     companion object {
@@ -284,6 +293,117 @@ class Rpf3Archive(
                 }
             }
         }
+    }
+
+    fun readTrackMarkers(entryName: String): List<Rpf3TrackMarker> {
+        ensureIndexed()
+        val cleanKey = entryName.uppercase()
+        trackMarkersCache[cleanKey]?.let { return it }
+
+        val entry = entries[cleanKey] ?: return emptyList()
+        if (entry.isWaveBank) return emptyList()
+
+        val markers = ArrayList<Rpf3TrackMarker>()
+        try {
+            context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                    val probeBuf = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN)
+                    if (readFully(ch, probeBuf, entry.offset) >= 32) {
+                        val markerTableOffset = probeBuf.getInt(28).toLong() and 0xFFFFFFFFL
+                        if (markerTableOffset > 0L && markerTableOffset + 24L <= entry.size) {
+                            val mHdr = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
+                            if (readFully(ch, mHdr, entry.offset + markerTableOffset) >= 24) {
+                                val tagAt16 = mHdr.getInt(16)
+                                val tagAt0 = mHdr.getInt(0)
+                                val (markerDataSize, recOffsetRel) = when {
+                                    tagAt16 == 0x7DEEF8B7.toInt() -> Pair(mHdr.getInt(20), 24L)
+                                    tagAt0 == 0x7DEEF8B7.toInt() -> Pair(mHdr.getInt(4), 8L)
+                                    else -> Pair(0, 0L)
+                                }
+                                if (markerDataSize in 16..131072) {
+                                    val recBuf = ByteBuffer.allocate(markerDataSize).order(ByteOrder.LITTLE_ENDIAN)
+                                    if (readFully(ch, recBuf, entry.offset + markerTableOffset + recOffsetRel) >= markerDataSize) {
+                                        val numRecs = markerDataSize / 16
+                                        for (i in 0 until numRecs) {
+                                            val nameHash = recBuf.int
+                                            val rawFloatVal = recBuf.int
+                                            recBuf.int // pad
+                                            val timeOffsetUint = recBuf.int
+
+                                            if (nameHash == 0xA6D93246.toInt()) {
+                                                val tid = java.lang.Float.intBitsToFloat(rawFloatVal).toInt()
+                                                val tOff = timeOffsetUint.toLong() and 0xFFFFFFFFL
+                                                markers.add(Rpf3TrackMarker(tOff, tid))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.log("Rpf3Archive[$rpfName]: Error reading track markers for $entryName", e)
+        }
+
+        markers.sortBy { it.timeOffsetMs }
+        val deduped = ArrayList<Rpf3TrackMarker>()
+        for (m in markers) {
+            if (deduped.isEmpty() || deduped.last().trackId != m.trackId || deduped.last().timeOffsetMs != m.timeOffsetMs) {
+                deduped.add(m)
+            }
+        }
+        trackMarkersCache[cleanKey] = deduped
+        return deduped
+    }
+
+    fun getChunkStartMs(entryName: String, startBlock: Int): Long {
+        if (startBlock <= 0) return 0L
+        ensureIndexed()
+        val cleanKey = entryName.uppercase()
+        val entry = entries[cleanKey] ?: return 0L
+        if (entry.isWaveBank || startBlock >= entry.numBlocks) return 0L
+
+        try {
+            context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                    val probeBuf = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN)
+                    if (readFully(ch, probeBuf, entry.offset) < 64) return 0L
+                    val blockSize = probeBuf.getInt(12)
+                    val rawChOff20 = probeBuf.getInt(20)
+                    val rawChOff16 = probeBuf.getInt(16)
+                    val chTableOffset = if (rawChOff20 in 16..256) rawChOff20 else if (rawChOff16 in 16..256) rawChOff16 else 48
+                    val numChannels = probeBuf.getInt(36)
+                    val headerSize = probeBuf.getInt(44)
+
+                    if (blockSize <= 2048 || numChannels <= 0 || headerSize <= 0) return 0L
+                    val hdrReadSize = headerSize.coerceIn(128, 65536)
+                    val hdrBuf = ByteBuffer.allocate(hdrReadSize).order(ByteOrder.LITTLE_ENDIAN)
+                    readFully(ch, hdrBuf, entry.offset)
+                    val detailOffset = chTableOffset + (numChannels * 16)
+                    var sampleRate = if (detailOffset + 28 <= hdrReadSize) (hdrBuf.getShort(detailOffset + 24).toInt() and 0xFFFF) else 32000
+                    if (sampleRate !in 16000..48000) sampleRate = 32000
+
+                    val outChannels = if (numChannels >= 2) 2 else 1
+                    val blockStart = entry.offset + headerSize.toLong() + (startBlock.toLong() * blockSize.toLong())
+                    val blockHeaderBuf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
+                    if (readFully(ch, blockHeaderBuf, blockStart) >= 64) {
+                        val tblOff = blockHeaderBuf.getLong(0).toInt().coerceIn(16, 64)
+                        val sampleTblOff = tblOff + outChannels * 16
+                        if (sampleTblOff + 4 <= 128) {
+                            val startSample = blockHeaderBuf.getInt(sampleTblOff).coerceAtLeast(0)
+                            if (startSample > 0) {
+                                return (startSample.toLong() * 1000L) / sampleRate.toLong()
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.log("Rpf3Archive[$rpfName]: Error getting chunk start ms for $entryName block $startBlock", e)
+        }
+        return 0L
     }
 
     fun materializeAudioUri(trackKey: String): Uri? {

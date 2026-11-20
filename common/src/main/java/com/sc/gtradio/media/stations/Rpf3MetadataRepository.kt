@@ -164,12 +164,89 @@ object Rpf3MetadataRepository {
         return trackMetaMap[cleanKey]
     }
 
+    val trackIdMetaMap: Map<Int, Rpf3TrackMeta> = mapOf(
+        // Classics 104.1 (190..200)
+        190 to Rpf3TrackMeta("190", "Supa Star", "Group Home"),
+        191 to Rpf3TrackMeta("191", "All for One", "Brand Nubian"),
+        192 to Rpf3TrackMeta("192", "I Got It Made", "Special Ed"),
+        193 to Rpf3TrackMeta("193", "D. Original", "Jeru the Damaja"),
+        194 to Rpf3TrackMeta("194", "Droppin' Science", "Marley Marl feat. Craig G"),
+        195 to Rpf3TrackMeta("195", "Cha Cha Cha", "MC Lyte"),
+        196 to Rpf3TrackMeta("196", "Top Billin'", "Audio Two"),
+        197 to Rpf3TrackMeta("197", "Go Stetsa I", "Stetsasonic"),
+        198 to Rpf3TrackMeta("198", "It's Yours", "T La Rock & Jazzy Jay"),
+        199 to Rpf3TrackMeta("199", "Who's Gonna Take the Weight?", "Gang Starr"),
+        200 to Rpf3TrackMeta("200", "Live at the Barbeque", "Main Source"),
+
+        // Electro-Choc (168..181)
+        168 to Rpf3TrackMeta("168", "Signal Failure", "Padded Cell"),
+        169 to Rpf3TrackMeta("169", "The Devil in Us (Dub)", "Black Devil Disco Club"),
+        170 to Rpf3TrackMeta("170", "No Pressure (Deadmau5 Remix)", "One + One"),
+        171 to Rpf3TrackMeta("171", "Brain Leech (Bugged Mind Remix)", "Alex Gopher"),
+        172 to Rpf3TrackMeta("172", "B.T.T.T.T.R.Y. (Bag Raiders Remix)", "K.I.M."),
+        173 to Rpf3TrackMeta("173", "Tits & Acid", "Simian Mobile Disco"),
+        174 to Rpf3TrackMeta("174", "Let Your Body Learn", "Nitzer Ebb"),
+        175 to Rpf3TrackMeta("175", "Testarossa Autodrive (SebastiAn Remix)", "Kavinsky"),
+        176 to Rpf3TrackMeta("176", "I Thought Inside Out", "Chris Lake vs. Deadmau5"),
+        177 to Rpf3TrackMeta("177", "& Down", "Boys Noize"),
+        178 to Rpf3TrackMeta("178", "Waters of Nazareth", "Justice"),
+        179 to Rpf3TrackMeta("179", "Turn to Red", "Killing Joke"),
+        180 to Rpf3TrackMeta("180", "Make It Happen (Instrumental)", "Playgroup"),
+        181 to Rpf3TrackMeta("181", "Optimo", "Liquid Liquid"),
+
+        // Massive B Soundsystem 96.9 (154..167, skip 153 Intro)
+        154 to Rpf3TrackMeta("154", "Badder Den Dem", "Burro Banton"),
+        155 to Rpf3TrackMeta("155", "Set It Off", "Choppa Chop"),
+        156 to Rpf3TrackMeta("156", "Real McKoy", "Mavado"),
+        157 to Rpf3TrackMeta("157", "Raise It Up", "Jabba"),
+        158 to Rpf3TrackMeta("158", "Brrrt", "Bunji Garlin"),
+        159 to Rpf3TrackMeta("159", "Youth Dem Cold", "Richie Spice"),
+        160 to Rpf3TrackMeta("160", "All About da Weed", "Chuck Fenda"),
+        161 to Rpf3TrackMeta("161", "Call Pon Dem", "Chezidek"),
+        162 to Rpf3TrackMeta("162", "Last Night", "Mavado"),
+        163 to Rpf3TrackMeta("163", "Da Order", "Spragga Benz"),
+        164 to Rpf3TrackMeta("164", "Bullet Proof Skin", "Bounty Killer"),
+        165 to Rpf3TrackMeta("165", "Church Heathen", "Shaggy"),
+        166 to Rpf3TrackMeta("166", "No Fraid A", "Munga"),
+        167 to Rpf3TrackMeta("167", "Driver A", "Buju Banton"),
+
+        // The Beat 102.7 (205..214 + Green Lantern's 7 verified IDs)
+        205 to Rpf3TrackMeta("205", "Top Down", "Swizz Beatz"),
+        206 to Rpf3TrackMeta("206", "War Is Necessary", "Nas"),
+        207 to Rpf3TrackMeta("207", "Flashing Lights", "Kanye West feat. Dwele"),
+        208 to Rpf3TrackMeta("208", "Hip-Hop (Remix feat. Jadakiss & Saigon)", "Joell Ortiz"),
+        209 to Rpf3TrackMeta("209", "Crackhouse", "Fat Joe feat. Lil Wayne"),
+        210 to Rpf3TrackMeta("210", "Dirty New Yorker", "Mobb Deep"),
+        211 to Rpf3TrackMeta("211", "We Celebrate", "Ghostface Killah feat. Kid Capri"),
+        212 to Rpf3TrackMeta("212", "Blow Your Mind (Remix feat. Jadakiss & Sheek Louch)", "Styles P"),
+        213 to Rpf3TrackMeta("213", "Stylin'", "Papoose"),
+        24 to Rpf3TrackMeta("24", "What's the Problem", "Styles P"),
+        36 to Rpf3TrackMeta("36", "Anybody Can Get It", "Uncle Murda"),
+        214 to Rpf3TrackMeta("214", "Nickname", "Qadir"),
+        96 to Rpf3TrackMeta("96", "Where's My Money", "Busta Rhymes"),
+        185 to Rpf3TrackMeta("185", "Getaway Driver", "Maino"),
+        186 to Rpf3TrackMeta("186", "Stick'm", "Red Café"),
+        187 to Rpf3TrackMeta("187", "Wet 'Em Up", "Tru-Life"),
+        188 to Rpf3TrackMeta("188", "Price on Your Head", "Johnny Polygon")
+    )
+
+    fun getTrackByTrackId(trackId: Int): Rpf3TrackMeta? {
+        if (trackId in setOf(0, 1, 153)) return null
+        return trackIdMetaMap[trackId]
+    }
+
     fun getAllMusicSongs(context: Context): List<Pair<String, String>> {
         ensureLoaded(context)
-        return trackMetaMap.values
+        val list = trackMetaMap.values
             .filter { !it.isTalkShow && it.artist.isNotBlank() && it.title.isNotBlank() }
             .map { Pair(it.artist, it.title) }
-            .distinct()
+            .toMutableList()
+        list.addAll(
+            trackIdMetaMap.values
+                .filter { it.artist.isNotBlank() && it.title.isNotBlank() }
+                .map { Pair(it.artist, it.title) }
+        )
+        return list.distinct()
     }
 
     private fun addSong(key: String, title: String, artist: String) {
@@ -530,8 +607,8 @@ object Rpf3MetadataRepository {
         addShow("3_CONSERVATIVE_1", "The Richard Bastion Show", "Richard Bastion")
         addShow("6_CONSERVATIVE_3", "The Richard Bastion Show", "Richard Bastion")
         addShow("7_MARTINSERIOUSSHOW", "The Martin Serious Show", "Martin Serious")
-        addShow("8_MONO_CONSPIRE_PART_1", "Conspire (Part 1)", "John Smith")
-        addShow("9_MONO_CONSPIRE_PART_2", "Conspire (Part 2)", "John Smith")
+        addShow("8_MONO_CONSPIRE_PART_1", "Conspire", "John Smith")
+        addShow("9_MONO_CONSPIRE_PART_2", "Conspire", "John Smith")
         addShow("PACEMAKER", "Pacemaker", "Ryan McFallon")
         addShow("INTELLAGENDA", "Intelligent Agenda", "Mike Riley")
         addShow("THE_SEANCE", "The Séance", "Beatrix Fontaine")

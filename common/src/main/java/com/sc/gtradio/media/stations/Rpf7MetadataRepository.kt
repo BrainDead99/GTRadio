@@ -212,8 +212,8 @@ object Rpf7MetadataRepository {
         // ====================================================================
         // RADIO_05_TALK_01.rpf - West Coast Talk Radio
         // ====================================================================
-        talk("mono_chakra_attack_part_1", "Chakra Attack (Part 1)", "Dr. Ray De Angelo Harris & Cheryl")
-        talk("mono_dchakra_attack_part_2", "Chakra Attack (Part 2)", "Dr. Ray De Angelo Harris & Cheryl")
+        talk("mono_chakra_attack_part_1", "Chakra Attack", "Dr. Ray De Angelo Harris & Cheryl")
+        talk("mono_dchakra_attack_part_2", "Chakra Attack", "Dr. Ray De Angelo Harris & Cheryl")
         talk("mono_chattersphere", "Chattersphere", "Lazlow & Michele Makes")
         talk("mono_fernando_show_1", "The Fernando Show", "Fernando Martinez & Jo")
 
@@ -285,8 +285,8 @@ object Rpf7MetadataRepository {
         // RADIO_11_TALK_02.rpf - Blaine County Radio
         // ====================================================================
         talk("mono_bcr_community_hour", "Blaine County Radio Community Hour", "Ronald Jakowski")
-        talk("mono_beyond_insemination", "Beyond Insemination (Part 1)", "Duane Earl")
-        talk("mono_zbeyond_insemination_part_2", "Beyond Insemination (Part 2)", "Duane Earl")
+        talk("mono_beyond_insemination", "Beyond Insemination", "Duane Earl")
+        talk("mono_zbeyond_insemination_part_2", "Beyond Insemination", "Duane Earl")
         talk("mono_bless_your_heart", "Bless Your Heart", "Bobby June & Ricky")
 
         // ====================================================================
@@ -446,11 +446,136 @@ object Rpf7MetadataRepository {
         song("who_needs_you", "Who Needs You", "The Orwells")
     }
 
+    val trackIdMetaMap: Map<Int, Rpf7TrackMeta> = mapOf(
+        // Soulwax FM (1324..1341)
+        1324 to Rpf7TrackMeta("1324", "Stock (Soulwax Remix)", "Palmbomen"),
+        1325 to Rpf7TrackMeta("1325", "Fatal Error", "Fatal Error"),
+        1326 to Rpf7TrackMeta("1326", "Let's Beam Him Up", "Supersempfft"),
+        1327 to Rpf7TrackMeta("1327", "Mingi", "Mim Suleiman"),
+        1328 to Rpf7TrackMeta("1328", "The Strange Art (Inflagranti Remix)", "FK Club"),
+        1329 to Rpf7TrackMeta("1329", "El Sucu Tucu", "Matias Aguayo"),
+        1330 to Rpf7TrackMeta("1330", "Naive Reception", "Daniel Avery"),
+        1331 to Rpf7TrackMeta("1331", "Gabriel (Soulwax Remix)", "Joe Goddard"),
+        1332 to Rpf7TrackMeta("1332", "Body Music (Original Mix)", "Daniel Malaso"),
+        1333 to Rpf7TrackMeta("1333", "Lazer Beams", "Green Velvet & Harvard Bass"),
+        1334 to Rpf7TrackMeta("1334", "Tryouts", "Zombie Nation"),
+        1335 to Rpf7TrackMeta("1335", "Nothing But Pleasure", "Tom Rowlands"),
+        1336 to Rpf7TrackMeta("1336", "Arp #1", "Jackson and His Computer Band"),
+        1337 to Rpf7TrackMeta("1337", "Synrise (Soulwax Remix)", "Goose"),
+        1338 to Rpf7TrackMeta("1338", "Mr. Croissant Taker", "Transistorcake"),
+        1339 to Rpf7TrackMeta("1339", "Plush (Jacques Lu Cont Remix)", "Tiga"),
+        1340 to Rpf7TrackMeta("1340", "Shockwave (Gesaffelstein Remix)", "The Hacker"),
+        1341 to Rpf7TrackMeta("1341", "After You (Soulwax Remix)", "Pulp"),
+
+        // East Los FM (1181..1195)
+        1181 to Rpf7TrackMeta("1181", "El Cocaino", "Los Buitres de Culiacán Sinaloa"),
+        1182 to Rpf7TrackMeta("1182", "Es-Toy", "Mexican Institute of Sound"),
+        1183 to Rpf7TrackMeta("1183", "Criminal Sound", "Niña Dioz"),
+        1184 to Rpf7TrackMeta("1184", "Radio Capital", "La Vida Bohème"),
+        1185 to Rpf7TrackMeta("1185", "Autos, Moda y Rock and Roll", "Fandango"),
+        1186 to Rpf7TrackMeta("1186", "El Tatuado", "Don Cheto"),
+        1187 to Rpf7TrackMeta("1187", "Se Me Perdió la Cadenita", "La Sonora Dinamita"),
+        1188 to Rpf7TrackMeta("1188", "Fiebre de Jack", "She's a Tease"),
+        1189 to Rpf7TrackMeta("1189", "Pachuco", "Maldita Vecindad"),
+        1190 to Rpf7TrackMeta("1190", "El Sonidito", "Hechizeros Band"),
+        1191 to Rpf7TrackMeta("1191", "Fresco", "Milkman"),
+        1192 to Rpf7TrackMeta("1192", "Maldito", "Jessy Bulbo"),
+        1193 to Rpf7TrackMeta("1193", "Yo Tengo el Don", "La Liga feat. Alika"),
+        1194 to Rpf7TrackMeta("1194", "La Granja", "Los Tigres del Norte"),
+        1195 to Rpf7TrackMeta("1195", "El Rey y Yo", "Los Ángeles Negros"),
+
+        // FlyLo FM Part 1 & 2 (1302..1322, 1609..1619, 1621, 1644)
+        1302 to Rpf7TrackMeta("1302", "Getting There", "Flying Lotus feat. Niki Randa"),
+        1303 to Rpf7TrackMeta("1303", "Crystals", "Clams Casino"),
+        1304 to Rpf7TrackMeta("1304", "Crosswerved", "Flying Lotus"),
+        1305 to Rpf7TrackMeta("1305", "Be Spin", "Flying Lotus"),
+        1306 to Rpf7TrackMeta("1306", "See Thru to U", "Flying Lotus feat. Erykah Badu"),
+        1307 to Rpf7TrackMeta("1307", "The Diddler", "Flying Lotus"),
+        1308 to Rpf7TrackMeta("1308", "Computer Face RMX", "Flying Lotus"),
+        1309 to Rpf7TrackMeta("1309", "100hm", "Hudson Mohawke"),
+        1310 to Rpf7TrackMeta("1310", "The Kill", "Flying Lotus feat. Niki Randa"),
+        1311 to Rpf7TrackMeta("1311", "Garbage", "Tyler, The Creator"),
+        1312 to Rpf7TrackMeta("1312", "Elevators (Me & You)", "OutKast"),
+        1313 to Rpf7TrackMeta("1313", "Evil Grin", "Captain Murphy"),
+        1314 to Rpf7TrackMeta("1314", "Catapult Man", "Flying Lotus"),
+        1315 to Rpf7TrackMeta("1315", "Encoded Flow", "Dabrye"),
+        1316 to Rpf7TrackMeta("1316", "She Died There", "Machinedrum"),
+        1317 to Rpf7TrackMeta("1317", "It's Wack", "DJ Rashad & Heavee"),
+        1318 to Rpf7TrackMeta("1318", "Oh Sheit It's X", "Thundercat"),
+        1319 to Rpf7TrackMeta("1319", "Stonecutters", "Flying Lotus"),
+        1320 to Rpf7TrackMeta("1320", "23", "Shadow Child"),
+        1321 to Rpf7TrackMeta("1321", "Stalker Ha", "Kingdom"),
+        1322 to Rpf7TrackMeta("1322", "Windowlicker", "Aphex Twin"),
+        1609 to Rpf7TrackMeta("1609", "Eddie You Should Know Better", "Curtis Mayfield"),
+        1610 to Rpf7TrackMeta("1610", "You Never Come Closer", "Doris"),
+        1611 to Rpf7TrackMeta("1611", "Medication Medication", "Flying Lotus feat. Krayzie Bone"),
+        1612 to Rpf7TrackMeta("1612", "What We Want", "XXYYXX"),
+        1613 to Rpf7TrackMeta("1613", "Make Money", "Lapalux"),
+        1644 to Rpf7TrackMeta("1644", "Shred You to Bits", "The Gaslamp Killer"),
+        1614 to Rpf7TrackMeta("1614", "B Adams", "Mono/Poly & Thundercat"),
+        1615 to Rpf7TrackMeta("1615", "Osaka Trade", "Flying Lotus"),
+        1616 to Rpf7TrackMeta("1616", "Masquatch", "DOOM"),
+        1617 to Rpf7TrackMeta("1617", "Early Mountain", "Flying Lotus"),
+        1618 to Rpf7TrackMeta("1618", "Into Vogon Skulls", "Dimlite"),
+        1619 to Rpf7TrackMeta("1619", "F--- The Makeup, Skip The Shower", "KNOWER"),
+        1621 to Rpf7TrackMeta("1621", "4AM (AraabMuzik Streetz Tonight Remix)", "Kaskade"),
+
+        // Worldwide FM Part 1–4 (1352..1370, 1623..1641)
+        1352 to Rpf7TrackMeta("1352", "Mirror Maru", "Cashmere Cat"),
+        1353 to Rpf7TrackMeta("1353", "Cold Air", "The Hics"),
+        1354 to Rpf7TrackMeta("1354", "The Place", "Inc."),
+        1355 to Rpf7TrackMeta("1355", "Beginning", "Trickski"),
+        1356 to Rpf7TrackMeta("1356", "Ghost", "Mala"),
+        1357 to Rpf7TrackMeta("1357", "Forest Funk", "Swindle"),
+        1358 to Rpf7TrackMeta("1358", "Throw Down", "Tom Browne"),
+        1359 to Rpf7TrackMeta("1359", "You and the Music", "Donald Byrd"),
+        1360 to Rpf7TrackMeta("1360", "Thousand Finger Man", "Candido"),
+        1361 to Rpf7TrackMeta("1361", "Harm in Change", "Toro y Moi"),
+        1362 to Rpf7TrackMeta("1362", "Breaking", "Kyodai"),
+        1363 to Rpf7TrackMeta("1363", "Waveforms", "Django Django"),
+        1364 to Rpf7TrackMeta("1364", "Nissim", "The Gaslamp Killer"),
+        1365 to Rpf7TrackMeta("1365", "Harpoon Land", "Owiny Sigoma Band"),
+        1366 to Rpf7TrackMeta("1366", "Brand New Revolution", "Guts"),
+        1367 to Rpf7TrackMeta("1367", "Live Your Life (MeLo-X Motherland God Mix)", "Yuna"),
+        1368 to Rpf7TrackMeta("1368", "Lovery (Slow Cuban Vibe Mix)", "Kiko Navarro & Tuccillo feat. Amor"),
+        1369 to Rpf7TrackMeta("1369", "1759 (Outro)", "Richard Spaven"),
+        1370 to Rpf7TrackMeta("1370", "Forgotten Notes", "Hackman"),
+        1623 to Rpf7TrackMeta("1623", "Shark Week", "Sinkane"),
+        1624 to Rpf7TrackMeta("1624", "Body & Soul", "William Onyeabor"),
+        1625 to Rpf7TrackMeta("1625", "Kool FM", "Four Tet"),
+        1626 to Rpf7TrackMeta("1626", "Made to Stray", "Mount Kimbie"),
+        1627 to Rpf7TrackMeta("1627", "World in a Room", "Anushka"),
+        1628 to Rpf7TrackMeta("1628", "Why You Wanna See My Bad Side?", "Smokey Robinson"),
+        1629 to Rpf7TrackMeta("1629", "Street Life", "Randy Crawford"),
+        1630 to Rpf7TrackMeta("1630", "What You Need", "Flume"),
+        1631 to Rpf7TrackMeta("1631", "Hive", "Earl Sweatshirt feat. Vince Staples & Casey Veggies"),
+        1632 to Rpf7TrackMeta("1632", "Numb", "Portishead"),
+        1633 to Rpf7TrackMeta("1633", "Black Magic", "Jon Wayne"),
+        1634 to Rpf7TrackMeta("1634", "I-69", "Roman GianArthur"),
+        1635 to Rpf7TrackMeta("1635", "Treat Me Like Fire", "Lion Babe"),
+        1636 to Rpf7TrackMeta("1636", "Killdat", "Dam-Funk"),
+        1637 to Rpf7TrackMeta("1637", "Run Away", "Jamie Lidell"),
+        1638 to Rpf7TrackMeta("1638", "Recover (Cid Rim Remix)", "CHVRCHES"),
+        1639 to Rpf7TrackMeta("1639", "Let Yrself Be", "Jimmy Edgar"),
+        1640 to Rpf7TrackMeta("1640", "Viarejo", "Clap! Clap!"),
+        1641 to Rpf7TrackMeta("1641", "No Balanço da Canoa", "Maga Bo")
+    )
+
+    fun getTrackByTrackId(trackId: Int): Rpf7TrackMeta? {
+        return trackIdMetaMap[trackId]
+    }
+
     fun getAllMusicSongs(): List<Pair<String, String>> {
-        return trackMetaMap.values
-            .filter { !it.isTalkShow && !it.isContinuousMix }
+        val list = trackMetaMap.values
+            .filter { !it.isTalkShow && !it.isContinuousMix && it.artist.isNotBlank() && it.title.isNotBlank() }
             .map { Pair(it.artist, it.title) }
-            .distinct()
+            .toMutableList()
+        list.addAll(
+            trackIdMetaMap.values
+                .filter { it.artist.isNotBlank() && it.title.isNotBlank() }
+                .map { Pair(it.artist, it.title) }
+        )
+        return list.distinct()
     }
 
     fun getStationInfo(rpfName: String): Rpf7StationInfo? {

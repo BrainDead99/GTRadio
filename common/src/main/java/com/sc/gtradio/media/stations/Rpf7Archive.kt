@@ -11,7 +11,16 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+
+/**
+ * Metadata record for a continuous-mix sample-accurate trackid marker inside an AWC chunk 0xBD.
+ */
+data class Rpf7TrackMarker(
+    val sampleOffset: Long,
+    val trackId: Int
+)
 
 /**
  * Metadata record for a top-level .awc binary entry within an RPF7 archive.
@@ -70,6 +79,8 @@ class Rpf7Archive(
 
     private val entries = LinkedHashMap<String, Rpf7Entry>()
     private val bankSubTracks = LinkedHashMap<String, Rpf7BankSubTrack>()
+    private val trackMarkersCache = ConcurrentHashMap<String, List<Rpf7TrackMarker>>()
+    private val seekTableCache = ConcurrentHashMap<String, LongArray>()
     @Volatile private var indexed = false
 
     companion object {
@@ -524,6 +535,133 @@ class Rpf7Archive(
     fun getChunkThresholdFor(entryName: String): Int {
         val entry = getEntry(entryName)
         return if (entry?.codec == 7) 6 else CHUNK_THRESHOLD_BLOCKS
+    }
+
+    fun getEntrySampleRate(entryName: String): Int {
+        return getEntry(entryName)?.sampleRate ?: 48000
+    }
+
+    fun getChunkStartSample(entryName: String, startBlock: Int): Long {
+        if (startBlock <= 0) return 0L
+        ensureIndexed()
+        val cleanName = if (entryName.endsWith(".awc")) entryName else "$entryName.awc"
+        if (!seekTableCache.containsKey(cleanName)) {
+            readTrackMarkers(cleanName)
+        }
+        val seekTbl = seekTableCache[cleanName]
+        if (seekTbl != null && startBlock in seekTbl.indices) {
+            return seekTbl[startBlock]
+        }
+        val entry = getEntry(cleanName) ?: return 0L
+        if (entry.numBlocks > 0 && entry.totalSamples > 0) {
+            return (startBlock.toLong() * entry.totalSamples.toLong()) / entry.numBlocks.toLong()
+        }
+        return 0L
+    }
+
+    fun readTrackMarkers(awcEntryName: String): List<Rpf7TrackMarker> {
+        ensureIndexed()
+        val cleanName = if (awcEntryName.endsWith(".awc")) awcEntryName else "$awcEntryName.awc"
+        trackMarkersCache[cleanName]?.let { return it }
+
+        val entry = getEntry(cleanName) ?: return emptyList()
+        val markers = ArrayList<Rpf7TrackMarker>()
+
+        try {
+            val keys = Rpf7KeyManager.getKeys(context)
+            context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { channel ->
+                    val hdrLen = Math.min(entry.size, 65536L).toInt()
+                    val rawHdr = ByteArray(hdrLen)
+                    val buf = ByteBuffer.wrap(rawHdr)
+                    channel.position(entry.offset)
+                    channel.read(buf)
+
+                    if (entry.isWholeFileEncrypted && keys != null) {
+                        Rpf7Crypto.decryptRsxxtea(rawHdr, 0, rawHdr.size, keys.awcKey)
+                    }
+
+                    val magicLe = readIntLe(rawHdr, 0)
+                    if (magicLe != 0x54414441 && magicLe != 0x41444154) {
+                        return emptyList()
+                    }
+
+                    val flags = readShortLe(rawHdr, 6).toInt() and 0xFFFF
+                    val streamCount = readIntLe(rawHdr, 8)
+                    val chunkIndicesFlag = (flags and 1) != 0
+
+                    var pos = 16
+                    if (chunkIndicesFlag) {
+                        pos += streamCount * 2
+                    }
+
+                    val streamChunkCounts = IntArray(streamCount)
+                    for (s in 0 until streamCount) {
+                        if (pos + 4 > rawHdr.size) break
+                        val rawVal = readIntLe(rawHdr, pos)
+                        pos += 4
+                        streamChunkCounts[s] = (rawVal ushr 29) and 0x7
+                    }
+
+                    for (s in 0 until streamCount) {
+                        val chunkCount = streamChunkCounts[s]
+                        for (c in 0 until chunkCount) {
+                            if (pos + 8 > rawHdr.size) break
+                            val rawChunk = readLongLe(rawHdr, pos)
+                            pos += 8
+                            val cType = ((rawChunk ushr 56) and 0xFFL).toInt()
+                            val cSize = ((rawChunk ushr 28) and 0x0FFFFFFFL).toInt()
+                            val cOffset = (rawChunk and 0x0FFFFFFFL).toInt()
+
+                            if (cType == 0xA3 && !seekTableCache.containsKey(cleanName) && cSize >= 4) {
+                                val sBuf = ByteBuffer.allocate(cSize).order(ByteOrder.LITTLE_ENDIAN)
+                                channel.position(entry.offset + cOffset)
+                                if (channel.read(sBuf) >= cSize) {
+                                    sBuf.flip()
+                                    val count = cSize / 4
+                                    val tbl = LongArray(count)
+                                    for (i in 0 until count) {
+                                        tbl[i] = sBuf.int.toLong() and 0xFFFFFFFFL
+                                    }
+                                    seekTableCache[cleanName] = tbl
+                                }
+                            } else if (cType == 0xBD && cSize >= 16) {
+                                val mBuf = ByteBuffer.allocate(cSize).order(ByteOrder.LITTLE_ENDIAN)
+                                channel.position(entry.offset + cOffset)
+                                if (channel.read(mBuf) >= cSize) {
+                                    mBuf.flip()
+                                    val numRecs = cSize / 16
+                                    for (r in 0 until numRecs) {
+                                        val nameHash = mBuf.int
+                                        val rawVal = mBuf.int
+                                        val sampleOffUint = mBuf.int
+                                        mBuf.int // padding
+
+                                        if (nameHash == 0xA6D93246.toInt()) {
+                                            val tid = java.lang.Float.intBitsToFloat(rawVal).toInt()
+                                            val sOff = sampleOffUint.toLong() and 0xFFFFFFFFL
+                                            markers.add(Rpf7TrackMarker(sOff, tid))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.log("Rpf7Archive[$rpfName]: Error reading track markers for $awcEntryName", e)
+        }
+
+        markers.sortBy { it.sampleOffset }
+        val deduped = ArrayList<Rpf7TrackMarker>()
+        for (m in markers) {
+            if (deduped.isEmpty() || deduped.last().trackId != m.trackId || deduped.last().sampleOffset != m.sampleOffset) {
+                deduped.add(m)
+            }
+        }
+        trackMarkersCache[cleanName] = deduped
+        return deduped
     }
 
     // ------------------------------------------------------------------------
