@@ -156,11 +156,16 @@ import java.util.*
         }
 
         if (isWctr) {
-            val cleanShow = episodeRegex.replace(song.cleanTitle, "").trim().ifBlank { song.cleanTitle }
-            if (cleanShow.uppercase().startsWith("NEWS")) {
-                _currentMetadata = buildStationMetadata("News", stationTitle, stationLogo, isSongOrShow = true, cleanArtist = stationTitle, cleanAlbum = "")
+            val cleanShow = if (song.cleanTitle.contains("News", ignoreCase = true)) {
+                "WCTR News"
             } else {
-                val host = resolveWctrHost(cleanShow, song.cleanTitle)
+                episodeRegex.replace(song.cleanTitle, "").trim().ifBlank { song.cleanTitle }
+            }
+            if (cleanShow.uppercase().contains("NEWS")) {
+                _currentMetadata = buildStationMetadata("WCTR News", stationTitle, stationLogo, isSongOrShow = true, cleanArtist = stationTitle, cleanAlbum = "")
+            } else {
+                val rawMidTitle = stationMeta.tracks[song.midTrack]?.rawTitle ?: song.cleanTitle
+                val host = resolveWctrHost(cleanShow, rawMidTitle)
                 val subtitle = if (host.isNotBlank()) "$host • $stationTitle" else stationTitle
                 _currentMetadata = buildStationMetadata(cleanShow, subtitle, stationLogo, isSongOrShow = true, cleanArtist = host.ifBlank { stationTitle }, cleanAlbum = "")
             }

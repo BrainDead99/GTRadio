@@ -47,8 +47,24 @@ object Gen2MetadataRepository {
     private val albumNameCache = ConcurrentHashMap<String, String>()
 
     private val suffixRegex = Regex("\\s*\\((?:Mid|Intro(?:\\s*DJ\\s*#?\\d+)?|Outro(?:\\s*DJ\\s*#?\\d+)?)\\)\\s*$", RegexOption.IGNORE_CASE)
+    private val wctrEpisodeRegex = Regex("\\s*-\\s*(?:Episode|Teaser)(?:\\s*#?\\d+)?.*$", RegexOption.IGNORE_CASE)
+    private val newsRegex = Regex("^News(?:\\s*-.*)?$", RegexOption.IGNORE_CASE)
     private val remasterBanRegex = Regex("remaster|deluxe|expanded|anniversary|reissue|greatest hits|best of|anthology|edition|live", RegexOption.IGNORE_CASE)
     private val yearRegex = Regex("^(\\d{4})")
+
+    fun cleanTrackTitle(rawTitle: String, isWctr: Boolean = false): String {
+        val noSeg = suffixRegex.replace(rawTitle, "").trim()
+        if (isWctr) {
+            if (newsRegex.matches(noSeg)) {
+                return "WCTR News"
+            }
+            val cleaned = wctrEpisodeRegex.replace(noSeg, "").trim()
+            if (cleaned.isNotBlank()) {
+                return cleaned
+            }
+        }
+        return noSeg
+    }
 
     // Built-in fallback station definitions so raw streams always appear even if ini fails
     val defaultStations = mapOf(
@@ -101,10 +117,11 @@ object Gen2MetadataRepository {
 
         fun flushSection() {
             if (curStream.isNotBlank() && curStation.isNotBlank()) {
+                val isWctr = curStream.equals("TK", ignoreCase = true) || curStation.equals("WCTR", ignoreCase = true)
                 val metaMap = HashMap<Int, Gen2TrackMeta>()
                 for ((num, pair) in curTracks) {
                     val rawT = pair.first
-                    val cleanT = suffixRegex.replace(rawT, "").trim()
+                    val cleanT = cleanTrackTitle(rawT, isWctr)
                     val art = pair.second.ifBlank { curDefaultArtist }
                     metaMap[num] = Gen2TrackMeta(num, rawT, cleanT, art)
                 }
@@ -157,6 +174,7 @@ object Gen2MetadataRepository {
         val cleanIntros = HashMap<String, Int>()
         val cleanOutros = HashMap<String, Int>()
         val songArtists = HashMap<String, String>()
+        val songCleanTitles = HashMap<String, String>()
 
         for ((num, tr) in st.tracks.entries.sortedBy { it.key }) {
             val rt = tr.rawTitle
@@ -179,29 +197,32 @@ object Gen2MetadataRepository {
                     st.djOtherTracks.add(num)
                 }
                 u.contains("(MID)") || u.contains("(INTRO") || u.contains("(OUTRO") || isWctr -> {
-                    val key = tr.cleanTitle
-                    songArtists[key] = tr.artist
-                    val bucket = songBuckets.getOrPut(key) { Triple(mutableListOf(), mutableListOf(), mutableListOf()) }
+                    // Group by episode/song identity using rawTitle stripped of (Mid)/(Intro)/(Outro)
+                    // so that separate talk show episodes remain distinct groups while sharing the clean show title.
+                    val groupKey = suffixRegex.replace(rt, "").trim()
+                    songArtists[groupKey] = tr.artist
+                    songCleanTitles[groupKey] = tr.cleanTitle
+                    val bucket = songBuckets.getOrPut(groupKey) { Triple(mutableListOf(), mutableListOf(), mutableListOf()) }
                     when {
                         u.contains("(INTRO DJ") -> bucket.first.add(num)
-                        u.contains("(INTRO)") -> cleanIntros[key] = num
+                        u.contains("(INTRO)") -> cleanIntros[groupKey] = num
                         u.contains("(OUTRO DJ") -> bucket.third.add(num)
-                        u.contains("(OUTRO)") -> cleanOutros[key] = num
+                        u.contains("(OUTRO)") -> cleanOutros[groupKey] = num
                         else -> bucket.second.add(num)
                     }
                 }
             }
         }
 
-        for ((title, triple) in songBuckets) {
+        for ((groupKey, triple) in songBuckets) {
             val mid = triple.second.firstOrNull() ?: continue
             st.songGroups.add(
                 Gen2SongGroup(
-                    cleanTitle = title,
-                    artist = songArtists[title] ?: st.defaultArtist,
+                    cleanTitle = songCleanTitles[groupKey] ?: groupKey,
+                    artist = songArtists[groupKey] ?: st.defaultArtist,
                     midTrack = mid,
-                    cleanIntroTrack = cleanIntros[title],
-                    cleanOutroTrack = cleanOutros[title],
+                    cleanIntroTrack = cleanIntros[groupKey],
+                    cleanOutroTrack = cleanOutros[groupKey],
                     djIntroTracks = triple.first,
                     djOutroTracks = triple.third
                 )

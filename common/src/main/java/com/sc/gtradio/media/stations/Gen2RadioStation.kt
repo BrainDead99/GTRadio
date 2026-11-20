@@ -231,10 +231,14 @@ import java.util.*
 
         if (isWctr) {
             val noSeg = suffixRegex.replace(rawTitle, "").trim()
-            val cleanShow = episodeRegex.replace(noSeg, "").trim().ifBlank { noSeg }
-            if (cleanShow.uppercase().startsWith("NEWS")) {
+            val cleanShow = if (noSeg.contains("News", ignoreCase = true)) {
+                "WCTR News"
+            } else {
+                episodeRegex.replace(noSeg, "").trim().ifBlank { noSeg }
+            }
+            if (cleanShow.uppercase().contains("NEWS")) {
                 _currentMetadata = buildStationMetadata(
-                    trackTitle = "News",
+                    trackTitle = "WCTR News",
                     trackSubtitle = stationTitle,
                     art = stationLogo,
                     isSongOrShow = true,
