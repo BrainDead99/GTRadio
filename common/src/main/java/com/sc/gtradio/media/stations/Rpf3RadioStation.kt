@@ -943,9 +943,30 @@ data class Rpf3ClipRef(
         }
     }
 
+    private fun isContinuousMixStation(): Boolean {
+        val archName = stationArchive.rpfName.lowercase(Locale.ROOT)
+        val key = stationKey.lowercase(Locale.ROOT)
+        if (archName.contains("ny_classics") || archName.contains("dance_mix") ||
+            archName.contains("bobby_konders") || archName.contains("beat_95") ||
+            archName.contains("ramjam") ||
+            key.contains("ny_classics") || key.contains("dance_mix") ||
+            key.contains("bobby_konders") || key.contains("beat_95") ||
+            key.contains("ramjam")
+        ) {
+            return true
+        }
+        for (entry in stationArchive.getFileEntries()) {
+            if (entry.name.contains("MIX", ignoreCase = true) ||
+                stationArchive.readTrackMarkers(entry.name).isNotEmpty()) {
+                return true
+            }
+        }
+        return false
+    }
+
     private fun getDiscreteSongItems(): List<Rpf3SongItem> {
         ensureStationIndexed()
-        if (isTalkRadio) return emptyList()
+        if (isTalkRadio || isContinuousMixStation()) return emptyList()
         return allSongItems.filter { item ->
             !item.trackName.contains("MIX", ignoreCase = true) &&
                 item.archive.readTrackMarkers(item.trackName).isEmpty() &&
@@ -954,6 +975,8 @@ data class Rpf3ClipRef(
     }
 
     override fun supportsTracklist(): Boolean {
+        ensureStationIndexed()
+        if (isTalkRadio || isContinuousMixStation()) return false
         return getDiscreteSongItems().isNotEmpty()
     }
 

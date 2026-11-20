@@ -24,6 +24,13 @@
 
         </activity>
 
+        <activity
+            android:name=".TracklistActivity"
+            android:label="@string/title_activity_tracklist"
+            android:theme="@style/Theme.GTRadio.PreferencesTheme">
+            <meta-data android:name="android.support.PARENT_ACTIVITY" android:value=".MainActivity"/>
+        </activity>
+
         <!-- Declare that we support Android Auto. -->
         <meta-data
             android:name="com.google.android.gms.car.application"

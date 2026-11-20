@@ -982,9 +982,25 @@ data class Rpf7ClipRef(
         }
     }
 
+    private fun isMixStation(): Boolean {
+        val rpf = stationArchive.rpfName.lowercase(Locale.ROOT)
+        val key = stationKey.lowercase(Locale.ROOT)
+        return isContinuousMixStation ||
+            rpf.contains("radio_07") || rpf.contains("radio_08") || rpf.contains("radio_13") || rpf.contains("radio_14") ||
+            key.contains("radio_07") || key.contains("radio_08") || key.contains("radio_13") || key.contains("radio_14")
+    }
+
+    private fun isTalk(): Boolean {
+        val rpf = stationArchive.rpfName.lowercase(Locale.ROOT)
+        val key = stationKey.lowercase(Locale.ROOT)
+        return isTalkRadio ||
+            rpf.contains("radio_05") || rpf.contains("radio_11") || rpf.contains("talk") ||
+            key.contains("radio_05") || key.contains("radio_11") || key.contains("talk")
+    }
+
     private fun getDiscreteSongItems(): List<Rpf7SongItem> {
         ensureStationIndexed()
-        if (isTalkRadio || isContinuousMixStation) return emptyList()
+        if (isTalk() || isMixStation()) return emptyList()
         return allSongItems.filter { item ->
             val stem = item.trackName.lowercase(Locale.ROOT).removeSuffix(".awc")
             stem !in setOf("time", "to", "intro", "general") &&
@@ -995,6 +1011,8 @@ data class Rpf7ClipRef(
     }
 
     override fun supportsTracklist(): Boolean {
+        ensureStationIndexed()
+        if (isTalk() || isMixStation()) return false
         return getDiscreteSongItems().isNotEmpty()
     }
 

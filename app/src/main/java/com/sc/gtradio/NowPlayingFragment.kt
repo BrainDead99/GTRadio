@@ -10,6 +10,7 @@ import androidx.fragment.app.Fragment
 import androidx.lifecycle.Observer
 import com.sc.gtradio.databinding.FragmentNowplayingBinding
 import com.sc.gtradio.media.*
+import com.sc.gtradio.media.stations.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
 
 class NowPlayingFragment : Fragment() {
@@ -46,8 +47,13 @@ class NowPlayingFragment : Fragment() {
         binding.stationTitle.isSelected = true
 
         binding.playStopButton.setOnClickListener {
+            val isTracklist = musicServiceConnection?.nowPlaying?.value?.description?.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
             if (playbackState.isPlaying) {
-                musicServiceConnection?.transportControls?.stop()
+                if (isTracklist) {
+                    musicServiceConnection?.transportControls?.pause()
+                } else {
+                    musicServiceConnection?.transportControls?.stop()
+                }
             } else {
                 musicServiceConnection?.transportControls?.play()
             }
@@ -78,10 +84,11 @@ class NowPlayingFragment : Fragment() {
             binding.stationAlbum.visibility = if (sub.isBlank()) View.GONE else View.VISIBLE
 
             val bmp = mediaMetadata.description.iconBitmap
+            val isTracklist = mediaMetadata.description.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
             if (bmp != null) {
                 binding.albumArt.setImageBitmap(bmp)
             } else {
-                binding.albumArt.setImageResource(R.drawable.outline_radio_24)
+                binding.albumArt.setImageResource(if (isTracklist) R.drawable.music_note_24px else R.drawable.outline_radio_24)
             }
         } else {
             binding.stationTitle.text = getString(R.string.nothing_playing)
@@ -91,7 +98,8 @@ class NowPlayingFragment : Fragment() {
         }
 
         if (playbackState.isPlaying) {
-            binding.playStopButton.setImageResource(R.drawable.stop_24px)
+            val isTracklist = mediaMetadata.description.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
+            binding.playStopButton.setImageResource(if (isTracklist) R.drawable.pause_24px else R.drawable.stop_24px)
         } else {
             binding.playStopButton.setImageResource(R.drawable.play_arrow_24px)
         }
