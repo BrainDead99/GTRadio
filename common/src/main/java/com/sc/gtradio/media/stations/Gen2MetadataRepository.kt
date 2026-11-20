@@ -251,6 +251,10 @@ object Gen2MetadataRepository {
         return AlbumArtDownloader.getCachedAlbumName(context, artist, songTitle)
     }
 
+    fun getCachedAlbumTitle(context: Context, artist: String, songTitle: String): String? {
+        return AlbumArtDownloader.getCachedAlbumTitle(context, artist, songTitle)
+    }
+
     fun fetchEraAccurateArtAsync(
         context: Context,
         artist: String,
