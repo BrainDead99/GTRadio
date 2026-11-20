@@ -701,6 +701,20 @@ class Rpf7Archive(
         return null
     }
 
+    fun materializeFullAudioUri(trackKey: String): Uri? {
+        ensureIndexed()
+        val cleanKey = trackKey.trim()
+        val entry = getEntry(cleanKey)
+        if (entry != null && entry.isMultiChannel) {
+            return materializeBlockChunkUri(entry.name, 0, entry.numBlocks)
+        }
+        val subTrack = bankSubTracks[cleanKey]
+        if (subTrack != null) {
+            return materializeBankSubTrackUri(subTrack)
+        }
+        return null
+    }
+
     /**
      * Decodes [blockCount] blocks starting from [startBlock] of [entryName] to a stereo 16-bit WAV.
      * Automatically triggers prefetch of the subsequent chunk.

@@ -416,6 +416,12 @@ class Rpf3Archive(
         return materializeInternal(cleanKey, 0, Int.MAX_VALUE)
     }
 
+    fun materializeFullAudioUri(trackKey: String): Uri? {
+        ensureIndexed()
+        val cleanKey = trackKey.uppercase()
+        return materializeInternal(cleanKey, 0, Int.MAX_VALUE)
+    }
+
     fun materializeAudioChunkUri(trackKey: String, startBlock: Int, blockCount: Int = CHUNK_BLOCKS): Uri? {
         ensureIndexed()
         val cleanKey = trackKey.uppercase()

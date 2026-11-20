@@ -63,7 +63,7 @@ data class Rpf7ClipRef(
     override var adsEnabled: Boolean,
     override var weatherChatterEnabled: Boolean = false,
     override var newsReportsEnabled: Boolean
-) : RadioStation {
+) : RadioStation, TracklistCapableStation {
 
     override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
     override var stationName: String = (mediaItem.description.title ?: stationArchive.rpfName).toString()
@@ -98,6 +98,9 @@ data class Rpf7ClipRef(
     private val advertQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
     private val newsQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
     private val songQueue = RandomizedDualHeadQueue<Rpf7SongItem>(emptyList(), rng)
+    private val allSongItems = ArrayList<Rpf7SongItem>()
+    private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -248,6 +251,8 @@ data class Rpf7ClipRef(
         toNewsQueue.reset(toNews)
         toWeatherQueue.reset(toWeather)
         songQueue.reset(songItems)
+        allSongItems.clear()
+        allSongItems.addAll(songItems)
         rebuildTimeOfDayQueue()
 
         // 4. Index Adverts and News
@@ -975,5 +980,81 @@ data class Rpf7ClipRef(
         } else {
             setStationOnlyMetadata()
         }
+    }
+
+    private fun getDiscreteSongItems(): List<Rpf7SongItem> {
+        ensureStationIndexed()
+        if (isTalkRadio || isContinuousMixStation) return emptyList()
+        return allSongItems.filter { item ->
+            val stem = item.trackName.lowercase(Locale.ROOT).removeSuffix(".awc")
+            stem !in setOf("time", "to", "intro", "general") &&
+                !stem.startsWith("id_") &&
+                !stem.startsWith("mono_solo_") &&
+                !stem.contains("mix")
+        }
+    }
+
+    override fun supportsTracklist(): Boolean {
+        return getDiscreteSongItems().isNotEmpty()
+    }
+
+    override fun getCleanTracks(): List<TracklistTrack> {
+        val items = getDiscreteSongItems()
+        return items.map { item ->
+            val meta = Rpf7MetadataRepository.getTrackMeta(item.trackName, stationTitle)
+            val title = meta.title
+            val artist = meta.artist
+            TracklistTrack(
+                id = item.trackName,
+                title = title,
+                artist = artist,
+                stationName = stationTitle,
+                maxYear = 2021
+            )
+        }.distinctBy { it.id }.sortedBy { it.title.lowercase(Locale.ROOT) }
+    }
+
+    override fun playCleanTrack(
+        trackId: String,
+        player: GTRadioPlayer,
+        onTrackFinished: () -> Unit,
+        onMetadataReady: (title: String, artist: String, album: String, maxYear: Int) -> Unit
+    ) {
+        val items = getDiscreteSongItems()
+        val targetItem = items.find { it.trackName.equals(trackId, ignoreCase = true) } ?: return
+        val token = cleanPlayGeneration.incrementAndGet()
+        val meta = Rpf7MetadataRepository.getTrackMeta(targetItem.trackName, stationTitle)
+        val title = meta.title
+        val artist = meta.artist
+        val album = Rpf7MetadataRepository.getCachedAlbumName(context, artist, title) ?: stationTitle
+        onMetadataReady(title, artist, album, 2021)
+
+        cleanPlayExecutor.submit {
+            try {
+                val uri = targetItem.archive.materializeFullAudioUri(targetItem.trackName)
+                if (token != cleanPlayGeneration.get()) return@submit
+                if (uri == null) {
+                    GTRadioLogger.log("Rpf7RadioStation: Failed to materialize clean track audio for '${targetItem.trackName}'")
+                    mainHandler.post { onTrackFinished() }
+                    return@submit
+                }
+                mainHandler.post {
+                    if (token != cleanPlayGeneration.get()) return@post
+                    player.playCleanQueue(listOf(uri)) {
+                        if (token == cleanPlayGeneration.get()) {
+                            onTrackFinished()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("Rpf7RadioStation: Error materializing clean track", e)
+                mainHandler.post { onTrackFinished() }
+            }
+        }
+    }
+
+    override fun stopCleanTrackPlayback() {
+        cleanPlayGeneration.incrementAndGet()
+        player.stopCleanQueue()
     }
 }

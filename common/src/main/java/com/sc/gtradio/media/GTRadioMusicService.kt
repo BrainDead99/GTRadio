@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,6 +15,8 @@ import android.os.ResultReceiver
 import android.os.SystemClock
 import androidx.preference.PreferenceManager
 import android.support.v4.media.MediaBrowserCompat.MediaItem
+import android.support.v4.media.MediaDescriptionCompat
+import android.support.v4.media.MediaMetadataCompat
 import androidx.media.MediaBrowserServiceCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -36,11 +39,25 @@ import com.sc.gtradio.media.stations.*
 import java.util.ArrayList
 import java.util.concurrent.Executors
 
+enum class PlaybackMode {
+    RADIO,
+    TRACKLIST
+}
+
 @UnstableApi open class GTRadioMusicService : MediaBrowserServiceCompat() {
     private var stationGroups: ArrayList<StationGroup> = ArrayList()
     private var fullStationList: ArrayList<MediaItem> = ArrayList()
     private val stationCache: MutableMap<String, RadioStation> = mutableMapOf()
     private val sharedPrefListener = GTRadioOnSharedPrefChange()
+
+    private var playbackMode: PlaybackMode = PlaybackMode.RADIO
+    private var activeTracklistStation: TracklistCapableStation? = null
+    private var activeTracklistStationId: String? = null
+    private var activeTracklistTracks: List<TracklistTrack> = emptyList()
+    private var activeTracklistIndex: Int = -1
+    private var shuffleEnabled: Boolean = false
+    private var repeatMode: Int = PlaybackStateCompat.REPEAT_MODE_NONE
+    private val tracklistPlayedIndices = mutableListOf<Int>()
 
     private val scanExecutor = Executors.newSingleThreadExecutor()
     @Volatile private var groupsLoaded = false
@@ -54,6 +71,16 @@ import java.util.concurrent.Executors
                 when(key) {
                     "dynamic_theme_uri", "game_key_folder_uri", "gtav_key_folder_uri", "game_keys_updated", "gtav_keys_updated", resources.getString(R.string.radio_folders_uri_key) -> {
                         GTRadioLogger.log("GTRadioMusicService: Library URI or Game keys changed, invalidating cache...")
+                        if (this@GTRadioMusicService.playbackMode == PlaybackMode.TRACKLIST) {
+                            this@GTRadioMusicService.activeTracklistStation?.stopCleanTrackPlayback()
+                            this@GTRadioMusicService.activeTracklistStation = null
+                            this@GTRadioMusicService.activeTracklistStationId = null
+                            this@GTRadioMusicService.activeTracklistTracks = emptyList()
+                            this@GTRadioMusicService.activeTracklistIndex = -1
+                            this@GTRadioMusicService.radioPlayer.stopCleanQueue()
+                            this@GTRadioMusicService.radioPlayer.isTracklistMode = false
+                            this@GTRadioMusicService.playbackMode = PlaybackMode.RADIO
+                        }
                         this@GTRadioMusicService.activeStation?.stop()
                         this@GTRadioMusicService.activeStation = null
                         this@GTRadioMusicService.stationCache.clear()
@@ -224,6 +251,16 @@ import java.util.concurrent.Executors
         }
 
         override fun onPlay() {
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                if (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) {
+                    radioPlayer.play()
+                    updateTracklistPlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                } else if (activeTracklistIndex in activeTracklistTracks.indices) {
+                    playTracklistTrack(activeTracklistIndex)
+                }
+                return
+            }
+
             if (activeStation == null) {
                 val group = (activeStationGroupId?.let { getStationGroup(it) })
                     ?: (fullStationList.firstOrNull()?.mediaId?.let { getStationGroupContainingMedia(it) })
@@ -248,6 +285,42 @@ import java.util.concurrent.Executors
                 return
             }
 
+            if (mediaId.startsWith(TracklistContract.SONG_PREFIX)) {
+                val payload = mediaId.removePrefix(TracklistContract.SONG_PREFIX)
+                val stationId = payload.substringBefore("::")
+                val trackId = payload.substringAfter("::")
+
+                if (activeStation != null) {
+                    activeStation?.stop()
+                    activeStation = null
+                }
+                DynamicThemeManager.stopTuningNoise("tracklist_start")
+                radioPlayer.setStreamMuted(false)
+                radioPlayer.isTracklistMode = true
+                playbackMode = PlaybackMode.TRACKLIST
+
+                val group = getStationGroupContainingMedia(stationId) ?: return
+                val station = getRadioStation(group, stationId) as? TracklistCapableStation ?: return
+                activeTracklistStation = station
+                activeTracklistStationId = stationId
+                activeTracklistTracks = station.getCleanTracks()
+                val trackIndex = activeTracklistTracks.indexOfFirst { it.id.equals(trackId, ignoreCase = true) }
+                val targetIndex = if (trackIndex >= 0) trackIndex else 0
+                playTracklistTrack(targetIndex)
+                return
+            }
+
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                activeTracklistStation?.stopCleanTrackPlayback()
+                activeTracklistStation = null
+                activeTracklistStationId = null
+                activeTracklistTracks = emptyList()
+                activeTracklistIndex = -1
+                radioPlayer.stopCleanQueue()
+                radioPlayer.isTracklistMode = false
+                playbackMode = PlaybackMode.RADIO
+            }
+
             val group = getStationGroupContainingMedia(mediaId) ?: return
             if (activeStation?.mediaId != mediaId) {
                 activeStation?.stop()
@@ -258,6 +331,12 @@ import java.util.concurrent.Executors
         }
 
         override fun onPause() {
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                radioPlayer.pause()
+                updateTracklistPlaybackState(PlaybackStateCompat.STATE_PAUSED)
+                return
+            }
+
             val st = activeStation ?: return
             val group = (activeStationGroupId?.let { getStationGroup(it) })
                 ?: getStationGroup(st.stationGroupId)
@@ -277,6 +356,13 @@ import java.util.concurrent.Executors
         }
 
         override fun onStop() {
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                activeTracklistStation?.stopCleanTrackPlayback()
+                radioPlayer.stopCleanQueue()
+                updateTracklistPlaybackState(PlaybackStateCompat.STATE_STOPPED)
+                return
+            }
+
             val st = activeStation ?: return
             val group = (activeStationGroupId?.let { getStationGroup(it) })
                 ?: getStationGroup(st.stationGroupId)
@@ -296,6 +382,14 @@ import java.util.concurrent.Executors
         }
 
         override fun onSkipToNext() {
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                val nextIdx = getNextTracklistIndex(loopAll = (repeatMode == PlaybackStateCompat.REPEAT_MODE_ALL))
+                if (nextIdx != null) {
+                    playTracklistTrack(nextIdx)
+                }
+                return
+            }
+
             if (activeStation == null) {
                 val group = (activeStationGroupId?.let { getStationGroup(it) })
                     ?: (fullStationList.firstOrNull()?.mediaId?.let { getStationGroupContainingMedia(it) })
@@ -322,6 +416,31 @@ import java.util.concurrent.Executors
         }
 
         override fun onSkipToPrevious() {
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                if (radioPlayer.getCurrentTrackPosition() > 3000L) {
+                    radioPlayer.seekToMs(0L)
+                    updateTracklistPlaybackState(PlaybackStateCompat.STATE_PLAYING, 0L)
+                    return
+                }
+                if (shuffleEnabled) {
+                    if (tracklistPlayedIndices.size > 1) {
+                        tracklistPlayedIndices.removeAt(tracklistPlayedIndices.lastIndex)
+                        val prevIdx = tracklistPlayedIndices.removeAt(tracklistPlayedIndices.lastIndex)
+                        playTracklistTrack(prevIdx)
+                        return
+                    }
+                }
+                val prevIdx = if (activeTracklistIndex - 1 >= 0) {
+                    activeTracklistIndex - 1
+                } else if (repeatMode == PlaybackStateCompat.REPEAT_MODE_ALL) {
+                    activeTracklistTracks.lastIndex
+                } else {
+                    0
+                }
+                playTracklistTrack(prevIdx)
+                return
+            }
+
             if (activeStation == null) {
                 val group = (activeStationGroupId?.let { getStationGroup(it) })
                     ?: (fullStationList.firstOrNull()?.mediaId?.let { getStationGroupContainingMedia(it) })
@@ -345,6 +464,62 @@ import java.util.concurrent.Executors
             currentSt.stop()
             val prevSt = getRadioStation(group, group.stationList[prevStationIndex].mediaId!!) ?: return
             startStationWithTuningNoise(group, prevSt, prevStationIndex, trigger = "skip_prev")
+        }
+
+        override fun onSeekTo(pos: Long) {
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                radioPlayer.seekToMs(pos)
+                val state = if (exoPlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+                updateTracklistPlaybackState(state, pos)
+            }
+        }
+
+        override fun onCustomAction(action: String?, extras: Bundle?) {
+            when (action) {
+                TracklistContract.ACTION_TOGGLE_SHUFFLE -> {
+                    shuffleEnabled = !shuffleEnabled
+                    tracklistPlayedIndices.clear()
+                    if (activeTracklistIndex >= 0) tracklistPlayedIndices.add(activeTracklistIndex)
+                    session.setShuffleMode(if (shuffleEnabled) PlaybackStateCompat.SHUFFLE_MODE_ALL else PlaybackStateCompat.SHUFFLE_MODE_NONE)
+                    if (playbackMode == PlaybackMode.TRACKLIST) {
+                        val state = if (exoPlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+                        updateTracklistPlaybackState(state)
+                    }
+                }
+                TracklistContract.ACTION_CYCLE_REPEAT -> {
+                    repeatMode = when (repeatMode) {
+                        PlaybackStateCompat.REPEAT_MODE_NONE -> PlaybackStateCompat.REPEAT_MODE_ALL
+                        PlaybackStateCompat.REPEAT_MODE_ALL -> PlaybackStateCompat.REPEAT_MODE_ONE
+                        else -> PlaybackStateCompat.REPEAT_MODE_NONE
+                    }
+                    session.setRepeatMode(repeatMode)
+                    if (playbackMode == PlaybackMode.TRACKLIST) {
+                        val state = if (exoPlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+                        updateTracklistPlaybackState(state)
+                    }
+                }
+                else -> super.onCustomAction(action, extras)
+            }
+        }
+
+        override fun onSetShuffleMode(shuffleMode: Int) {
+            shuffleEnabled = (shuffleMode != PlaybackStateCompat.SHUFFLE_MODE_NONE)
+            tracklistPlayedIndices.clear()
+            if (activeTracklistIndex >= 0) tracklistPlayedIndices.add(activeTracklistIndex)
+            session.setShuffleMode(shuffleMode)
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                val state = if (exoPlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+                updateTracklistPlaybackState(state)
+            }
+        }
+
+        override fun onSetRepeatMode(newRepeatMode: Int) {
+            repeatMode = newRepeatMode
+            session.setRepeatMode(newRepeatMode)
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                val state = if (exoPlayer.isPlaying) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED
+                updateTracklistPlaybackState(state)
+            }
         }
 
         override fun onPlayFromSearch(query: String?, extras: Bundle?) {
@@ -429,6 +604,11 @@ import java.util.concurrent.Executors
     }
 
     override fun onDestroy() {
+        if (playbackMode == PlaybackMode.TRACKLIST) {
+            activeTracklistStation?.stopCleanTrackPlayback()
+            radioPlayer.stopCleanQueue()
+            radioPlayer.isTracklistMode = false
+        }
         //Free up our session
         session.run {
             isActive = false
@@ -448,6 +628,62 @@ import java.util.concurrent.Executors
     override fun onLoadChildren(parentId: String, result: Result<MutableList<MediaItem>>) {
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         val currentUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "") ?: ""
+
+        if (parentId == TracklistContract.ROOT_ID) {
+            if (groupsLoaded && cachedUri == currentUri) {
+                result.sendResult(buildTracklistRootItems())
+            } else {
+                result.detach()
+                scanExecutor.submit {
+                    ensureGroupsLoadedSync(currentUri)
+                    val items = buildTracklistRootItems()
+                    try {
+                        result.sendResult(items)
+                    } catch (e: Exception) {
+                        GTRadioLogger.log("GTRadioMusicService: sendResult failed for TracklistRoot", e)
+                    }
+                }
+            }
+            return
+        }
+
+        if (parentId.startsWith(TracklistContract.GROUP_PREFIX)) {
+            val rawGroupId = parentId.removePrefix(TracklistContract.GROUP_PREFIX)
+            if (groupsLoaded && cachedUri == currentUri) {
+                result.sendResult(buildTracklistGroupStations(rawGroupId))
+            } else {
+                result.detach()
+                scanExecutor.submit {
+                    ensureGroupsLoadedSync(currentUri)
+                    val items = buildTracklistGroupStations(rawGroupId)
+                    try {
+                        result.sendResult(items)
+                    } catch (e: Exception) {
+                        GTRadioLogger.log("GTRadioMusicService: sendResult failed for $parentId", e)
+                    }
+                }
+            }
+            return
+        }
+
+        if (parentId.startsWith(TracklistContract.STATION_PREFIX)) {
+            val rawStationId = parentId.removePrefix(TracklistContract.STATION_PREFIX)
+            if (groupsLoaded && cachedUri == currentUri) {
+                result.sendResult(buildTracklistStationSongs(rawStationId))
+            } else {
+                result.detach()
+                scanExecutor.submit {
+                    ensureGroupsLoadedSync(currentUri)
+                    val items = buildTracklistStationSongs(rawStationId)
+                    try {
+                        result.sendResult(items)
+                    } catch (e: Exception) {
+                        GTRadioLogger.log("GTRadioMusicService: sendResult failed for $parentId", e)
+                    }
+                }
+            }
+            return
+        }
 
         if (parentId.isBlank() || parentId == "root") {
             var needScan = false
@@ -505,16 +741,7 @@ import java.util.concurrent.Executors
         } else {
             result.detach()
             scanExecutor.submit {
-                if (!groupsLoaded || cachedUri != currentUri) {
-                    val groups = getStationGroups()
-                    val fullList = ArrayList(groups.map { x -> x.stationList }.flatten())
-                    synchronized(pendingRootResults) {
-                        stationGroups = groups
-                        fullStationList = fullList
-                        cachedUri = currentUri
-                        groupsLoaded = true
-                    }
-                }
+                ensureGroupsLoadedSync(currentUri)
                 val group = stationGroups.find { x -> x.mediaItem.mediaId == parentId }
                 val stations = group?.stationList ?: ArrayList()
                 try {
@@ -522,6 +749,266 @@ import java.util.concurrent.Executors
                 } catch (e: Exception) {
                     GTRadioLogger.log("GTRadioMusicService.onLoadChildren($parentId): Failed to sendResult", e)
                 }
+            }
+        }
+    }
+
+    private fun ensureGroupsLoadedSync(currentUri: String) {
+        if (!groupsLoaded || cachedUri != currentUri) {
+            val groups = getStationGroups()
+            val fullList = ArrayList(groups.map { x -> x.stationList }.flatten())
+            synchronized(pendingRootResults) {
+                stationGroups = groups
+                fullStationList = fullList
+                cachedUri = currentUri
+                groupsLoaded = true
+            }
+        }
+    }
+
+    private fun buildTracklistRootItems(): MutableList<MediaItem> {
+        val items = ArrayList<MediaItem>()
+        for (group in stationGroups) {
+            var hasTracklistStation = false
+            for (stMedia in group.stationList) {
+                val stId = stMedia.mediaId ?: continue
+                val st = getRadioStation(group, stId)
+                if (st is TracklistCapableStation && st.supportsTracklist()) {
+                    hasTracklistStation = true
+                    break
+                }
+            }
+            if (hasTracklistStation) {
+                val desc = MediaDescriptionCompat.Builder()
+                    .setMediaId(TracklistContract.GROUP_PREFIX + group.mediaItem.mediaId)
+                    .setTitle(group.mediaItem.description.title)
+                    .setSubtitle("Tracklists")
+                    .build()
+                items.add(MediaItem(desc, MediaItem.FLAG_BROWSABLE))
+            }
+        }
+        return items
+    }
+
+    private fun buildTracklistGroupStations(rawGroupId: String): MutableList<MediaItem> {
+        val group = stationGroups.find { it.mediaItem.mediaId == rawGroupId } ?: return ArrayList()
+        val items = ArrayList<MediaItem>()
+        for (stMedia in group.stationList) {
+            val stId = stMedia.mediaId ?: continue
+            val st = getRadioStation(group, stId)
+            if (st is TracklistCapableStation && st.supportsTracklist()) {
+                val trackCount = st.getCleanTracks().size
+                val extras = Bundle().apply {
+                    putString(TracklistContract.EXTRA_STATION_ID, stId)
+                    putString(TracklistContract.EXTRA_STATION_NAME, st.stationName)
+                    putInt(TracklistContract.EXTRA_STATION_TRACK_COUNT, trackCount)
+                    putInt(TracklistContract.EXTRA_TRACK_COUNT, trackCount)
+                }
+                val desc = MediaDescriptionCompat.Builder()
+                    .setMediaId(TracklistContract.STATION_PREFIX + stId)
+                    .setTitle(st.stationName)
+                    .setSubtitle("$trackCount tracks")
+                    .setExtras(extras)
+                    .build()
+                items.add(MediaItem(desc, MediaItem.FLAG_BROWSABLE))
+            }
+        }
+        return items
+    }
+
+    private fun buildTracklistStationSongs(rawStationId: String): MutableList<MediaItem> {
+        val group = getStationGroupContainingMedia(rawStationId) ?: return ArrayList()
+        val st = getRadioStation(group, rawStationId) as? TracklistCapableStation ?: return ArrayList()
+        if (!st.supportsTracklist()) return ArrayList()
+
+        val tracks = st.getCleanTracks()
+        val items = ArrayList<MediaItem>(tracks.size)
+        for ((idx, track) in tracks.withIndex()) {
+            val extras = Bundle().apply {
+                putString(TracklistContract.EXTRA_STATION_ID, rawStationId)
+                putString(TracklistContract.EXTRA_TRACK_ID, track.id)
+                putString(TracklistContract.EXTRA_TRACK_TITLE, track.title)
+                putString(TracklistContract.EXTRA_TRACK_ARTIST, track.artist)
+                putString(TracklistContract.EXTRA_TRACK_ALBUM, track.stationName)
+                putInt(TracklistContract.EXTRA_TRACK_MAX_YEAR, track.maxYear)
+                putInt(TracklistContract.EXTRA_TRACK_INDEX, idx)
+                putInt(TracklistContract.EXTRA_TRACK_COUNT, tracks.size)
+                putInt(TracklistContract.EXTRA_STATION_TRACK_COUNT, tracks.size)
+            }
+            val desc = MediaDescriptionCompat.Builder()
+                .setMediaId(TracklistContract.SONG_PREFIX + rawStationId + "::" + track.id)
+                .setTitle(track.title)
+                .setSubtitle(track.artist)
+                .setDescription(track.stationName)
+                .setExtras(extras)
+                .build()
+            items.add(MediaItem(desc, MediaItem.FLAG_PLAYABLE))
+        }
+        return items
+    }
+
+    private fun buildTracklistPlaybackActions(): Long {
+        var actions = PlaybackStateCompat.ACTION_PLAY or
+            PlaybackStateCompat.ACTION_PAUSE or
+            PlaybackStateCompat.ACTION_STOP or
+            PlaybackStateCompat.ACTION_SEEK_TO or
+            PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID or
+            PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH or
+            PlaybackStateCompat.ACTION_SET_REPEAT_MODE or
+            PlaybackStateCompat.ACTION_SET_SHUFFLE_MODE
+        if (activeTracklistTracks.size > 1) {
+            actions = actions or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
+        }
+        return actions
+    }
+
+    private fun updateTracklistPlaybackState(state: Int, positionMs: Long = -1L) {
+        val pos = if (positionMs >= 0) positionMs else radioPlayer.getCurrentTrackPosition()
+        val currentTrack = activeTracklistTracks.getOrNull(activeTracklistIndex)
+        val stateExtras = Bundle().apply {
+            putString(TracklistContract.EXTRA_PLAYBACK_MODE, "TRACKLIST")
+            putString(TracklistContract.EXTRA_STATION_ID, activeTracklistStationId ?: "")
+            putString(TracklistContract.EXTRA_TRACK_ID, currentTrack?.id ?: "")
+            putString(TracklistContract.EXTRA_TRACK_TITLE, currentTrack?.title ?: "")
+            putString(TracklistContract.EXTRA_TRACK_ARTIST, currentTrack?.artist ?: "")
+            putString(TracklistContract.EXTRA_TRACK_ALBUM, currentTrack?.stationName ?: "")
+            putInt(TracklistContract.EXTRA_TRACK_INDEX, activeTracklistIndex)
+            putInt(TracklistContract.EXTRA_TRACK_COUNT, activeTracklistTracks.size)
+            putBoolean(TracklistContract.EXTRA_SHUFFLE_ENABLED, shuffleEnabled)
+            putInt(TracklistContract.EXTRA_REPEAT_MODE, repeatMode)
+        }
+        val pbState = PlaybackStateCompat.Builder()
+            .setState(state, pos, if (state == PlaybackStateCompat.STATE_PLAYING) 1F else 0F)
+            .setActions(buildTracklistPlaybackActions())
+            .setExtras(stateExtras)
+            .build()
+        session.setPlaybackState(pbState)
+    }
+
+    private fun publishTracklistMetadata(
+        track: TracklistTrack,
+        index: Int,
+        art: Bitmap?,
+        durationMs: Long
+    ) {
+        val metaBuilder = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, TracklistContract.SONG_PREFIX + (activeTracklistStationId ?: "") + "::" + track.id)
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, track.title)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, track.artist)
+            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, track.stationName)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, track.title)
+            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, "${track.artist} • ${track.stationName}")
+            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, (index + 1).toLong())
+            .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, activeTracklistTracks.size.toLong())
+
+        if (durationMs > 0) {
+            metaBuilder.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, durationMs)
+        }
+        if (art != null) {
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
+            metaBuilder.putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, art)
+        }
+        session.setMetadata(metaBuilder.build())
+    }
+
+    private fun playTracklistTrack(index: Int) {
+        if (index !in activeTracklistTracks.indices) return
+        val station = activeTracklistStation ?: return
+        activeTracklistIndex = index
+        if (index !in tracklistPlayedIndices) {
+            tracklistPlayedIndices.add(index)
+        }
+
+        val track = activeTracklistTracks[index]
+        val canNav = activeTracklistTracks.size > 1
+        radioPlayer.nextEnabled = canNav
+        radioPlayer.previousEnabled = canNav
+
+        val cachedArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
+        publishTracklistMetadata(track, index, cachedArt, -1L)
+        updateTracklistPlaybackState(PlaybackStateCompat.STATE_BUFFERING, 0L)
+        notificationManager.showNotificationForPlayer(radioPlayer)
+
+        val expectedIndex = index
+        val expectedTrackId = track.id
+        if (cachedArt == null) {
+            AlbumArtDownloader.fetchEraAccurateArtAsync(applicationContext, track.artist, track.title, track.maxYear) {
+                Handler(Looper.getMainLooper()).post {
+                    if (playbackMode == PlaybackMode.TRACKLIST &&
+                        activeTracklistIndex == expectedIndex &&
+                        activeTracklistTracks.getOrNull(expectedIndex)?.id == expectedTrackId) {
+                        val newArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
+                        if (newArt != null) {
+                            val dur = radioPlayer.getDurationMs()
+                            publishTracklistMetadata(track, expectedIndex, newArt, dur)
+                            notificationManager.showNotificationForPlayer(radioPlayer)
+                        }
+                    }
+                }
+            }
+        }
+
+        station.playCleanTrack(
+            track.id,
+            radioPlayer,
+            onTrackFinished = {
+                Handler(Looper.getMainLooper()).post {
+                    onTracklistSongFinished()
+                }
+            },
+            onMetadataReady = { _, _, _, _ -> }
+        )
+    }
+
+    private fun onTracklistSongFinished() {
+        if (playbackMode != PlaybackMode.TRACKLIST) return
+        if (activeTracklistTracks.isEmpty()) return
+
+        when (repeatMode) {
+            PlaybackStateCompat.REPEAT_MODE_ONE -> {
+                playTracklistTrack(activeTracklistIndex)
+            }
+            PlaybackStateCompat.REPEAT_MODE_ALL -> {
+                val nextIdx = getNextTracklistIndex(loopAll = true)
+                if (nextIdx != null) {
+                    playTracklistTrack(nextIdx)
+                } else {
+                    updateTracklistPlaybackState(PlaybackStateCompat.STATE_STOPPED, 0L)
+                }
+            }
+            else -> { // REPEAT_MODE_NONE
+                val nextIdx = getNextTracklistIndex(loopAll = false)
+                if (nextIdx != null) {
+                    playTracklistTrack(nextIdx)
+                } else {
+                    updateTracklistPlaybackState(PlaybackStateCompat.STATE_STOPPED, 0L)
+                }
+            }
+        }
+    }
+
+    private fun getNextTracklistIndex(loopAll: Boolean): Int? {
+        if (activeTracklistTracks.isEmpty()) return null
+        if (shuffleEnabled) {
+            val unplayed = activeTracklistTracks.indices.filter { it !in tracklistPlayedIndices }
+            if (unplayed.isNotEmpty()) {
+                return unplayed.random()
+            }
+            if (loopAll) {
+                tracklistPlayedIndices.clear()
+                if (activeTracklistIndex >= 0) tracklistPlayedIndices.add(activeTracklistIndex)
+                val eligible = activeTracklistTracks.indices.filter { it != activeTracklistIndex }.ifEmpty { activeTracklistTracks.indices.toList() }
+                return eligible.random()
+            }
+            return null
+        } else {
+            val next = activeTracklistIndex + 1
+            return if (next < activeTracklistTracks.size) {
+                next
+            } else if (loopAll) {
+                0
+            } else {
+                null
             }
         }
     }
@@ -713,11 +1200,23 @@ import java.util.concurrent.Executors
             if (playbackState == Player.STATE_READY && exoPlayer.playWhenReady) {
                 playerReadyForCurrentSwitch = true
             }
+            if (playbackMode == PlaybackMode.TRACKLIST && playbackState == Player.STATE_READY) {
+                val currentTrack = activeTracklistTracks.getOrNull(activeTracklistIndex)
+                if (currentTrack != null) {
+                    val dur = radioPlayer.getDurationMs()
+                    val art = AlbumArtDownloader.getCachedAlbumArt(applicationContext, currentTrack.artist, currentTrack.title)
+                    publishTracklistMetadata(currentTrack, activeTracklistIndex, art, dur)
+                    updateTracklistPlaybackState(PlaybackStateCompat.STATE_PLAYING)
+                }
+            }
         }
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             if (playWhenReady && exoPlayer.playbackState == Player.STATE_READY) {
                 playerReadyForCurrentSwitch = true
+            }
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                updateTracklistPlaybackState(if (playWhenReady) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED)
             }
         }
 
@@ -733,12 +1232,11 @@ import java.util.concurrent.Executors
                     notificationManager.showNotificationForPlayer(radioPlayer)
                     if (actualPlaybackState == Player.STATE_READY) {
                         if (!playWhenReady) {
-                            // If playback is paused we remove the foreground state which allows the
-                            // notification to be dismissed. An alternative would be to provide a
-                            // "close" button in the notification which stops playback and clears
-                            // the notification.
                             stopForeground(false)
                             isForegroundService = false
+                        }
+                        if (playbackMode == PlaybackMode.TRACKLIST) {
+                            updateTracklistPlaybackState(if (playWhenReady) PlaybackStateCompat.STATE_PLAYING else PlaybackStateCompat.STATE_PAUSED)
                         }
                     }
                 }

@@ -32,7 +32,69 @@ import java.util.*
     private val context: Context,
     override var adsEnabled: Boolean,
     private var _weatherChatterEnabled: Boolean
-) : RadioStation {
+) : RadioStation, TracklistCapableStation {
+
+    private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+
+    override fun supportsTracklist(): Boolean {
+        return !isWctr && stationMeta.streamCode != "ADVERTS" && stationMeta.songGroups.isNotEmpty()
+    }
+
+    override fun getCleanTracks(): List<TracklistTrack> {
+        if (!supportsTracklist()) return emptyList()
+        return stationMeta.songGroups.map { sg ->
+            TracklistTrack(
+                id = sg.midTrack.toString(),
+                title = sg.cleanTitle,
+                artist = sg.artist,
+                stationName = stationTitle,
+                maxYear = 2004
+            )
+        }.distinctBy { it.id }.sortedBy { it.title.lowercase(Locale.ROOT) }
+    }
+
+    override fun playCleanTrack(
+        trackId: String,
+        player: GTRadioPlayer,
+        onTrackFinished: () -> Unit,
+        onMetadataReady: (title: String, artist: String, album: String, maxYear: Int) -> Unit
+    ) {
+        val sg = stationMeta.songGroups.find { it.midTrack.toString() == trackId || it.cleanTitle.equals(trackId, ignoreCase = true) }
+            ?: return
+        val token = cleanPlayGeneration.incrementAndGet()
+        val album = Gen2MetadataRepository.getCachedAlbumName(context, sg.artist, sg.cleanTitle) ?: groupTitle
+        onMetadataReady(sg.cleanTitle, sg.artist, album, 2004)
+
+        cleanPlayExecutor.submit {
+            val uris = ArrayList<Uri>()
+            if (sg.cleanIntroTrack != null && sg.cleanIntroTrack > 0) {
+                stationArchive.materializeTrackUri(sg.cleanIntroTrack)?.let { uris.add(it) }
+            }
+            stationArchive.materializeTrackUri(sg.midTrack)?.let { uris.add(it) }
+            if (sg.cleanOutroTrack != null && sg.cleanOutroTrack > 0) {
+                stationArchive.materializeTrackUri(sg.cleanOutroTrack)?.let { uris.add(it) }
+            }
+            mainHandler.post {
+                if (token == cleanPlayGeneration.get()) {
+                    if (uris.isNotEmpty()) {
+                        player.playCleanQueue(uris) {
+                            if (token == cleanPlayGeneration.get()) {
+                                onTrackFinished()
+                            }
+                        }
+                    } else {
+                        onTrackFinished()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun stopCleanTrackPlayback() {
+        cleanPlayGeneration.incrementAndGet()
+        player.stopCleanQueue()
+    }
 
     override var newsReportsEnabled: Boolean = false
     override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null

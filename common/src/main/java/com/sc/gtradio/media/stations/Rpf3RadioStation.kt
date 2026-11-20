@@ -52,7 +52,7 @@ data class Rpf3ClipRef(
     override var adsEnabled: Boolean,
     override var weatherChatterEnabled: Boolean,
     override var newsReportsEnabled: Boolean
-) : RadioStation {
+) : RadioStation, TracklistCapableStation {
 
     override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
     override var stationName: String = (mediaItem.description.title ?: stationArchive.rpfName).toString()
@@ -87,6 +87,9 @@ data class Rpf3ClipRef(
     private val newsQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
     private val weatherQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
     private val songQueue = RandomizedDualHeadQueue<Rpf3SongItem>(emptyList(), rng)
+    private val allSongItems = ArrayList<Rpf3SongItem>()
+    private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -282,6 +285,8 @@ data class Rpf3ClipRef(
         toNewsQueue.reset(toNews)
         toWeatherQueue.reset(toWeather)
         songQueue.reset(songItems)
+        allSongItems.clear()
+        allSongItems.addAll(songItems)
         rebuildTimeOfDayQueue()
 
         val allAdverts = ArrayList<Rpf3ClipRef>()
@@ -936,5 +941,79 @@ data class Rpf3ClipRef(
         } else {
             setStationOnlyMetadata()
         }
+    }
+
+    private fun getDiscreteSongItems(): List<Rpf3SongItem> {
+        ensureStationIndexed()
+        if (isTalkRadio) return emptyList()
+        return allSongItems.filter { item ->
+            !item.trackName.contains("MIX", ignoreCase = true) &&
+                item.archive.readTrackMarkers(item.trackName).isEmpty() &&
+                Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow != true
+        }
+    }
+
+    override fun supportsTracklist(): Boolean {
+        return getDiscreteSongItems().isNotEmpty()
+    }
+
+    override fun getCleanTracks(): List<TracklistTrack> {
+        val items = getDiscreteSongItems()
+        return items.map { item ->
+            val meta = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)
+            val title = meta?.title ?: item.trackName
+            val artist = meta?.artist ?: stationTitle
+            TracklistTrack(
+                id = item.trackName,
+                title = title,
+                artist = artist,
+                stationName = stationTitle,
+                maxYear = 2009
+            )
+        }.distinctBy { it.id }.sortedBy { it.title.lowercase(Locale.ROOT) }
+    }
+
+    override fun playCleanTrack(
+        trackId: String,
+        player: GTRadioPlayer,
+        onTrackFinished: () -> Unit,
+        onMetadataReady: (title: String, artist: String, album: String, maxYear: Int) -> Unit
+    ) {
+        val items = getDiscreteSongItems()
+        val targetItem = items.find { it.trackName.equals(trackId, ignoreCase = true) } ?: return
+        val token = cleanPlayGeneration.incrementAndGet()
+        val meta = Rpf3MetadataRepository.getTrackMeta(context, targetItem.trackName, stationTitle)
+        val title = meta?.title ?: targetItem.trackName
+        val artist = meta?.artist ?: stationTitle
+        val album = Gen2MetadataRepository.getCachedAlbumName(context, artist, title) ?: stationTitle
+        onMetadataReady(title, artist, album, 2009)
+
+        cleanPlayExecutor.submit {
+            try {
+                val uri = targetItem.archive.materializeFullAudioUri(targetItem.trackName)
+                if (token != cleanPlayGeneration.get()) return@submit
+                if (uri == null) {
+                    GTRadioLogger.log("Rpf3RadioStation: Failed to materialize clean track audio for '${targetItem.trackName}'")
+                    mainHandler.post { onTrackFinished() }
+                    return@submit
+                }
+                mainHandler.post {
+                    if (token != cleanPlayGeneration.get()) return@post
+                    player.playCleanQueue(listOf(uri)) {
+                        if (token == cleanPlayGeneration.get()) {
+                            onTrackFinished()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("Rpf3RadioStation: Error materializing clean track", e)
+                mainHandler.post { onTrackFinished() }
+            }
+        }
+    }
+
+    override fun stopCleanTrackPlayback() {
+        cleanPlayGeneration.incrementAndGet()
+        player.stopCleanQueue()
     }
 }

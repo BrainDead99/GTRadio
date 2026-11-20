@@ -31,7 +31,10 @@ import java.util.*
     private val context: Context,
     override var adsEnabled: Boolean,
     private var _weatherChatterEnabled: Boolean
-) : RadioStation {
+) : RadioStation, TracklistCapableStation {
+
+    private val allSongs = ArrayList<Song>()
+    private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
     override var newsReportsEnabled: Boolean = false
     override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
@@ -309,7 +312,10 @@ import java.util.*
     }
 
     private fun setupSongs(folder: DocumentFile) {
-        songQueue.reset(folder.listFiles().map { x -> Song(x) })
+        val songs = folder.listFiles().map { x -> Song(x) }
+        allSongs.clear()
+        allSongs.addAll(songs)
+        songQueue.reset(songs)
     }
 
     private fun getHourBucket(): Int {
@@ -632,6 +638,51 @@ import java.util.*
         player.play()
     }
 
+    override fun supportsTracklist(): Boolean {
+        return !isWctr && allSongs.isNotEmpty()
+    }
+
+    override fun getCleanTracks(): List<TracklistTrack> {
+        if (!supportsTracklist()) return emptyList()
+        return allSongs.map { song ->
+            TracklistTrack(
+                id = song.folderName,
+                title = song.cleanTitle,
+                artist = song.cleanArtist,
+                stationName = stationTitle,
+                maxYear = 2004
+            )
+        }.distinctBy { it.id }.sortedBy { it.title.lowercase(Locale.ROOT) }
+    }
+
+    override fun playCleanTrack(
+        trackId: String,
+        player: GTRadioPlayer,
+        onTrackFinished: () -> Unit,
+        onMetadataReady: (title: String, artist: String, album: String, maxYear: Int) -> Unit
+    ) {
+        val song = allSongs.find { it.folderName == trackId || it.cleanTitle.equals(trackId, ignoreCase = true) } ?: return
+        val token = cleanPlayGeneration.incrementAndGet()
+        val album = Gen2MetadataRepository.getCachedAlbumName(context, song.cleanArtist, song.cleanTitle) ?: groupTitle
+        onMetadataReady(song.cleanTitle, song.cleanArtist, album, 2004)
+
+        val uris = listOfNotNull(song.mainIntroUri, song.mainSongUri, song.mainOutroUri)
+        if (uris.isNotEmpty()) {
+            player.playCleanQueue(uris) {
+                if (token == cleanPlayGeneration.get()) {
+                    onTrackFinished()
+                }
+            }
+        } else {
+            onTrackFinished()
+        }
+    }
+
+    override fun stopCleanTrackPlayback() {
+        cleanPlayGeneration.incrementAndGet()
+        player.stopCleanQueue()
+    }
+
     private inner class Song(songFolderDoc: DocumentFile?) {
         val folderName: String = songFolderDoc?.name ?: stationTitle
         val songFiles = songFolderDoc?.listSimpleFiles(context.applicationContext)
@@ -641,5 +692,37 @@ import java.util.*
         val mainOutroUri: Uri? = (songFiles ?: emptyArray()).find { x -> x.name.uppercase().contains("(OUTRO)") }?.uri
         val djIntroUris: Array<Uri> = (songFiles ?: emptyArray()).filter { x -> x.name.uppercase().contains("(INTRO DJ") }.map { x -> x.uri }.toTypedArray()
         val djOutroUris: Array<Uri> = (songFiles ?: emptyArray()).filter { x -> x.name.uppercase().contains("(OUTRO DJ") }.map { x -> x.uri }.toTypedArray()
+
+        val cleanTitle: String by lazy {
+            var rawTitle = folderName
+            if (mainSongUri != null) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, mainSongUri)
+                    val extracted = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+                    if (!extracted.isNullOrBlank()) rawTitle = extracted
+                } catch (_: Exception) {
+                } finally {
+                    try { retriever.release() } catch (_: Exception) {}
+                }
+            }
+            suffixRegex.replace(rawTitle, "").trim().ifBlank { folderName }
+        }
+
+        val cleanArtist: String by lazy {
+            var rawArtist: String? = null
+            if (mainSongUri != null) {
+                val retriever = MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(context, mainSongUri)
+                    val extracted = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                    if (!extracted.isNullOrBlank()) rawArtist = extracted
+                } catch (_: Exception) {
+                } finally {
+                    try { retriever.release() } catch (_: Exception) {}
+                }
+            }
+            rawArtist?.ifBlank { stationTitle } ?: stationTitle
+        }
     }
 }

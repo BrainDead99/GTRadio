@@ -1,4 +1,5 @@
 import android.media.AudioDeviceInfo
+import android.net.Uri
 import android.os.Looper
 import android.support.v4.media.session.PlaybackStateCompat
 import android.view.Surface
@@ -8,6 +9,7 @@ import android.view.TextureView
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.AuxEffectInfo
+import androidx.media3.common.C
 import androidx.media3.common.DeviceInfo
 import androidx.media3.common.Effect
 import androidx.media3.common.Format
@@ -46,12 +48,17 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
 @UnstableApi class GTRadioPlayer(private val exoPlayer: ExoPlayer): ExoPlayer {
 
     var radioPlaybackState: Int = PlaybackStateCompat.STATE_NONE
+    var isTracklistMode: Boolean = false
+    private var cleanTrackListener: Player.Listener? = null
 
     var nextEnabled = false
     var previousEnabled = false
     fun isExoPlayerReady(): Boolean = exoPlayer.playbackState == Player.STATE_READY && exoPlayer.playWhenReady
     fun setStreamMuted(muted: Boolean) { exoPlayer.volume = if (muted) 0f else 1f }
-    fun resetForStationSwitch() { exoPlayer.stop() }
+    fun resetForStationSwitch() {
+        stopCleanQueue()
+        exoPlayer.stop()
+    }
 
     //region Customized Functionality
     //-----------
@@ -133,8 +140,31 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
     }
 
     override fun getDuration(): Long {
-        //For a faux live-stream, no items have a known duration
+        if (isTracklistMode) {
+            return getDurationMs()
+        }
+        // For a faux live-stream, no items have a known duration
         return -1L
+    }
+
+    fun getDurationMs(): Long {
+        val timeline = exoPlayer.currentTimeline
+        if (timeline.isEmpty) {
+            val d = exoPlayer.duration
+            return if (d > 0L && d != C.TIME_UNSET) d else 0L
+        }
+        var totalMs = 0L
+        val window = Timeline.Window()
+        for (i in 0 until timeline.windowCount) {
+            timeline.getWindow(i, window)
+            val d = window.durationMs
+            if (d > 0L && d != C.TIME_UNSET) {
+                totalMs += d
+            }
+        }
+        if (totalMs > 0L) return totalMs
+        val d = exoPlayer.duration
+        return if (d > 0L && d != C.TIME_UNSET) d else 0L
     }
 
     fun getCurrentTrackDuration(): Long {
@@ -142,12 +172,92 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
     }
 
     override fun getCurrentPosition(): Long {
-        //For a faux live-stream, we never really know the official "position" we are in
+        if (isTracklistMode) {
+            return getCurrentTrackPosition()
+        }
+        // For a faux live-stream, we never really know the official "position" we are in
         return -1L
     }
 
     fun getCurrentTrackPosition(): Long {
-        return exoPlayer.currentPosition
+        val timeline = exoPlayer.currentTimeline
+        val curWin = exoPlayer.currentMediaItemIndex
+        val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+        if (timeline.isEmpty || curWin <= 0) {
+            return curPos
+        }
+        var cumulativeMs = 0L
+        val window = Timeline.Window()
+        for (i in 0 until curWin.coerceAtMost(timeline.windowCount)) {
+            timeline.getWindow(i, window)
+            val d = window.durationMs
+            if (d > 0L && d != C.TIME_UNSET) {
+                cumulativeMs += d
+            }
+        }
+        return cumulativeMs + curPos
+    }
+
+    fun seekToMs(positionMs: Long) {
+        val target = positionMs.coerceAtLeast(0L)
+        val timeline = exoPlayer.currentTimeline
+        if (timeline.isEmpty || timeline.windowCount <= 1) {
+            exoPlayer.seekTo(target)
+            return
+        }
+        var accumulated = 0L
+        val window = Timeline.Window()
+        for (i in 0 until timeline.windowCount) {
+            timeline.getWindow(i, window)
+            val d = if (window.durationMs > 0L && window.durationMs != C.TIME_UNSET) window.durationMs else 0L
+            if (target < accumulated + d || i == timeline.windowCount - 1) {
+                val offsetInWindow = (target - accumulated).coerceAtLeast(0L)
+                exoPlayer.seekTo(i, offsetInWindow)
+                return
+            }
+            accumulated += d
+        }
+        exoPlayer.seekTo(timeline.windowCount - 1, 0L)
+    }
+
+    fun playCleanQueue(uris: List<Uri>, onEnded: () -> Unit) {
+        stopCleanQueue()
+        isTracklistMode = true
+        radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
+        nextEnabled = true
+        previousEnabled = true
+        exoPlayer.repeatMode = Player.REPEAT_MODE_OFF
+        setStreamMuted(false)
+        exoPlayer.clearMediaItems()
+        for (uri in uris) {
+            exoPlayer.addMediaItem(MediaItem.fromUri(uri))
+        }
+
+        cleanTrackListener = object : Player.Listener {
+            private var handled = false
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED && !handled) {
+                    handled = true
+                    exoPlayer.removeListener(this)
+                    cleanTrackListener = null
+                    onEnded()
+                }
+            }
+        }
+        exoPlayer.addListener(cleanTrackListener!!)
+        exoPlayer.prepare()
+        exoPlayer.play()
+    }
+
+    fun stopCleanQueue() {
+        cleanTrackListener?.let {
+            exoPlayer.removeListener(it)
+            cleanTrackListener = null
+        }
+        isTracklistMode = false
+        radioPlaybackState = PlaybackStateCompat.STATE_STOPPED
+        exoPlayer.stop()
+        exoPlayer.clearMediaItems()
     }
 
     override fun isCommandAvailable(command: Int): Boolean {
