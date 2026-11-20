@@ -312,23 +312,31 @@ class Rpf3Archive(
                         val markerTableOffset = probeBuf.getInt(28).toLong() and 0xFFFFFFFFL
                         if (markerTableOffset > 0L && markerTableOffset + 24L <= entry.size) {
                             val mHdr = ByteBuffer.allocate(24).order(ByteOrder.LITTLE_ENDIAN)
-                            if (readFully(ch, mHdr, entry.offset + markerTableOffset) >= 24) {
+                            val bytesRead = readFully(ch, mHdr, entry.offset + markerTableOffset)
+                            if (bytesRead == 24) {
                                 val tagAt16 = mHdr.getInt(16)
                                 val tagAt0 = mHdr.getInt(0)
-                                val (markerDataSize, recOffsetRel) = when {
-                                    tagAt16 == 0x7DEEF8B7.toInt() -> Pair(mHdr.getInt(20), 24L)
-                                    tagAt0 == 0x7DEEF8B7.toInt() -> Pair(mHdr.getInt(4), 8L)
-                                    else -> Pair(0, 0L)
+                                val expectedTag = 0x7DEEF8B7.toInt()
+                                val (markerChunkTag, markerDataSize, recOffsetRel) = when {
+                                    tagAt16 == expectedTag -> Triple(tagAt16, mHdr.getInt(20), 24L)
+                                    tagAt0 == expectedTag -> Triple(tagAt0, mHdr.getInt(4), 8L)
+                                    else -> Triple(0, 0, 0L)
                                 }
-                                if (markerDataSize in 16..131072) {
+                                if (markerChunkTag == expectedTag &&
+                                    markerDataSize > 0 &&
+                                    markerDataSize <= 131072 &&
+                                    markerTableOffset + 24L + markerDataSize <= entry.size &&
+                                    markerTableOffset + recOffsetRel + markerDataSize <= entry.size
+                                ) {
                                     val recBuf = ByteBuffer.allocate(markerDataSize).order(ByteOrder.LITTLE_ENDIAN)
-                                    if (readFully(ch, recBuf, entry.offset + markerTableOffset + recOffsetRel) >= markerDataSize) {
-                                        val numRecs = markerDataSize / 16
-                                        for (i in 0 until numRecs) {
-                                            val nameHash = recBuf.int
-                                            val rawFloatVal = recBuf.int
-                                            recBuf.int // pad
-                                            val timeOffsetUint = recBuf.int
+                                    val markerBytesRead = readFully(ch, recBuf, entry.offset + markerTableOffset + recOffsetRel)
+                                    if (markerBytesRead >= 16) {
+                                        val actualBuf = ByteBuffer.wrap(recBuf.array(), 0, markerBytesRead).order(ByteOrder.LITTLE_ENDIAN)
+                                        while (actualBuf.remaining() >= 16) {
+                                            val nameHash = actualBuf.int
+                                            val rawFloatVal = actualBuf.int
+                                            actualBuf.int // pad
+                                            val timeOffsetUint = actualBuf.int
 
                                             if (nameHash == 0xA6D93246.toInt()) {
                                                 val tid = java.lang.Float.intBitsToFloat(rawFloatVal).toInt()
@@ -343,6 +351,8 @@ class Rpf3Archive(
                     }
                 }
             }
+        } catch (e: java.nio.BufferUnderflowException) {
+            GTRadioLogger.log("Rpf3Archive[$rpfName]: BufferUnderflowException reading track markers for $entryName", e)
         } catch (e: Exception) {
             GTRadioLogger.log("Rpf3Archive[$rpfName]: Error reading track markers for $entryName", e)
         }

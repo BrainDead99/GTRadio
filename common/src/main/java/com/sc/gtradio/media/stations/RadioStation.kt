@@ -19,3 +19,22 @@ interface RadioStation {
     fun play()
     fun stop()
 }
+
+fun readAudioDurationMs(context: android.content.Context, uri: android.net.Uri): Long {
+    var dur = 0L
+    val retriever = android.media.MediaMetadataRetriever()
+    try {
+        val p = uri.path
+        if (p != null && java.io.File(p).exists()) {
+            retriever.setDataSource(p)
+        } else {
+            retriever.setDataSource(context, uri)
+        }
+        val dStr = retriever.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)
+        dur = dStr?.toLongOrNull() ?: 0L
+    } catch (_: Exception) {
+    } finally {
+        try { retriever.release() } catch (_: Exception) {}
+    }
+    return dur
+}

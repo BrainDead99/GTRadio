@@ -31,6 +31,7 @@ class GroupList : Fragment() {
         override fun onChildrenLoaded(parentId: String, children: List<MediaBrowserCompat.MediaItem>) {
             GTRadioLogger.log("GroupList.onChildrenLoaded: parentId=$parentId, count=${children.size}")
             if (_binding != null) {
+                binding.groupLoadingProgress.visibility = View.GONE
                 val hasValidFolder = hasValidLibraryPermission()
                 if (children.isEmpty()) {
                     binding.stationList.visibility = View.GONE
@@ -111,6 +112,9 @@ class GroupList : Fragment() {
     }
 
     private fun reloadRootSubscription() {
+        if (_binding != null && hasValidLibraryPermission() && listAdapter.currentList.isEmpty()) {
+            binding.groupLoadingProgress.visibility = View.VISIBLE
+        }
         musicServiceConnection?.unsubscribe("root", subscriptionCallback)
         musicServiceConnection?.subscribe("root", subscriptionCallback)
     }
@@ -168,6 +172,7 @@ class GroupList : Fragment() {
                     this?.apply()
                 }
             }
+            binding.groupLoadingProgress.visibility = View.GONE
             binding.stationList.visibility = View.GONE
             binding.buttonSelect.visibility = View.VISIBLE
             binding.textviewNofolder.visibility = View.VISIBLE
@@ -178,6 +183,12 @@ class GroupList : Fragment() {
             binding.buttonSelect.visibility = View.GONE
             binding.textviewNofolder.visibility = View.GONE
             binding.textviewDisclaimer.visibility = View.GONE
+            if (listAdapter.currentList.isEmpty()) {
+                binding.groupLoadingProgress.visibility = View.VISIBLE
+                binding.stationList.visibility = View.GONE
+                binding.textviewNogroups.visibility = View.INVISIBLE
+                binding.sadFaceIcon.visibility = View.INVISIBLE
+            }
         }
     }
 

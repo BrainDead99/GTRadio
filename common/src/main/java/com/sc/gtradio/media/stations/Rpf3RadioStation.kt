@@ -10,6 +10,7 @@ import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
@@ -90,6 +91,8 @@ data class Rpf3ClipRef(
     private val allSongItems = ArrayList<Rpf3SongItem>()
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val playGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val decodeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -471,6 +474,8 @@ data class Rpf3ClipRef(
     }
 
     override fun stop() {
+        val gen = playGeneration.incrementAndGet()
+        GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: stop() called (gen=$gen)")
         stopMixPoller()
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
@@ -496,33 +501,37 @@ data class Rpf3ClipRef(
     }
 
     override fun play() {
-        GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: play() called")
-        ensureStationIndexed()
+        val currentGen = playGeneration.incrementAndGet()
+        GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: play() called (gen=$currentGen)")
         _playing = true
         player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
-        if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
-            val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-            resumeFromRealTime(elapsedMs)
-        } else {
-            pickNextSegment()
-            if (currentSegmentUris.isNotEmpty()) {
-                refreshCurrentSegmentMetadata()
-                val lastIdx = currentSegmentUris.size - 1
-                val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
-                val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
-                    rng.nextInt(25_000).toLong()
-                } else {
-                    0L
+        decodeExecutor.submit {
+            if (!_playing || playGeneration.get() != currentGen) return@submit
+            ensureStationIndexed()
+            if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
+                val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+                resumeFromRealTime(elapsedMs, currentGen)
+            } else {
+                pickNextSegment()
+                if (currentSegmentUris.isNotEmpty()) {
+                    if (!_playing || playGeneration.get() != currentGen) return@submit
+                    val lastIdx = currentSegmentUris.size - 1
+                    val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
+                    val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
+                        rng.nextInt(25_000).toLong()
+                    } else {
+                        0L
+                    }
+                    startPlayback(currentSegmentUris, 0, startOffset, currentGen)
                 }
-                startPlayback(currentSegmentUris, 0, startOffset)
             }
         }
     }
 
-    private fun resumeFromRealTime(rawElapsedMs: Long) {
+    private fun resumeFromRealTime(rawElapsedMs: Long, expectedGen: Int) {
         var remainingMs = if (rawElapsedMs > 180_000L) (rawElapsedMs % 180_000L) else rawElapsedMs
         var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
@@ -535,8 +544,8 @@ data class Rpf3ClipRef(
                 val durMs = getFileDurationMs(uri)
                 val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
                 if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
-                    refreshCurrentSegmentMetadata()
-                    startPlayback(currentSegmentUris, i, posMs + remainingMs)
+                    if (!_playing || playGeneration.get() != expectedGen) return
+                    startPlayback(currentSegmentUris, i, posMs + remainingMs, expectedGen)
                     return
                 } else {
                     remainingMs -= timeLeftMs
@@ -549,8 +558,8 @@ data class Rpf3ClipRef(
         }
 
         if (currentSegmentUris.isNotEmpty()) {
-            refreshCurrentSegmentMetadata()
-            startPlayback(currentSegmentUris, 0, 0L)
+            if (!_playing || playGeneration.get() != expectedGen) return
+            startPlayback(currentSegmentUris, 0, 0L, expectedGen)
         }
     }
 
@@ -584,10 +593,14 @@ data class Rpf3ClipRef(
     }
 
     private fun playNext() {
+        val currentGen = playGeneration.get()
         if (!_playing) return
-        if (advanceMultiChunkOrPickNext()) {
-            refreshCurrentSegmentMetadata()
-            startPlayback(currentSegmentUris, 0, 0L)
+        decodeExecutor.submit {
+            if (!_playing || playGeneration.get() != currentGen) return@submit
+            if (advanceMultiChunkOrPickNext()) {
+                if (!_playing || playGeneration.get() != currentGen) return@submit
+                startPlayback(currentSegmentUris, 0, 0L, currentGen)
+            }
         }
     }
 
@@ -820,50 +833,75 @@ data class Rpf3ClipRef(
         return true
     }
 
-    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long) {
-        if (activeListener != null) {
-            player.removeListener(activeListener!!)
-            activeListener = null
-        }
+    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+        mainHandler.post {
+            if (!_playing || playGeneration.get() != expectedGen) {
+                GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: startPlayback aborted: generation mismatch or not playing (gen=$expectedGen, cur=${playGeneration.get()})")
+                return@post
+            }
 
-        val factory = ProgressiveMediaSource.Factory(
-            DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))
-        )
-        val concatSource = ConcatenatingMediaSource(true)
-        for (u in uris) {
-            concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(u)))
-        }
-        player.setMediaSource(concatSource)
-        if (startWindowIndex > 0 || startPositionMs > 0L) {
-            player.seekTo(startWindowIndex, startPositionMs)
-        }
+            refreshCurrentSegmentMetadata()
 
-        activeListener = object : Player.Listener {
-            private var alreadyHandled = false
-            override fun onPlaybackStateChanged(state: Int) {
-                if (!alreadyHandled && state == Player.STATE_ENDED) {
-                    alreadyHandled = true
-                    player.removeListener(this)
-                    playNext()
+            if (activeListener != null) {
+                player.removeListener(activeListener!!)
+                activeListener = null
+            }
+
+            val factory = ProgressiveMediaSource.Factory(
+                DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))
+            )
+            val concatSource = ConcatenatingMediaSource(true)
+            for (u in uris) {
+                concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(u)))
+            }
+            player.setMediaSource(concatSource)
+            if (startWindowIndex > 0 || startPositionMs > 0L) {
+                player.seekTo(startWindowIndex, startPositionMs)
+            }
+
+            activeListener = object : Player.Listener {
+                private var alreadyHandled = false
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (!alreadyHandled && state == Player.STATE_ENDED) {
+                        alreadyHandled = true
+                        player.removeListener(this)
+                        if (_playing && playGeneration.get() == expectedGen) {
+                            playNext()
+                        }
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
+                    if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
+                        alreadyHandled = true
+                        player.removeListener(this)
+                        mainHandler.post {
+                            if (_playing && playGeneration.get() == expectedGen) {
+                                playNext()
+                            }
+                        }
+                    }
                 }
             }
-        }
-        player.addListener(activeListener!!)
-        player.prepare()
-        player.play()
+            player.addListener(activeListener!!)
+            if (!_playing || playGeneration.get() != expectedGen) return@post
+            player.prepare()
+            player.play()
 
-        if (activeMixMarkers.isNotEmpty()) {
-            startMixPoller()
-        } else {
-            stopMixPoller()
+            if (activeMixMarkers.isNotEmpty()) {
+                startMixPoller(expectedGen)
+            } else {
+                stopMixPoller()
+            }
         }
     }
 
-    private fun startMixPoller() {
+    private fun startMixPoller(expectedGen: Int) {
         mixPollerRunnable?.let { mainHandler.removeCallbacks(it) }
         val runnable = object : Runnable {
             override fun run() {
-                if (!_playing || activeMixMarkers.isEmpty()) {
+                if (!_playing || playGeneration.get() != expectedGen || activeMixMarkers.isEmpty()) {
                     return
                 }
                 updateMixTrackMetadata()
@@ -946,18 +984,26 @@ data class Rpf3ClipRef(
     private fun isContinuousMixStation(): Boolean {
         val archName = stationArchive.rpfName.lowercase(Locale.ROOT)
         val key = stationKey.lowercase(Locale.ROOT)
-        if (archName.contains("ny_classics") || archName.contains("dance_mix") ||
-            archName.contains("bobby_konders") || archName.contains("beat_95") ||
-            archName.contains("ramjam") ||
-            key.contains("ny_classics") || key.contains("dance_mix") ||
-            key.contains("bobby_konders") || key.contains("beat_95") ||
-            key.contains("ramjam")
+        if (archName.contains("radio_ny_classics") || archName.contains("ny_classics") ||
+            archName.contains("radio_dance_mix") || archName.contains("dance_mix") ||
+            archName.contains("radio_bobby_konders") || archName.contains("bobby_konders") ||
+            archName.contains("radio_beat_95") || archName.contains("beat_95") ||
+            archName.contains("radio_ramjamfm") || archName.contains("ramjam") ||
+            key.contains("radio_ny_classics") || key.contains("ny_classics") ||
+            key.contains("radio_dance_mix") || key.contains("dance_mix") ||
+            key.contains("radio_bobby_konders") || key.contains("bobby_konders") ||
+            key.contains("radio_beat_95") || key.contains("beat_95") ||
+            key.contains("radio_ramjamfm") || key.contains("ramjam")
         ) {
             return true
         }
         for (entry in stationArchive.getFileEntries()) {
-            if (entry.name.contains("MIX", ignoreCase = true) ||
-                stationArchive.readTrackMarkers(entry.name).isNotEmpty()) {
+            val upper = entry.name.uppercase(Locale.ROOT)
+            if (upper.contains("MIX") ||
+                upper.contains("LCHC_32K_PH") ||
+                upper.contains("EUROBEAT_MIX") ||
+                upper.contains("CROOKERS_MIX")
+            ) {
                 return true
             }
         }
@@ -968,8 +1014,11 @@ data class Rpf3ClipRef(
         ensureStationIndexed()
         if (isTalkRadio || isContinuousMixStation()) return emptyList()
         return allSongItems.filter { item ->
-            !item.trackName.contains("MIX", ignoreCase = true) &&
-                item.archive.readTrackMarkers(item.trackName).isEmpty() &&
+            val upper = item.trackName.uppercase(Locale.ROOT)
+            !upper.contains("MIX") &&
+                !upper.contains("LCHC_32K_PH") &&
+                !upper.contains("EUROBEAT_MIX") &&
+                !upper.contains("CROOKERS_MIX") &&
                 Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)?.isTalkShow != true
         }
     }
@@ -1020,9 +1069,10 @@ data class Rpf3ClipRef(
                     mainHandler.post { onTrackFinished() }
                     return@submit
                 }
+                val dur = readAudioDurationMs(context, uri)
                 mainHandler.post {
                     if (token != cleanPlayGeneration.get()) return@post
-                    player.playCleanQueue(listOf(uri)) {
+                    player.playCleanQueue(listOf(uri), listOf(dur)) {
                         if (token == cleanPlayGeneration.get()) {
                             onTrackFinished()
                         }

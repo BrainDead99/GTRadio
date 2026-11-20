@@ -50,6 +50,8 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
     var radioPlaybackState: Int = PlaybackStateCompat.STATE_NONE
     var isTracklistMode: Boolean = false
     private var cleanTrackListener: Player.Listener? = null
+    private var cleanSegmentDurationsMs: List<Long> = emptyList()
+    var onCleanQueuePrepared: ((totalDurationMs: Long) -> Unit)? = null
 
     var nextEnabled = false
     var previousEnabled = false
@@ -148,6 +150,9 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
     }
 
     fun getDurationMs(): Long {
+        if (cleanSegmentDurationsMs.isNotEmpty() && cleanSegmentDurationsMs.none { it <= 0L }) {
+            return cleanSegmentDurationsMs.sum()
+        }
         val timeline = exoPlayer.currentTimeline
         if (timeline.isEmpty) {
             val d = exoPlayer.duration
@@ -180,9 +185,14 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
     }
 
     fun getCurrentTrackPosition(): Long {
-        val timeline = exoPlayer.currentTimeline
         val curWin = exoPlayer.currentMediaItemIndex
         val curPos = exoPlayer.currentPosition.coerceAtLeast(0L)
+        if (cleanSegmentDurationsMs.isNotEmpty() && curWin >= 0) {
+            val validWin = curWin.coerceAtMost(cleanSegmentDurationsMs.size)
+            val sumPrefix = cleanSegmentDurationsMs.take(validWin).sum()
+            return sumPrefix + curPos
+        }
+        val timeline = exoPlayer.currentTimeline
         if (timeline.isEmpty || curWin <= 0) {
             return curPos
         }
@@ -200,6 +210,20 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
 
     fun seekToMs(positionMs: Long) {
         val target = positionMs.coerceAtLeast(0L)
+        if (cleanSegmentDurationsMs.isNotEmpty()) {
+            var accumulated = 0L
+            for (i in cleanSegmentDurationsMs.indices) {
+                val d = cleanSegmentDurationsMs[i].coerceAtLeast(0L)
+                if (target < accumulated + d || i == cleanSegmentDurationsMs.lastIndex) {
+                    val offsetInWindow = (target - accumulated).coerceAtLeast(0L)
+                    exoPlayer.seekTo(i, offsetInWindow)
+                    return
+                }
+                accumulated += d
+            }
+            exoPlayer.seekTo(cleanSegmentDurationsMs.lastIndex, 0L)
+            return
+        }
         val timeline = exoPlayer.currentTimeline
         if (timeline.isEmpty || timeline.windowCount <= 1) {
             exoPlayer.seekTo(target)
@@ -220,8 +244,9 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
         exoPlayer.seekTo(timeline.windowCount - 1, 0L)
     }
 
-    fun playCleanQueue(uris: List<Uri>, onEnded: () -> Unit) {
+    fun playCleanQueue(uris: List<Uri>, segmentDurationsMs: List<Long> = emptyList(), onEnded: () -> Unit) {
         stopCleanQueue()
+        cleanSegmentDurationsMs = segmentDurationsMs
         isTracklistMode = true
         radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
         nextEnabled = true
@@ -231,6 +256,11 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
         exoPlayer.clearMediaItems()
         for (uri in uris) {
             exoPlayer.addMediaItem(MediaItem.fromUri(uri))
+        }
+
+        val totalDur = getDurationMs()
+        if (totalDur > 0L) {
+            onCleanQueuePrepared?.invoke(totalDur)
         }
 
         cleanTrackListener = object : Player.Listener {
@@ -254,6 +284,7 @@ import androidx.media3.exoplayer.video.spherical.CameraMotionListener
             exoPlayer.removeListener(it)
             cleanTrackListener = null
         }
+        cleanSegmentDurationsMs = emptyList()
         isTracklistMode = false
         radioPlaybackState = PlaybackStateCompat.STATE_STOPPED
         exoPlayer.stop()

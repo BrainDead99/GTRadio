@@ -11,6 +11,7 @@ import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
@@ -18,6 +19,7 @@ import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
+import com.sc.gtradio.common.GTRadioLogger
 import java.io.File
 import java.util.*
 
@@ -36,6 +38,8 @@ import java.util.*
 
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val playGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val decodeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     override fun supportsTracklist(): Boolean {
         return !isWctr && stationMeta.streamCode != "ADVERTS" && stationMeta.songGroups.isNotEmpty()
@@ -75,10 +79,11 @@ import java.util.*
             if (sg.cleanOutroTrack != null && sg.cleanOutroTrack > 0) {
                 stationArchive.materializeTrackUri(sg.cleanOutroTrack)?.let { uris.add(it) }
             }
+            val durations = uris.map { readAudioDurationMs(context, it) }
             mainHandler.post {
                 if (token == cleanPlayGeneration.get()) {
                     if (uris.isNotEmpty()) {
-                        player.playCleanQueue(uris) {
+                        player.playCleanQueue(uris, durations) {
                             if (token == cleanPlayGeneration.get()) {
                                 onTrackFinished()
                             }
@@ -365,6 +370,8 @@ import java.util.*
     }
 
     override fun stop() {
+        val gen = playGeneration.incrementAndGet()
+        GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: stop() called (gen=$gen)")
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
             stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
@@ -379,23 +386,28 @@ import java.util.*
     }
 
     override fun play() {
+        val currentGen = playGeneration.incrementAndGet()
+        GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: play() called (gen=$currentGen)")
         _playing = true
         player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
-        if (lastStoppedTimeMs > 0L && currentSegmentUris.isNotEmpty() && currentSegmentUris.all { u -> u.path?.let { File(it).exists() } == true }) {
-            val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-            resumeFromRealTime(elapsedMs)
-        } else {
-            pickNextSegment()
-            stoppedWindowIndex = 0
-            stoppedPositionMs = 0L
-            resumeFromRealTime(rng.nextInt(45_000).toLong())
+        decodeExecutor.submit {
+            if (!_playing || playGeneration.get() != currentGen) return@submit
+            if (lastStoppedTimeMs > 0L && currentSegmentUris.isNotEmpty() && currentSegmentUris.all { u -> u.path?.let { File(it).exists() } == true }) {
+                val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+                resumeFromRealTime(elapsedMs, currentGen)
+            } else {
+                pickNextSegment()
+                stoppedWindowIndex = 0
+                stoppedPositionMs = 0L
+                resumeFromRealTime(rng.nextInt(45_000).toLong(), currentGen)
+            }
         }
     }
 
-    private fun resumeFromRealTime(rawElapsedMs: Long) {
+    private fun resumeFromRealTime(rawElapsedMs: Long, expectedGen: Int) {
         var remainingMs = if (rawElapsedMs > 600_000L) (rawElapsedMs % 600_000L) else rawElapsedMs
         var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
@@ -408,8 +420,8 @@ import java.util.*
                 val durMs = getFileDurationMs(uri)
                 val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
                 if (remainingMs < timeLeftMs) {
-                    refreshCurrentSegmentMetadata()
-                    startPlayback(currentSegmentUris, i, posMs + remainingMs)
+                    if (!_playing || playGeneration.get() != expectedGen) return
+                    startPlayback(currentSegmentUris, i, posMs + remainingMs, expectedGen)
                     return
                 } else {
                     remainingMs -= timeLeftMs
@@ -422,17 +434,21 @@ import java.util.*
         }
 
         if (currentSegmentUris.isNotEmpty()) {
-            refreshCurrentSegmentMetadata()
-            startPlayback(currentSegmentUris, 0, 0L)
+            if (!_playing || playGeneration.get() != expectedGen) return
+            startPlayback(currentSegmentUris, 0, 0L, expectedGen)
         }
     }
 
     private fun playNext() {
+        val currentGen = playGeneration.get()
         if (!_playing) return
-        pickNextSegment()
-        if (currentSegmentUris.isNotEmpty()) {
-            refreshCurrentSegmentMetadata()
-            startPlayback(currentSegmentUris, 0, 0L)
+        decodeExecutor.submit {
+            if (!_playing || playGeneration.get() != currentGen) return@submit
+            pickNextSegment()
+            if (currentSegmentUris.isNotEmpty()) {
+                if (!_playing || playGeneration.get() != currentGen) return@submit
+                startPlayback(currentSegmentUris, 0, 0L, currentGen)
+            }
         }
     }
 
@@ -574,36 +590,57 @@ import java.util.*
         return true
     }
 
-    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long) {
-        if (activeListener != null) {
-            player.removeListener(activeListener!!)
-            activeListener = null
-        }
+    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+        mainHandler.post {
+            if (!_playing || playGeneration.get() != expectedGen) return@post
+            refreshCurrentSegmentMetadata()
 
-        val factory = ProgressiveMediaSource.Factory(
-            DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))
-        )
-        val concatSource = ConcatenatingMediaSource(true)
-        for (u in uris) {
-            concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(u)))
-        }
-        player.setMediaSource(concatSource)
-        if (startWindowIndex > 0 || startPositionMs > 0L) {
-            player.seekTo(startWindowIndex, startPositionMs)
-        }
+            if (activeListener != null) {
+                player.removeListener(activeListener!!)
+                activeListener = null
+            }
 
-        activeListener = object : Player.Listener {
-            private var alreadyHandled = false
-            override fun onPlaybackStateChanged(state: Int) {
-                if (!alreadyHandled && state == Player.STATE_ENDED) {
-                    alreadyHandled = true
-                    player.removeListener(this)
-                    playNext()
+            val factory = ProgressiveMediaSource.Factory(
+                DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))
+            )
+            val concatSource = ConcatenatingMediaSource(true)
+            for (u in uris) {
+                concatSource.addMediaSource(factory.createMediaSource(MediaItem.fromUri(u)))
+            }
+            player.setMediaSource(concatSource)
+            if (startWindowIndex > 0 || startPositionMs > 0L) {
+                player.seekTo(startWindowIndex, startPositionMs)
+            }
+
+            activeListener = object : Player.Listener {
+                private var alreadyHandled = false
+                override fun onPlaybackStateChanged(state: Int) {
+                    if (!alreadyHandled && state == Player.STATE_ENDED) {
+                        alreadyHandled = true
+                        player.removeListener(this)
+                        if (_playing && playGeneration.get() == expectedGen) {
+                            playNext()
+                        }
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
+                    if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
+                        alreadyHandled = true
+                        player.removeListener(this)
+                        mainHandler.post {
+                            if (_playing && playGeneration.get() == expectedGen) {
+                                playNext()
+                            }
+                        }
+                    }
                 }
             }
+            player.addListener(activeListener!!)
+            if (!_playing || playGeneration.get() != expectedGen) return@post
+            player.prepare()
+            player.play()
         }
-        player.addListener(activeListener!!)
-        player.prepare()
-        player.play()
     }
 }

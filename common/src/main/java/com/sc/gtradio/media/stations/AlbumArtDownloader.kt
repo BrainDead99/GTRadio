@@ -38,9 +38,16 @@ object AlbumArtDownloader {
     private val bgExecutor = Executors.newSingleThreadExecutor()
 
     private val yearRegex = Regex("^(\\d{4})")
-    private val compilationPenaltyRegex = Regex(
-        "\\b(greatest hits|best of|essential|anthology|collection|ultimate|remaster|deluxe|expanded|anniversary|reissue|remix|mixes|karaoke|tribute|grand theft auto|included in the game|soundtrack|ost|various artists|now that's what i call|number 1|number one|hits of the|classic rock|reunion|box set|complete|singles|live at|live in|from the beginning)\\b|gold:",
+    private val hardPenaltyRegex = Regex(
+        "\\b(greatest hits|best of|essential|anthology|collection|gold|ultimate|box set|various artists|soundtrack|ost|karaoke|tribute|ambient translations|lullaby|relaxing|healing|piano version|instrumental|hits of the|now that's what i call|classic rock|grand theft auto|included in the game|number 1|number one|singles|live at|live in|reunion|from the beginning)\\b|gold:",
         RegexOption.IGNORE_CASE
+    )
+    private val tieBreakerPenaltyRegex = Regex(
+        "\\b(remaster|deluxe|expanded|anniversary|reissue|bonus track|edition)\\b",
+        RegexOption.IGNORE_CASE
+    )
+    private val SPAM_ARTIST_WORDS = setOf(
+        "relaxing", "healing", "lullaby", "karaoke", "tribute", "soundtrack", "ambient"
     )
 
     private val STOP_WORDS = setOf(
@@ -145,19 +152,34 @@ object AlbumArtDownloader {
             return Pair(false, -90)
         }
 
-        // Substring containment of primary artist >= 3 chars
-        if (primTarget.length >= 3 && (normCand.contains(primTarget) || normTarget.contains(primCand) || alphaCand.contains(alphaPrimTarget))) {
-            return Pair(true, 40)
+        // Reject candidates whose artistName contains generic spam words unless present in query artist
+        val spamInCand = SPAM_ARTIST_WORDS.any { spam ->
+            normCand.contains(spam) && !normTarget.contains(spam)
+        }
+        if (spamInCand) {
+            return Pair(false, -90)
         }
 
-        // Token overlap >= 50%
-        val targetTokens = primTarget.split(" ").filter { it.length >= 2 }
-        val candTokens = normCand.split(" ").filter { it.length >= 2 }
+        // Token overlap >= 60% of primary artist tokens matched as whole words
+        // (Do NOT use raw substring containment of a single generic word like "cafe" inside "Relaxing and Healing Cafe Hours")
+        val targetTokens = primTarget.split(" ").map { it.trim() }.filter { it.length >= 2 }
+        val candTokens = normCand.split(" ").map { it.trim() }.filter { it.length >= 2 }
         if (targetTokens.isNotEmpty() && candTokens.isNotEmpty()) {
-            val overlap = targetTokens.count { candTokens.contains(it) }
+            val candSet = candTokens.toSet()
+            val overlap = targetTokens.count { candSet.contains(it) }
             val ratio = overlap.toDouble() / targetTokens.size
-            if (ratio >= 0.5) {
-                val score = if (ratio >= 0.8) 45 else 35
+            val candRatio = overlap.toDouble() / candTokens.size
+
+            if (ratio >= 0.6) {
+                // Prevent single-word target (e.g. "Cafe") from matching multi-word candidate (e.g. "Red Café")
+                // and multi-word target (e.g. "Red Café") from matching single-word candidate (e.g. "Cafe")
+                if (targetTokens.size == 1 && candTokens.size > 1) {
+                    return Pair(false, 0)
+                }
+                if (candTokens.size == 1 && targetTokens.size > 1) {
+                    return Pair(false, 0)
+                }
+                val score = if (ratio >= 0.8 && candRatio >= 0.8) 45 else 35
                 return Pair(true, score)
             }
         }
@@ -208,6 +230,7 @@ object AlbumArtDownloader {
         return rawCol
             .replace(Regex("\\s*\\([^)]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue|Bonus Track)[^)]*\\)", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\s*\\[[^]]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue|Bonus Track)[^]]*\\]", RegexOption.IGNORE_CASE), "")
+            .replace(Regex("\\s*-\\s*(?:Deluxe Edition|Deluxe Version|Remastered|Remaster)\\s*$", RegexOption.IGNORE_CASE), "")
             .replace(Regex("\\s*-\\s*(?:Single|EP)\\s*$", RegexOption.IGNORE_CASE), "")
             .trim()
     }
@@ -235,8 +258,10 @@ object AlbumArtDownloader {
             score -= 15
         }
 
-        if (compilationPenaltyRegex.containsMatchIn(collectionName)) {
-            score -= 75
+        if (hardPenaltyRegex.containsMatchIn(collectionName)) {
+            score -= 80
+        } else if (tieBreakerPenaltyRegex.containsMatchIn(collectionName)) {
+            score -= 15
         } else {
             val isSingleOrEp = collectionName.endsWith(" - Single", ignoreCase = true) ||
                     collectionName.endsWith(" - EP", ignoreCase = true) ||
@@ -272,8 +297,9 @@ object AlbumArtDownloader {
                 finalBmp.compress(Bitmap.CompressFormat.JPEG, 82, out)
             }
             if (albumName.isNotBlank()) {
-                txtFile.writeText(albumName)
-                albumNameCache[key] = albumName
+                val cleanAlbum = cleanCollectionName(albumName)
+                txtFile.writeText(cleanAlbum)
+                albumNameCache[key] = cleanAlbum
             }
             synchronized(memoryArtCache) {
                 memoryArtCache.put(key, finalBmp)

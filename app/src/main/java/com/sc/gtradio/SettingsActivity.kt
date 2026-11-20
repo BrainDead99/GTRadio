@@ -327,8 +327,8 @@ class SettingsActivity : AppCompatActivity() {
                 .show()
         }
 
-        private fun updateClearArtSummary(pref: Preference) {
-            val ctx = context ?: return
+        private fun updateClearArtSummary(pref: Preference, ctxOverride: Context? = null) {
+            val ctx = ctxOverride ?: context ?: return
             val (count, bytes) = AlbumArtDownloader.getAlbumArtCacheStats(ctx)
             if (count == 0) {
                 pref.summary = "Cache is empty (0.00 MB)."
@@ -393,7 +393,7 @@ class SettingsActivity : AppCompatActivity() {
                     scanPref.summary = "Complete! Cached $finalOk / $total era-accurate album covers offline."
                     val clearArtPref = findPreference<Preference>("clear_album_art_cache")
                     if (clearArtPref != null) {
-                        updateClearArtSummary(clearArtPref)
+                        updateClearArtSummary(clearArtPref, ctx)
                     }
                 }
             }

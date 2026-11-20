@@ -147,6 +147,15 @@ enum class PlaybackMode {
     private val radioPlayer: GTRadioPlayer by lazy {
         GTRadioPlayer(exoPlayer).apply {
             addListener(playerListener)
+            onCleanQueuePrepared = { totalDur ->
+                if (playbackMode == PlaybackMode.TRACKLIST) {
+                    val currentTrack = activeTracklistTracks.getOrNull(activeTracklistIndex)
+                    if (currentTrack != null) {
+                        val art = AlbumArtDownloader.getCachedAlbumArt(applicationContext, currentTrack.artist, currentTrack.title)
+                        publishTracklistMetadata(currentTrack, activeTracklistIndex, art, totalDur)
+                    }
+                }
+            }
         }
     }
 
@@ -630,18 +639,14 @@ enum class PlaybackMode {
         val currentUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "") ?: ""
 
         if (parentId == TracklistContract.ROOT_ID) {
-            if (groupsLoaded && cachedUri == currentUri) {
-                result.sendResult(buildTracklistRootItems())
-            } else {
-                result.detach()
-                scanExecutor.submit {
-                    ensureGroupsLoadedSync(currentUri)
-                    val items = buildTracklistRootItems()
-                    try {
-                        result.sendResult(items)
-                    } catch (e: Exception) {
-                        GTRadioLogger.log("GTRadioMusicService: sendResult failed for TracklistRoot", e)
-                    }
+            result.detach()
+            scanExecutor.submit {
+                ensureGroupsLoadedSync(currentUri)
+                val items = buildTracklistRootItems()
+                try {
+                    result.sendResult(items)
+                } catch (e: Exception) {
+                    GTRadioLogger.log("GTRadioMusicService: sendResult failed for TracklistRoot", e)
                 }
             }
             return
@@ -649,18 +654,14 @@ enum class PlaybackMode {
 
         if (parentId.startsWith(TracklistContract.GROUP_PREFIX)) {
             val rawGroupId = parentId.removePrefix(TracklistContract.GROUP_PREFIX)
-            if (groupsLoaded && cachedUri == currentUri) {
-                result.sendResult(buildTracklistGroupStations(rawGroupId))
-            } else {
-                result.detach()
-                scanExecutor.submit {
-                    ensureGroupsLoadedSync(currentUri)
-                    val items = buildTracklistGroupStations(rawGroupId)
-                    try {
-                        result.sendResult(items)
-                    } catch (e: Exception) {
-                        GTRadioLogger.log("GTRadioMusicService: sendResult failed for $parentId", e)
-                    }
+            result.detach()
+            scanExecutor.submit {
+                ensureGroupsLoadedSync(currentUri)
+                val items = buildTracklistGroupStations(rawGroupId)
+                try {
+                    result.sendResult(items)
+                } catch (e: Exception) {
+                    GTRadioLogger.log("GTRadioMusicService: sendResult failed for $parentId", e)
                 }
             }
             return
@@ -668,18 +669,14 @@ enum class PlaybackMode {
 
         if (parentId.startsWith(TracklistContract.STATION_PREFIX)) {
             val rawStationId = parentId.removePrefix(TracklistContract.STATION_PREFIX)
-            if (groupsLoaded && cachedUri == currentUri) {
-                result.sendResult(buildTracklistStationSongs(rawStationId))
-            } else {
-                result.detach()
-                scanExecutor.submit {
-                    ensureGroupsLoadedSync(currentUri)
-                    val items = buildTracklistStationSongs(rawStationId)
-                    try {
-                        result.sendResult(items)
-                    } catch (e: Exception) {
-                        GTRadioLogger.log("GTRadioMusicService: sendResult failed for $parentId", e)
-                    }
+            result.detach()
+            scanExecutor.submit {
+                ensureGroupsLoadedSync(currentUri)
+                val items = buildTracklistStationSongs(rawStationId)
+                try {
+                    result.sendResult(items)
+                } catch (e: Exception) {
+                    GTRadioLogger.log("GTRadioMusicService: sendResult failed for $parentId", e)
                 }
             }
             return

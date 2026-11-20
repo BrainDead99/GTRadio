@@ -6,6 +6,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.PlaybackStateCompat
@@ -35,6 +37,8 @@ import java.util.*
 
     private val allSongs = ArrayList<Song>()
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+    private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override var newsReportsEnabled: Boolean = false
     override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
@@ -668,9 +672,16 @@ import java.util.*
 
         val uris = listOfNotNull(song.mainIntroUri, song.mainSongUri, song.mainOutroUri)
         if (uris.isNotEmpty()) {
-            player.playCleanQueue(uris) {
-                if (token == cleanPlayGeneration.get()) {
-                    onTrackFinished()
+            cleanPlayExecutor.submit {
+                val durations = uris.map { readAudioDurationMs(context, it) }
+                mainHandler.post {
+                    if (token == cleanPlayGeneration.get()) {
+                        player.playCleanQueue(uris, durations) {
+                            if (token == cleanPlayGeneration.get()) {
+                                onTrackFinished()
+                            }
+                        }
+                    }
                 }
             }
         } else {

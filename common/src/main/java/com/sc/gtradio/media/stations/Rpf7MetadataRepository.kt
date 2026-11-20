@@ -583,6 +583,10 @@ object Rpf7MetadataRepository {
         return stationInfoByRpf[lower] ?: stationInfoByRpf["${lower}.rpf"]
     }
 
+    fun isContinuousMix(rpfName: String): Boolean {
+        return getStationInfo(rpfName)?.isContinuousMix == true
+    }
+
     fun getTrackMeta(internalName: String, fallbackStationTitle: String = ""): Rpf7TrackMeta {
         val cleanStem = internalName.removeSuffix(".awc").uppercase(Locale.ROOT)
         val direct = trackMetaMap[cleanStem]
