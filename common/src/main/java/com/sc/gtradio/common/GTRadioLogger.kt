@@ -26,11 +26,20 @@ object GTRadioLogger {
     private const val PREF_LAST_EXIT_TIMESTAMP = "last_logged_exit_timestamp"
     private const val RING_BUFFER_CAPACITY = 1200
     private const val ART_BUFFER_CAPACITY = 150
+    private const val SESSION_LOG_FILE = "last_session.log"
+    private const val MAX_SESSION_LOG_BYTES = 64 * 1024L
+    private const val MAX_SESSION_LOG_LINES = 300
 
     private val memoryLogs = ArrayDeque<String>(RING_BUFFER_CAPACITY)
     private val artMemoryLogs = ArrayDeque<String>(ART_BUFFER_CAPACITY)
     private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private var appContext: Context? = null
+    private var previousSessionTail: String = ""
+
+    private val sessionLogExecutor = Executors.newSingleThreadExecutor()
+    @Volatile private var lastSessionFlushUptime = 0L
+    @Volatile private var sessionFlushPending = false
+    private val sessionFlushLock = Any()
 
     @Volatile
     private var isVerboseCached: Boolean? = null
@@ -62,11 +71,21 @@ object GTRadioLogger {
     fun init(context: Context) {
         val ctx = context.applicationContext ?: context
         appContext = ctx
+        loadPreviousSessionLog(ctx)
         try {
             isVerboseCached = PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean(PREF_VERBOSE_LOGGING, false)
         } catch (_: Exception) {}
         syncMainThreadWatchdog()
         checkHistoricalExitReasons(ctx)
+    }
+
+    private fun loadPreviousSessionLog(ctx: Context) {
+        try {
+            val sessionFile = File(ctx.filesDir, SESSION_LOG_FILE)
+            if (sessionFile.exists() && sessionFile.length() > 0L) {
+                previousSessionTail = sessionFile.readText(Charsets.UTF_8).trim()
+            }
+        } catch (_: Exception) {}
     }
 
     fun isVerboseEnabled(context: Context? = null): Boolean {
@@ -130,6 +149,70 @@ object GTRadioLogger {
             memoryLogs.addLast(fullMsg)
         }
         appendToDisk(fullMsg + "\n")
+        val isCritical = error != null ||
+            message.contains("ERROR", ignoreCase = true) ||
+            message.contains("CRASH", ignoreCase = true) ||
+            message.contains("ANR", ignoreCase = true)
+        scheduleSessionLogFlush(isCritical)
+    }
+
+    private fun scheduleSessionLogFlush(forceImmediate: Boolean) {
+        val now = SystemClock.uptimeMillis()
+        synchronized(sessionFlushLock) {
+            if (forceImmediate) {
+                lastSessionFlushUptime = now
+                sessionFlushPending = false
+                sessionLogExecutor.submit { flushSessionLogToDisk() }
+            } else {
+                if (now - lastSessionFlushUptime >= 3000L) {
+                    lastSessionFlushUptime = now
+                    sessionFlushPending = false
+                    sessionLogExecutor.submit { flushSessionLogToDisk() }
+                } else if (!sessionFlushPending) {
+                    sessionFlushPending = true
+                    val delay = 3000L - (now - lastSessionFlushUptime)
+                    sessionLogExecutor.submit {
+                        SystemClock.sleep(delay)
+                        synchronized(sessionFlushLock) {
+                            sessionFlushPending = false
+                            lastSessionFlushUptime = SystemClock.uptimeMillis()
+                        }
+                        flushSessionLogToDisk()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun flushSessionLogToDisk() {
+        val ctx = appContext ?: return
+        val linesSnapshot: List<String>
+        synchronized(this) {
+            val startIdx = (memoryLogs.size - MAX_SESSION_LOG_LINES).coerceAtLeast(0)
+            linesSnapshot = memoryLogs.toList().drop(startIdx)
+        }
+        if (linesSnapshot.isEmpty()) return
+
+        var content = linesSnapshot.joinToString("\n")
+        var bytes = content.toByteArray(Charsets.UTF_8)
+        if (bytes.size > MAX_SESSION_LOG_BYTES) {
+            val cut = (bytes.size - MAX_SESSION_LOG_BYTES).toInt()
+            var start = cut
+            while (start < bytes.size && bytes[start] != '\n'.code.toByte()) {
+                start++
+            }
+            if (start < bytes.size - 1) start++
+            content = String(bytes, start, bytes.size - start, Charsets.UTF_8)
+        }
+
+        try {
+            val targetFile = File(ctx.filesDir, SESSION_LOG_FILE)
+            val tempFile = File(ctx.filesDir, "$SESSION_LOG_FILE.tmp")
+            FileOutputStream(tempFile, false).use { it.write(content.toByteArray(Charsets.UTF_8)) }
+            if (tempFile.exists()) {
+                tempFile.renameTo(targetFile)
+            }
+        } catch (_: Exception) {}
     }
 
     fun logVerbose(category: String, message: String) {
@@ -389,7 +472,20 @@ object GTRadioLogger {
             sb.append("\n")
         }
 
+        if (previousSessionTail.isNotBlank()) {
+            sb.append("\n========================================\n")
+            sb.append("=== Previous Session Log (Before Last Exit) ===\n")
+            sb.append("========================================\n")
+            sb.append(previousSessionTail)
+            sb.append("\n")
+        }
+
         return sb.toString()
+    }
+
+    fun getDiagnosticReport(context: Context? = appContext): String {
+        val ctx = context ?: appContext ?: return "No context available"
+        return buildDiagnosticReport(ctx)
     }
 
     @Synchronized
@@ -401,8 +497,12 @@ object GTRadioLogger {
     fun clear(context: Context? = appContext) {
         memoryLogs.clear()
         artMemoryLogs.clear()
+        previousSessionTail = ""
         try {
-            context?.let { File(it.filesDir, "gtradio_debug.log").delete() }
+            context?.let {
+                File(it.filesDir, "gtradio_debug.log").delete()
+                File(it.filesDir, SESSION_LOG_FILE).delete()
+            }
             File("/sdcard/GTA SA RADIO PROJECT/gtradio_debug.log").delete()
         } catch (_: Exception) {}
         log("Logs cleared by user.")

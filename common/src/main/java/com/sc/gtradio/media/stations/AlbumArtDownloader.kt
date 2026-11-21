@@ -16,6 +16,7 @@ import java.text.Normalizer
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class CandidateResult(
     val source: String,
@@ -36,6 +37,24 @@ object AlbumArtDownloader {
     }
 
     private val bgExecutor = Executors.newSingleThreadExecutor()
+
+    private val bulkScanCancelled = AtomicBoolean(false)
+    private val bulkScanRunning = AtomicBoolean(false)
+
+    fun isBulkScanRunning(): Boolean = bulkScanRunning.get()
+
+    fun cancelBulkScan() {
+        bulkScanCancelled.set(true)
+    }
+
+    fun setBulkScanRunning(running: Boolean) {
+        bulkScanRunning.set(running)
+        if (running) {
+            bulkScanCancelled.set(false)
+        }
+    }
+
+    fun isBulkScanCancelled(): Boolean = bulkScanCancelled.get()
 
     private val yearRegex = Regex("^(\\d{4})")
     private val hardPenaltyRegex = Regex(
@@ -1101,6 +1120,7 @@ object AlbumArtDownloader {
     }
 
     fun clearAlbumArtCache(context: Context): Pair<Int, Long> {
+        cancelBulkScan()
         val stats = getAlbumArtCacheStats(context)
         val dir = File(context.filesDir, "era_album_art")
         if (dir.exists() && dir.isDirectory) {

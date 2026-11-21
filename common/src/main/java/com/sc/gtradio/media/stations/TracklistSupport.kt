@@ -45,4 +45,6 @@ object TracklistContract {
     const val EXTRA_TRACK_MAX_YEAR = "track_max_year"
     const val EXTRA_TRACK_COUNT = "gtradio_track_count"
     const val EXTRA_TRACK_INDEX = "gtradio_track_index"
+    const val EXTRA_DURATION_MS = "duration_ms"
+    const val EXTRA_STATION_GROUP_ID = "gtradio_station_group_id"
 }

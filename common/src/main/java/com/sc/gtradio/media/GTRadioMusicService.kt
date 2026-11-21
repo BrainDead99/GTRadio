@@ -80,6 +80,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         ExoPlayer.Builder(this)
             .setAudioAttributes(gtrAudioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
+            .setWakeMode(C.WAKE_MODE_LOCAL)
             .experimentalSetDynamicSchedulingEnabled(true)
             .build()
     }
@@ -94,6 +95,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                         val art = AlbumArtDownloader.getCachedAlbumArt(applicationContext, currentTrack.artist, currentTrack.title)
                         publishTracklistMetadata(currentTrack, activeTracklistIndex, art, totalDur)
                     }
+                    mediaLibrarySession.setSessionExtras(buildSessionExtras())
                 }
             }
         }
@@ -393,6 +395,7 @@ open class GTRadioMusicService : MediaLibraryService() {
             putString(TracklistContract.EXTRA_PLAYBACK_MODE, playbackMode.name)
             putBoolean(TracklistContract.EXTRA_SHUFFLE_ENABLED, shuffleEnabled)
             putInt(TracklistContract.EXTRA_REPEAT_MODE, repeatMode)
+            putString(TracklistContract.EXTRA_STATION_GROUP_ID, activeStationGroupId ?: "")
             if (playbackMode == PlaybackMode.TRACKLIST) {
                 val currentTrack = activeTracklistTracks.getOrNull(activeTracklistIndex)
                 putString(TracklistContract.EXTRA_STATION_ID, activeTracklistStationId ?: "")
@@ -402,6 +405,12 @@ open class GTRadioMusicService : MediaLibraryService() {
                 putString(TracklistContract.EXTRA_TRACK_ALBUM, currentTrack?.stationName ?: "")
                 putInt(TracklistContract.EXTRA_TRACK_INDEX, activeTracklistIndex)
                 putInt(TracklistContract.EXTRA_TRACK_COUNT, activeTracklistTracks.size)
+                val dur = radioPlayer.getDurationMs()
+                if (dur > 0L) {
+                    putLong(TracklistContract.EXTRA_DURATION_MS, dur)
+                }
+            } else {
+                putString(TracklistContract.EXTRA_STATION_ID, activeStation?.mediaId ?: "")
             }
         }
     }
@@ -506,6 +515,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         if (isHandlingStop) return
         isHandlingStop = true
         try {
+            radioPlayer.setTransitionLoading(false)
             radioPlayer.hasActiveQueueOrStation = false
             radioPlayer.notifyAvailableCommandsChanged()
             if (playbackMode == PlaybackMode.TRACKLIST) {
@@ -624,6 +634,10 @@ open class GTRadioMusicService : MediaLibraryService() {
         val switchStartTime = SystemClock.uptimeMillis()
         playerReadyForCurrentSwitch = false
 
+        radioPlayer.setTransitionLoading(true)
+        radioPlayer.stopInternal()
+        activeStation?.stop()
+
         activeStation = station
         activeStationGroupId = group.mediaItem.mediaId
 
@@ -678,6 +692,10 @@ open class GTRadioMusicService : MediaLibraryService() {
     private fun playTracklistTrack(index: Int) {
         if (index !in activeTracklistTracks.indices) return
         val station = activeTracklistStation ?: return
+
+        radioPlayer.setTransitionLoading(true)
+        radioPlayer.stopInternal()
+
         activeTracklistIndex = index
         if (index !in tracklistPlayedIndices) {
             tracklistPlayedIndices.add(index)
@@ -1084,6 +1102,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                     val art = AlbumArtDownloader.getCachedAlbumArt(applicationContext, currentTrack.artist, currentTrack.title)
                     publishTracklistMetadata(currentTrack, activeTracklistIndex, art, dur)
                 }
+                mediaLibrarySession.setSessionExtras(buildSessionExtras())
             }
         }
 
@@ -1094,6 +1113,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         }
 
         override fun onPlayerError(error: PlaybackException) {
+            radioPlayer.setTransitionLoading(false)
             var message = R.string.generic_error
             when (error.errorCode) {
                 ExoPlaybackException.TYPE_SOURCE -> {

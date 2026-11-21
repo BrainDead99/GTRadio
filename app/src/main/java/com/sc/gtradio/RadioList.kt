@@ -32,6 +32,8 @@ import com.sc.gtradio.common.DynamicThemePack
 import com.sc.gtradio.databinding.FragmentRadiolistBinding
 import com.sc.gtradio.databinding.FragmentStationitemBinding
 import com.sc.gtradio.media.*
+import com.sc.gtradio.media.stations.AlbumArtDownloader
+import com.sc.gtradio.media.stations.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -694,7 +696,10 @@ class RadioList : Fragment() {
 
         val stripMode = isStripLayout(pack)
         val isPlaying = currentPlaybackState.isPlaying
-        val activeMediaId = currentMetadata.mediaId ?: ""
+        val activeMediaId = currentMetadata.mediaId
+            ?: currentPlaybackState.extras?.getString(TracklistContract.EXTRA_STATION_ID)
+            ?: ""
+        val activeGroupId = currentPlaybackState.extras?.getString(TracklistContract.EXTRA_STATION_GROUP_ID)
 
         // Check if pending tapped station should expire or cleared
         if (pendingTappedMediaId != null) {
@@ -703,7 +708,10 @@ class RadioList : Fragment() {
             }
         }
 
-        val activeBelongsToThisSeries = activeMediaId.isNotBlank() && loadedStations.any { it.mediaId == activeMediaId }
+        val activeBelongsToThisSeries = (activeMediaId.isNotBlank() && loadedStations.any { it.mediaId == activeMediaId }) ||
+            (!activeGroupId.isNullOrBlank() && activeGroupId == stationGroupId) ||
+            (!currentMetadata.groupName.isNullOrBlank() && loadedStations.any { it.mediaMetadata.albumTitle?.toString().equals(currentMetadata.groupName, ignoreCase = true) }) ||
+            (!currentMetadata.stationName.isNullOrBlank() && loadedStations.any { it.mediaMetadata.title?.toString().equals(currentMetadata.stationName, ignoreCase = true) })
         val effectivePlaying = isPlaying && activeBelongsToThisSeries
 
         val activeStationFromMeta = if (activeBelongsToThisSeries) {
@@ -838,29 +846,53 @@ class RadioList : Fragment() {
 
         val isSongOrShow = effectivePlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
             currentMetadata.isSong
-        if (isSongOrShow) {
+        if (effectivePlaying) {
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
+            binding.themeNowPlayingLabel.visibility = View.VISIBLE
             binding.themeSongArt.alpha = 1.0f
             val songTitle = currentMetadata.title?.toString() ?: ""
             val cleanArtist = currentMetadata.artist?.toString() ?: ""
             val cleanAlbum = currentMetadata.albumArtist?.toString() ?: currentMetadata.albumTitle?.toString() ?: ""
 
-            binding.themeSongTitle.text = songTitle.uppercase()
-            binding.themeSongArtist.text = cleanArtist.uppercase()
+            if (isSongOrShow || songTitle.isNotBlank()) {
+                binding.themeSongTitle.visibility = View.VISIBLE
+                binding.themeSongTitle.text = songTitle.uppercase()
 
-            if (cleanAlbum.isNotBlank()) {
-                binding.themeSongAlbum.visibility = View.VISIBLE
-                binding.themeSongAlbum.text = cleanAlbum.uppercase()
+                if (cleanArtist.isNotBlank()) {
+                    binding.themeSongArtist.visibility = View.VISIBLE
+                    binding.themeSongArtist.text = cleanArtist.uppercase()
+                } else {
+                    binding.themeSongArtist.visibility = View.GONE
+                }
+
+                if (cleanAlbum.isNotBlank()) {
+                    binding.themeSongAlbum.visibility = View.VISIBLE
+                    binding.themeSongAlbum.text = cleanAlbum.uppercase()
+                } else {
+                    binding.themeSongAlbum.visibility = View.GONE
+                }
             } else {
-                binding.themeSongAlbum.visibility = View.INVISIBLE
+                binding.themeSongTitle.visibility = View.VISIBLE
+                binding.themeSongTitle.text = gridStationUpper
+                binding.themeSongArtist.text = ""
+                binding.themeSongArtist.visibility = View.GONE
+                binding.themeSongAlbum.text = ""
+                binding.themeSongAlbum.visibility = View.GONE
             }
 
-            val artBmp = currentMetadata.iconBitmap
+            var artBmp = currentMetadata.iconBitmap
+            if (artBmp == null && cleanArtist.isNotBlank() && songTitle.isNotBlank()) {
+                artBmp = AlbumArtDownloader.getCachedAlbumArt(requireContext(), cleanArtist, songTitle)
+            }
+            if (artBmp == null) {
+                artBmp = stationOnBitmaps[activeMediaId]
+            }
             if (artBmp != null) {
                 binding.themeSongArt.setImageBitmap(artBmp)
             } else {
                 binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
             }
+            binding.themeSongArt.visibility = View.VISIBLE
         } else {
             binding.themeNowPlayingGroup.visibility = View.INVISIBLE
             binding.themeSongTitle.text = ""

@@ -57,6 +57,7 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
     val playbackState = MutableLiveData<GTRadioPlaybackState>().apply { postValue(EMPTY_PLAYBACK_STATE) }
     val nowPlaying = MutableLiveData<MediaMetadata>().apply { postValue(NOTHING_PLAYING) }
     val isPlaying = MutableLiveData<Boolean>().apply { postValue(false) }
+    val sessionExtras = MutableLiveData<Bundle?>().apply { postValue(null) }
 
     val transportControls = TransportControls()
 
@@ -76,6 +77,9 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
                 val browser = browserFuture.get()
                 mediaBrowser = browser
                 browser.addListener(PlayerListener())
+                val extras = browser.sessionExtras
+                currentExtras = extras
+                sessionExtras.postValue(extras)
                 isConnected.postValue(true)
                 GTRadioLogger.log("MusicServiceConnection: MediaBrowser connected successfully")
 
@@ -225,6 +229,37 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
         }
     }
 
+    fun durationMs(): Long {
+        val b = mediaBrowser
+        val browserDur = b?.duration ?: 0L
+        if (browserDur > 0L && browserDur != androidx.media3.common.C.TIME_UNSET) {
+            return browserDur
+        }
+        val sessionDur = sessionExtras.value?.getLong(com.sc.gtradio.media.stations.TracklistContract.EXTRA_DURATION_MS, 0L)
+            ?: currentExtras?.getLong(com.sc.gtradio.media.stations.TracklistContract.EXTRA_DURATION_MS, 0L)
+            ?: 0L
+        if (sessionDur > 0L) return sessionDur
+
+        val metaDur = nowPlaying.value?.extras?.getLong("duration_ms", 0L) ?: 0L
+        if (metaDur > 0L) return metaDur
+
+        val metaTracklistDur = nowPlaying.value?.extras?.getLong(com.sc.gtradio.media.stations.TracklistContract.EXTRA_DURATION_MS, 0L) ?: 0L
+        if (metaTracklistDur > 0L) return metaTracklistDur
+
+        return 0L
+    }
+
+    fun currentPositionMs(): Long {
+        val b = mediaBrowser
+        val pos = b?.currentPosition ?: -1L
+        if (pos >= 0L) return pos
+        return playbackState.value?.currentPlayBackPosition ?: 0L
+    }
+
+    fun seekTo(positionMs: Long) {
+        mediaBrowser?.seekTo(positionMs)
+    }
+
     private inner class BrowserListener : MediaBrowser.Listener {
         override fun onChildrenChanged(
             browser: MediaBrowser,
@@ -237,6 +272,7 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
 
         override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
             currentExtras = extras
+            sessionExtras.postValue(extras)
             updatePlaybackState()
         }
 

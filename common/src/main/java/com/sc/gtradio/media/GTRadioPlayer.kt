@@ -85,12 +85,49 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         }
     }
 
+    private var isTransitionLoading: Boolean = false
+
+    fun isTransitionLoading(): Boolean = isTransitionLoading
+
+    fun setTransitionLoading(loading: Boolean) {
+        if (isTransitionLoading == loading) return
+        val oldState = playbackState
+        val oldPwr = playWhenReady
+        isTransitionLoading = loading
+        val newState = playbackState
+        val newPwr = playWhenReady
+        if (oldState != newState) {
+            for (l in playerListeners) {
+                l.onPlaybackStateChanged(newState)
+            }
+        }
+        if (oldPwr != newPwr) {
+            for (l in playerListeners) {
+                l.onPlayWhenReadyChanged(newPwr, Player.PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            }
+        }
+    }
+
     override fun addListener(listener: Player.Listener) {
         playerListeners.add(listener)
         synchronized(wrappedListeners) {
             val wrapped = object : Player.Listener by listener {
                 override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
                     listener.onAvailableCommandsChanged(this@GTRadioPlayer.availableCommands)
+                }
+
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    val effectiveState = if (isTransitionLoading && (playbackState == Player.STATE_IDLE || playbackState == Player.STATE_ENDED)) {
+                        Player.STATE_BUFFERING
+                    } else {
+                        this@GTRadioPlayer.playbackState
+                    }
+                    listener.onPlaybackStateChanged(effectiveState)
+                }
+
+                override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                    val effectivePwr = if (isTransitionLoading) true else this@GTRadioPlayer.playWhenReady
+                    listener.onPlayWhenReadyChanged(effectivePwr, reason)
                 }
 
                 override fun onEvents(player: Player, events: Player.Events) {
@@ -127,15 +164,31 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
 
     //region Customized Functionality
     override fun getPlaybackState(): Int {
-        if (radioPlaybackState == RadioState.PLAYING) {
-            return Player.STATE_READY
-        } else if (radioPlaybackState == RadioState.STOPPED) {
-            return Player.STATE_IDLE
+        if (isTransitionLoading) {
+            val superState = super.getPlaybackState()
+            if (superState == Player.STATE_IDLE || superState == Player.STATE_ENDED || radioPlaybackState == RadioState.STOPPED || radioPlaybackState == RadioState.NONE) {
+                return Player.STATE_BUFFERING
+            }
         }
-        return super.getPlaybackState()
+        if (radioPlaybackState == RadioState.PLAYING) {
+            return if (isTransitionLoading) Player.STATE_BUFFERING else Player.STATE_READY
+        } else if (radioPlaybackState == RadioState.STOPPED) {
+            return if (isTransitionLoading) Player.STATE_BUFFERING else Player.STATE_IDLE
+        }
+        return if (isTransitionLoading) Player.STATE_BUFFERING else super.getPlaybackState()
+    }
+
+    override fun getPlayWhenReady(): Boolean {
+        if (isTransitionLoading) {
+            return true
+        }
+        return super.getPlayWhenReady()
     }
 
     override fun isPlaying(): Boolean {
+        if (isTransitionLoading) {
+            return false
+        }
         if (radioPlaybackState == RadioState.PLAYING) {
             return true
         }
@@ -145,6 +198,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     fun playInternal() {
         radioPlaybackState = RadioState.PLAYING
         super.play()
+        setTransitionLoading(false)
         notifyPlaybackStateChanged()
     }
 
@@ -278,15 +332,81 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         }
     }
 
+    private class SyntheticTransitionTimeline(private val mediaItem: MediaItem) : Timeline() {
+        override fun getWindowCount(): Int = 1
+        override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+            window.set(
+                Window.SINGLE_WINDOW_UID,
+                mediaItem,
+                null,
+                C.TIME_UNSET,
+                C.TIME_UNSET,
+                C.TIME_UNSET,
+                false,
+                true,
+                null,
+                0L,
+                C.TIME_UNSET,
+                0,
+                0,
+                0L
+            )
+            return window
+        }
+
+        override fun getPeriodCount(): Int = 1
+        override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+            period.set(
+                if (setIds) 0 else null,
+                if (setIds) Window.SINGLE_WINDOW_UID else null,
+                0,
+                C.TIME_UNSET,
+                0L
+            )
+            return period
+        }
+
+        override fun getIndexOfPeriod(uid: Any): Int {
+            return if (uid == Window.SINGLE_WINDOW_UID) 0 else C.INDEX_UNSET
+        }
+
+        override fun getUidOfPeriod(periodIndex: Int): Any = Window.SINGLE_WINDOW_UID
+    }
+
+    override fun getCurrentTimeline(): Timeline {
+        val superTimeline = super.getCurrentTimeline()
+        if (isTransitionLoading && super.getMediaItemCount() == 0) {
+            val item = getCurrentMediaItem() ?: MediaItem.Builder().setMediaId("gt_radio_active").setMediaMetadata(activeSessionMetadata).build()
+            return SyntheticTransitionTimeline(item)
+        }
+        return superTimeline
+    }
+
+    override fun getMediaItemCount(): Int {
+        val superCount = super.getMediaItemCount()
+        if (superCount == 0 && isTransitionLoading) {
+            return 1
+        }
+        return superCount
+    }
+
     override fun getCurrentMediaItem(): MediaItem? {
         val superItem = super.getCurrentMediaItem()
-        if (activeSessionMetadata != MediaMetadata.EMPTY || hasActiveQueueOrStation) {
-            val builder = superItem?.buildUpon() ?: MediaItem.Builder().setMediaId("gt_radio_active")
-            return builder
+        if (superItem != null) {
+            if (activeSessionMetadata != MediaMetadata.EMPTY || hasActiveQueueOrStation) {
+                return superItem.buildUpon()
+                    .setMediaMetadata(activeSessionMetadata)
+                    .build()
+            }
+            return superItem
+        }
+        if (isTransitionLoading || activeSessionMetadata != MediaMetadata.EMPTY || hasActiveQueueOrStation) {
+            return MediaItem.Builder()
+                .setMediaId("gt_radio_active")
                 .setMediaMetadata(activeSessionMetadata)
                 .build()
         }
-        return superItem
+        return null
     }
 
     override fun getMediaMetadata(): MediaMetadata = activeSessionMetadata

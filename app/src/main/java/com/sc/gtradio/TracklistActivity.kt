@@ -59,9 +59,17 @@ class TracklistActivity : AppCompatActivity() {
     private val tickerRunnable = object : Runnable {
         override fun run() {
             if (isActivityResumed && currentPlaybackState.isPlaying && !isUserSeeking) {
-                val currentPos = currentPlaybackState.position +
-                    ((SystemClock.elapsedRealtime() - currentPlaybackState.lastPositionUpdateTime) * currentPlaybackState.playbackSpeed).toLong()
-                val clampedPos = currentPos.coerceAtLeast(0L)
+                val durationMs = musicServiceConnection.durationMs()
+                if (durationMs > 0L) {
+                    if (binding.scrubSeekBar.max != durationMs.toInt()) {
+                        binding.scrubSeekBar.max = durationMs.toInt()
+                    }
+                    binding.scrubSeekBar.isEnabled = true
+                    binding.totalTimeText.text = formatDurationMs(durationMs)
+                }
+
+                val currentPos = musicServiceConnection.currentPositionMs()
+                val clampedPos = if (durationMs > 0L) currentPos.coerceIn(0L, durationMs) else currentPos.coerceAtLeast(0L)
                 binding.scrubSeekBar.progress = clampedPos.toInt()
                 binding.elapsedTimeText.text = formatDurationMs(clampedPos)
             }
@@ -123,6 +131,10 @@ class TracklistActivity : AppCompatActivity() {
         adapter.notifyDataSetChanged()
     }
 
+    private val sessionExtrasObserver = Observer<Bundle?> {
+        updateDurationAndPosition()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AlbumArtDownloader.init(applicationContext)
@@ -143,6 +155,7 @@ class TracklistActivity : AppCompatActivity() {
         musicServiceConnection.isConnected.observe(this, connectionObserver)
         musicServiceConnection.playbackState.observe(this, playbackStateObserver)
         musicServiceConnection.nowPlaying.observe(this, nowPlayingObserver)
+        musicServiceConnection.sessionExtras.observe(this, sessionExtrasObserver)
 
         if (musicServiceConnection.isConnected.value == true) {
             navigateTo(NavLevel.SERIES)
@@ -310,6 +323,25 @@ class TracklistActivity : AppCompatActivity() {
         })
     }
 
+    private fun updateDurationAndPosition() {
+        val durationMs = musicServiceConnection.durationMs()
+        if (durationMs > 0L) {
+            binding.scrubSeekBar.isEnabled = true
+            binding.scrubSeekBar.max = durationMs.toInt()
+            binding.totalTimeText.text = formatDurationMs(durationMs)
+        } else {
+            binding.scrubSeekBar.isEnabled = false
+            binding.scrubSeekBar.max = 0
+            binding.totalTimeText.text = "-:--"
+        }
+        if (!isUserSeeking) {
+            val currentPos = musicServiceConnection.currentPositionMs()
+            val clampedPos = if (durationMs > 0L) currentPos.coerceIn(0L, durationMs) else currentPos.coerceAtLeast(0L)
+            binding.scrubSeekBar.progress = clampedPos.toInt()
+            binding.elapsedTimeText.text = formatDurationMs(clampedPos)
+        }
+    }
+
     private fun updateNowPlaying(metadata: MediaMetadata) {
         val mediaId = metadata.mediaId
         if (!mediaId.isNullOrBlank()) {
@@ -325,11 +357,13 @@ class TracklistActivity : AppCompatActivity() {
                 binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
             }
 
-            val durationMs = metadata.durationMs ?: -1L
-            if (durationMs > 0) {
+            val durationMs = musicServiceConnection.durationMs()
+            if (durationMs > 0L) {
+                binding.scrubSeekBar.isEnabled = true
                 binding.scrubSeekBar.max = durationMs.toInt()
                 binding.totalTimeText.text = formatDurationMs(durationMs)
             } else {
+                binding.scrubSeekBar.isEnabled = false
                 binding.scrubSeekBar.max = 0
                 binding.totalTimeText.text = "-:--"
             }
@@ -338,6 +372,7 @@ class TracklistActivity : AppCompatActivity() {
             binding.playerTrackSubtitle.text = ""
             binding.playerTrackSubtitle.visibility = View.GONE
             binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
+            binding.scrubSeekBar.isEnabled = false
             binding.scrubSeekBar.progress = 0
             binding.scrubSeekBar.max = 0
             binding.elapsedTimeText.text = "0:00"
@@ -383,9 +418,17 @@ class TracklistActivity : AppCompatActivity() {
             }
         }
 
-        if (!isUserSeeking && state.position >= 0) {
-            binding.scrubSeekBar.progress = state.position.toInt()
-            binding.elapsedTimeText.text = formatDurationMs(state.position)
+        val durationMs = musicServiceConnection.durationMs()
+        if (durationMs > 0L) {
+            binding.scrubSeekBar.isEnabled = true
+            binding.scrubSeekBar.max = durationMs.toInt()
+            binding.totalTimeText.text = formatDurationMs(durationMs)
+        }
+        if (!isUserSeeking) {
+            val currentPos = musicServiceConnection.currentPositionMs()
+            val clampedPos = if (durationMs > 0L) currentPos.coerceIn(0L, durationMs) else currentPos.coerceAtLeast(0L)
+            binding.scrubSeekBar.progress = clampedPos.toInt()
+            binding.elapsedTimeText.text = formatDurationMs(clampedPos)
         }
     }
 

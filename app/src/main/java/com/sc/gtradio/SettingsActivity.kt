@@ -239,7 +239,15 @@ class SettingsActivity : AppCompatActivity() {
 
             val scanPref = findPreference<Preference>(getString(R.string.scan_album_art_key))
             scanPref?.setOnPreferenceClickListener {
-                startEraArtworkScan(scanPref)
+                if (AlbumArtDownloader.isBulkScanRunning() || isScanning) {
+                    AlbumArtDownloader.cancelBulkScan()
+                    isScanning = false
+                    scanPref.title = getString(R.string.scan_album_art_title)
+                    scanPref.summary = "Scan cancelled."
+                    Toast.makeText(requireContext(), "Album art scan cancelled.", Toast.LENGTH_SHORT).show()
+                } else {
+                    startEraArtworkScan(scanPref)
+                }
                 true
             }
 
@@ -256,6 +264,11 @@ class SettingsActivity : AppCompatActivity() {
                             .setTitle(R.string.clear_album_art_title)
                             .setMessage("Delete all cached album covers and album titles? You can re-download them anytime via Scan & Download All Album Art.")
                             .setPositiveButton("Delete") { _, _ ->
+                                AlbumArtDownloader.cancelBulkScan()
+                                isScanning = false
+                                val sPref = findPreference<Preference>(getString(R.string.scan_album_art_key))
+                                sPref?.title = getString(R.string.scan_album_art_title)
+                                sPref?.summary = "Scan cancelled due to cache clear."
                                 Executors.newSingleThreadExecutor().submit {
                                     val (_, delBytes) = AlbumArtDownloader.clearAlbumArtCache(ctx)
                                     val freedMb = String.format(Locale.US, "%.2f MB", delBytes / (1024.0 * 1024.0))
@@ -339,61 +352,92 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         private fun startEraArtworkScan(scanPref: Preference) {
-            if (isScanning) return
+            if (isScanning || AlbumArtDownloader.isBulkScanRunning()) return
             val ctx = context?.applicationContext ?: return
             isScanning = true
-            scanPref.summary = "Preparing tracklists for album art scan..."
+            AlbumArtDownloader.setBulkScanRunning(true)
+            scanPref.title = "Cancel Album Art Scan"
+            scanPref.summary = "Preparing tracklists... tap to cancel"
 
             Executors.newSingleThreadExecutor().submit {
-                Gen2MetadataRepository.ensureLoaded(ctx)
-                Rpf3MetadataRepository.ensureLoaded(ctx)
+                try {
+                    Gen2MetadataRepository.ensureLoaded(ctx)
+                    Rpf3MetadataRepository.ensureLoaded(ctx)
 
-                // Tuple: (artist, title, preferredYear, maxYear)
-                val allSongs = ArrayList<ScanTrackItem>()
-                val codes = listOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG")
-                for (code in codes) {
-                    val st = Gen2MetadataRepository.getByStreamCode(ctx, code) ?: continue
-                    for (s in st.songGroups) {
-                        allSongs.add(ScanTrackItem(s.artist, s.cleanTitle, 1993, 2004))
+                    // Tuple: (artist, title, preferredYear, maxYear)
+                    val allSongs = ArrayList<ScanTrackItem>()
+                    val codes = listOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG")
+                    for (code in codes) {
+                        if (AlbumArtDownloader.isBulkScanCancelled()) break
+                        val st = Gen2MetadataRepository.getByStreamCode(ctx, code) ?: continue
+                        for (s in st.songGroups) {
+                            allSongs.add(ScanTrackItem(s.artist, s.cleanTitle, 1993, 2004))
+                        }
                     }
-                }
-                for ((artist, title) in Rpf3MetadataRepository.getAllMusicSongs(ctx)) {
-                    allSongs.add(ScanTrackItem(artist, title, 2009, 2009))
-                }
-                for ((artist, title) in Rpf7MetadataRepository.getAllMusicSongs()) {
-                    allSongs.add(ScanTrackItem(artist, title, 2013, 2021))
-                }
+                    if (!AlbumArtDownloader.isBulkScanCancelled()) {
+                        for ((artist, title) in Rpf3MetadataRepository.getAllMusicSongs(ctx)) {
+                            allSongs.add(ScanTrackItem(artist, title, 2009, 2009))
+                        }
+                    }
+                    if (!AlbumArtDownloader.isBulkScanCancelled()) {
+                        for ((artist, title) in Rpf7MetadataRepository.getAllMusicSongs()) {
+                            allSongs.add(ScanTrackItem(artist, title, 2013, 2021))
+                        }
+                    }
 
-                val total = allSongs.size
-                GTRadioLogger.log("AlbumArtScan: Starting bulk scan for $total tracks across Gen2, RPF3, and RPF7...")
+                    val total = allSongs.size
+                    GTRadioLogger.log("AlbumArtScan: Starting bulk scan for $total tracks across Gen2, RPF3, and RPF7...")
 
-                var done = 0
-                var okCount = 0
-                for (item in allSongs) {
-                    done++
-                    val cur = done
+                    var done = 0
+                    var okCount = 0
+                    var cancelled = false
+                    for (item in allSongs) {
+                        if (AlbumArtDownloader.isBulkScanCancelled()) {
+                            cancelled = true
+                            GTRadioLogger.log("AlbumArtScan: Bulk scan cancelled by user at track $done / $total.")
+                            break
+                        }
+                        done++
+                        val cur = done
+                        mainHandler.post {
+                            if (isScanning) {
+                                scanPref.summary = "Scanning ($cur / $total): ${item.artist} - ${item.title} (tap to cancel)"
+                            }
+                        }
+                        val fetched = AlbumArtDownloader.fetchEraAccurateArtSync(
+                            context = ctx,
+                            artist = item.artist,
+                            songTitle = item.title,
+                            preferredYear = item.preferredYear,
+                            maxYear = item.maxYear
+                        )
+                        if (fetched) {
+                            okCount++
+                        }
+                    }
+                    val finalOk = okCount
+                    val wasCancelled = cancelled || AlbumArtDownloader.isBulkScanCancelled()
                     mainHandler.post {
-                        scanPref.summary = "Scanning ($cur / $total): ${item.artist} - ${item.title}"
+                        isScanning = false
+                        AlbumArtDownloader.setBulkScanRunning(false)
+                        scanPref.title = getString(R.string.scan_album_art_title)
+                        if (wasCancelled) {
+                            scanPref.summary = "Scan cancelled. Cached $finalOk album covers offline."
+                        } else {
+                            scanPref.summary = "Complete! Cached $finalOk / $total era-accurate album covers offline."
+                        }
+                        val clearArtPref = findPreference<Preference>("clear_album_art_cache")
+                        if (clearArtPref != null) {
+                            updateClearArtSummary(clearArtPref, ctx)
+                        }
                     }
-                    val fetched = AlbumArtDownloader.fetchEraAccurateArtSync(
-                        context = ctx,
-                        artist = item.artist,
-                        songTitle = item.title,
-                        preferredYear = item.preferredYear,
-                        maxYear = item.maxYear
-                    )
-                    if (fetched) {
-                        okCount++
-                    }
-                }
-                val finalOk = okCount
-                GTRadioLogger.log("AlbumArtScan: Bulk scan complete. Cached $finalOk / $total era-accurate album covers.")
-                mainHandler.post {
-                    isScanning = false
-                    scanPref.summary = "Complete! Cached $finalOk / $total era-accurate album covers offline."
-                    val clearArtPref = findPreference<Preference>("clear_album_art_cache")
-                    if (clearArtPref != null) {
-                        updateClearArtSummary(clearArtPref, ctx)
+                } catch (e: Exception) {
+                    GTRadioLogger.log("AlbumArtScan: Error during bulk scan", e)
+                    mainHandler.post {
+                        isScanning = false
+                        AlbumArtDownloader.setBulkScanRunning(false)
+                        scanPref.title = getString(R.string.scan_album_art_title)
+                        scanPref.summary = "Scan failed or interrupted."
                     }
                 }
             }
