@@ -136,6 +136,8 @@ open class GTRadioMusicService : MediaLibraryService() {
     }
 
     private fun reloadLibrary() {
+        radioPlayer.hasActiveQueueOrStation = false
+        radioPlayer.notifyAvailableCommandsChanged()
         if (playbackMode == PlaybackMode.TRACKLIST) {
             activeTracklistStation?.stopCleanTrackPlayback()
             activeTracklistStation = null
@@ -171,9 +173,9 @@ open class GTRadioMusicService : MediaLibraryService() {
         super.onCreate()
         GTRadioLogger.init(applicationContext)
         AlbumArtDownloader.init(applicationContext)
-        scanExecutor.submit {
+        Thread({
             AlbumHintRepository.ensureLoaded(applicationContext)
-        }
+        }, "AlbumHintPreload").start()
 
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         sharedPref.registerOnSharedPreferenceChangeListener(sharedPrefListener)
@@ -233,9 +235,20 @@ open class GTRadioMusicService : MediaLibraryService() {
                 .add(SessionCommand("setActiveStationGroupId", Bundle.EMPTY))
                 .add(SessionCommand("setStreamMuted", Bundle.EMPTY))
                 .build()
+            val playerCommands = session.player.availableCommands.buildUpon()
+                .add(Player.COMMAND_PLAY_PAUSE)
+                .add(Player.COMMAND_STOP)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS)
+                .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_NEXT)
+                .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_GET_METADATA)
+                .add(Player.COMMAND_GET_TIMELINE)
+                .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(sessionCommands)
-                .setAvailablePlayerCommands(session.player.availableCommands)
+                .setAvailablePlayerCommands(playerCommands)
                 .build()
         }
 
@@ -438,7 +451,9 @@ open class GTRadioMusicService : MediaLibraryService() {
             DynamicThemeManager.stopTuningNoise("tracklist_start")
             radioPlayer.setStreamMuted(false)
             radioPlayer.isTracklistMode = true
+            radioPlayer.hasActiveQueueOrStation = true
             playbackMode = PlaybackMode.TRACKLIST
+            radioPlayer.notifyAvailableCommandsChanged()
 
             val group = getStationGroupContainingMedia(stationId) ?: return
             val station = getRadioStation(group, stationId) as? TracklistCapableStation ?: return
@@ -485,19 +500,34 @@ open class GTRadioMusicService : MediaLibraryService() {
         radioPlayer.pauseInternal()
     }
 
-    private fun handleStop() {
-        if (playbackMode == PlaybackMode.TRACKLIST) {
-            activeTracklistStation?.stopCleanTrackPlayback()
-            radioPlayer.stopCleanQueue()
-            mediaLibrarySession.setSessionExtras(buildSessionExtras())
-            return
-        }
+    @Volatile private var isHandlingStop = false
 
-        val st = activeStation ?: return
-        DynamicThemeManager.stopTuningNoise("stop")
-        radioPlayer.setStreamMuted(false)
-        st.stop()
-        radioPlayer.stopInternal()
+    private fun handleStop() {
+        if (isHandlingStop) return
+        isHandlingStop = true
+        try {
+            radioPlayer.hasActiveQueueOrStation = false
+            radioPlayer.notifyAvailableCommandsChanged()
+            if (playbackMode == PlaybackMode.TRACKLIST) {
+                activeTracklistStation?.stopCleanTrackPlayback()
+                activeTracklistStation = null
+                activeTracklistStationId = null
+                activeTracklistTracks = emptyList()
+                activeTracklistIndex = -1
+                radioPlayer.stopCleanQueue()
+                mediaLibrarySession.setSessionExtras(buildSessionExtras())
+                return
+            }
+
+            val stationToStop = activeStation
+            activeStation = null
+            DynamicThemeManager.stopTuningNoise("stop")
+            radioPlayer.setStreamMuted(false)
+            stationToStop?.stop()
+            radioPlayer.stopInternal()
+        } finally {
+            isHandlingStop = false
+        }
     }
 
     private fun handleSkipNext() {
@@ -598,6 +628,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         activeStationGroupId = group.mediaItem.mediaId
 
         val canCycle = group.stationList.size > 1
+        radioPlayer.hasActiveQueueOrStation = true
         radioPlayer.updateNavigationCommands(canCycle, canCycle)
 
         val noisePack = DynamicThemeManager.findNoisePackForSeries(applicationContext, group.groupName)
@@ -654,6 +685,7 @@ open class GTRadioMusicService : MediaLibraryService() {
 
         val track = activeTracklistTracks[index]
         val canNav = activeTracklistTracks.size > 1
+        radioPlayer.hasActiveQueueOrStation = true
         radioPlayer.updateNavigationCommands(canNav, canNav)
 
         val cachedArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)

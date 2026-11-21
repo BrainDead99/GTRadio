@@ -35,6 +35,7 @@ object AlbumHintRepository {
 
     private val hintMap = ConcurrentHashMap<String, AlbumHint>()
     private val allHints = ArrayList<AlbumHint>()
+    private val normKeyCache = ConcurrentHashMap<String, String>()
 
     private val DIACRITICS_REGEX = Regex("\\p{M}+")
     private val EXS_REGEX = Regex("\\bex['’]?s\\b", RegexOption.IGNORE_CASE)
@@ -55,31 +56,34 @@ object AlbumHintRepository {
     private val ARTIST_SPLIT_REGEX = Regex("\\b(featuring|feat\\.?|ft\\.?|with|meets|vs\\.?|and)\\b|[&/,+;]", RegexOption.IGNORE_CASE)
 
     private fun stripDiacritics(str: String): String {
+        if (str.all { it.code < 128 }) return str
         val nfd = Normalizer.normalize(str, Normalizer.Form.NFD)
         return DIACRITICS_REGEX.replace(nfd, "")
     }
 
     fun normalizeKey(input: String): String {
         if (input.isBlank()) return ""
+        normKeyCache[input]?.let { return it }
         var s = stripDiacritics(input).lowercase(Locale.ROOT)
-        s = s.replace("$", "s")
-        s = s.replace("&", " and ")
-        s = s.replace("+", " and ")
-        s = EXS_REGEX.replace(s, "exes")
-        s = COKANE_REGEX.replace(s, "cocaine")
-        s = RABBITT_REGEX.replace(s, "rabbit")
-        s = WILLIE_REGEX.replace(s, "willi")
-        s = WRECKX_REGEX.replace(s, "wrecks")
-        s = FUCK_REGEX.replace(s, "fuck")
-        s = ING_REGEX.replace(s, "ing")
-        s = RUNIN_REGEX.replace(s, "running")
-        s = RUNNIN_REGEX.replace(s, "running")
-        s = SWINGIN_REGEX.replace(s, "swinging")
+        if (s.indexOf('$') >= 0) s = s.replace("$", "s")
+        if (s.indexOf('&') >= 0) s = s.replace("&", " and ")
+        if (s.indexOf('+') >= 0) s = s.replace("+", " and ")
+        if (s.contains("ex")) s = EXS_REGEX.replace(s, "exes")
+        if (s.contains("cok")) s = COKANE_REGEX.replace(s, "cocaine")
+        if (s.contains("rabbi")) s = RABBITT_REGEX.replace(s, "rabbit")
+        if (s.contains("willi")) s = WILLIE_REGEX.replace(s, "willi")
+        if (s.contains("wreck")) s = WRECKX_REGEX.replace(s, "wrecks")
+        if (s.contains("f**k") || s.contains("f*k")) s = FUCK_REGEX.replace(s, "fuck")
+        if (s.contains("in'") || s.contains("in’")) s = ING_REGEX.replace(s, "ing")
+        if (s.contains("runin")) s = RUNIN_REGEX.replace(s, "running")
+        if (s.contains("runnin")) s = RUNNIN_REGEX.replace(s, "running")
+        if (s.contains("swingin")) s = SWINGIN_REGEX.replace(s, "swinging")
         s = NON_ALPHANUMERIC_REGEX.replace(s, " ")
         s = WHITESPACE_REGEX.replace(s, " ").trim()
         if (s.startsWith("the ")) {
             s = s.substring(4).trim()
         }
+        normKeyCache[input] = s
         return s
     }
 
@@ -155,6 +159,7 @@ object AlbumHintRepository {
             listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
         }
 
+        val parsedHints = ArrayList<AlbumHint>(1024)
         for (filename in assetFiles) {
             try {
                 context.assets.open(filename).use { inputStream ->
@@ -175,9 +180,7 @@ object AlbumHintRepository {
                                         hintArtist = parts[6].trim(),
                                         hintAlbum = parts[7].trim()
                                     )
-                                    synchronized(allHints) {
-                                        allHints.add(hint)
-                                    }
+                                    parsedHints.add(hint)
                                     registerHintKeys(hint.artist, hint.title, hint)
                                     if (hint.hintArtist.isNotBlank()) {
                                         registerHintKeys(hint.hintArtist, hint.title, hint)
@@ -192,6 +195,9 @@ object AlbumHintRepository {
             } catch (e: Exception) {
                 GTRadioLogger.log("AlbumHintRepository: Failed to load $filename", e)
             }
+        }
+        synchronized(allHints) {
+            allHints.addAll(parsedHints)
         }
         val elapsedMs = SystemClock.elapsedRealtime() - startTimeMs
         GTRadioLogger.log("AlbumHintRepository: Loaded ${allHints.size} hints (${hintMap.size} keys) in ${elapsedMs}ms")
@@ -248,6 +254,7 @@ object AlbumHintRepository {
 
     fun clearMemoryCache() {
         hintMap.clear()
+        normKeyCache.clear()
         synchronized(allHints) {
             allHints.clear()
         }

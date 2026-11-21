@@ -200,7 +200,7 @@ class Gen1RawRadioStation(
     override fun stop() {
         _playing = false
         mainHandler.removeCallbacks(metadataTickRunnable)
-        player.stop()
+        player.stopInternal()
     }
 
     override fun play() {
@@ -242,7 +242,7 @@ class Gen1RawRadioStation(
             player.seekTo(0, liveOffsetMs)
         }
         player.prepare()
-        player.play()
+        player.playInternal()
 
         updateDynamicMetadataFromPosition()
         mainHandler.postDelayed(metadataTickRunnable, 1000L)

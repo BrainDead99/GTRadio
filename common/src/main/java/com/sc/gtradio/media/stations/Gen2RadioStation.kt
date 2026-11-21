@@ -402,7 +402,7 @@ import java.util.*
             player.removeListener(activeListener!!)
             activeListener = null
         }
-        player.stop()
+        player.stopInternal()
     }
 
     override fun play() {
@@ -636,7 +636,7 @@ import java.util.*
         }
         player.addListener(activeListener!!)
         player.prepare()
-        player.play()
+        player.playInternal()
     }
 
     override fun supportsTracklist(): Boolean {

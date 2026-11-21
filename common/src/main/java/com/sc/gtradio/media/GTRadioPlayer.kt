@@ -36,6 +36,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
 
     var nextEnabled = false
     var previousEnabled = false
+    var hasActiveQueueOrStation: Boolean = false
 
     var onTransportSkipNext: (() -> Unit)? = null
     var onTransportSkipPrevious: (() -> Unit)? = null
@@ -43,22 +44,32 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     var onTransportPause: (() -> Unit)? = null
     var onTransportStop: (() -> Unit)? = null
 
+    private var isDispatchingTransport = false
     private val playerListeners = CopyOnWriteArraySet<Player.Listener>()
+    private val wrappedListeners = HashMap<Player.Listener, Player.Listener>()
 
     var activeSessionMetadata: MediaMetadata = MediaMetadata.EMPTY
         private set
 
     fun updateSessionMetadata(metadata: MediaMetadata) {
         activeSessionMetadata = metadata
+        val currentItem = currentMediaItem
         for (l in playerListeners) {
             l.onMediaMetadataChanged(metadata)
             l.onPlaylistMetadataChanged(metadata)
+            if (currentItem != null) {
+                l.onMediaItemTransition(currentItem, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
+            }
         }
     }
 
     fun updateNavigationCommands(canNext: Boolean, canPrev: Boolean) {
         nextEnabled = canNext
         previousEnabled = canPrev
+        notifyAvailableCommandsChanged()
+    }
+
+    fun notifyAvailableCommandsChanged() {
         val cmds = availableCommands
         for (l in playerListeners) {
             l.onAvailableCommandsChanged(cmds)
@@ -76,12 +87,31 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
 
     override fun addListener(listener: Player.Listener) {
         playerListeners.add(listener)
-        super.addListener(listener)
+        synchronized(wrappedListeners) {
+            val wrapped = object : Player.Listener by listener {
+                override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+                    listener.onAvailableCommandsChanged(this@GTRadioPlayer.availableCommands)
+                }
+
+                override fun onEvents(player: Player, events: Player.Events) {
+                    listener.onEvents(this@GTRadioPlayer, events)
+                }
+            }
+            wrappedListeners[listener] = wrapped
+            super.addListener(wrapped)
+        }
     }
 
     override fun removeListener(listener: Player.Listener) {
         playerListeners.remove(listener)
-        super.removeListener(listener)
+        val wrapped = synchronized(wrappedListeners) {
+            wrappedListeners.remove(listener)
+        }
+        if (wrapped != null) {
+            super.removeListener(wrapped)
+        } else {
+            super.removeListener(listener)
+        }
     }
 
     fun isExoPlayerReady(): Boolean = exoPlayer.playbackState == Player.STATE_READY && exoPlayer.playWhenReady
@@ -92,7 +122,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
 
     fun resetForStationSwitch() {
         stopCleanQueue()
-        exoPlayer.stop()
+        stopInternal()
     }
 
     //region Customized Functionality
@@ -131,40 +161,80 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     }
 
     override fun play() {
-        if (onTransportPlay != null) {
-            onTransportPlay?.invoke()
+        if (isDispatchingTransport) {
+            playInternal()
+            return
+        }
+        val cb = onTransportPlay
+        if (cb != null) {
+            isDispatchingTransport = true
+            try {
+                cb.invoke()
+            } finally {
+                isDispatchingTransport = false
+            }
         } else {
             playInternal()
         }
     }
 
     override fun pause() {
-        if (onTransportPause != null) {
-            onTransportPause?.invoke()
+        if (isDispatchingTransport) {
+            pauseInternal()
+            return
+        }
+        val cb = onTransportPause
+        if (cb != null) {
+            isDispatchingTransport = true
+            try {
+                cb.invoke()
+            } finally {
+                isDispatchingTransport = false
+            }
         } else {
             pauseInternal()
         }
     }
 
     override fun stop() {
-        if (onTransportStop != null) {
-            onTransportStop?.invoke()
+        if (isDispatchingTransport) {
+            stopInternal()
+            return
+        }
+        val cb = onTransportStop
+        if (cb != null) {
+            isDispatchingTransport = true
+            try {
+                cb.invoke()
+            } finally {
+                isDispatchingTransport = false
+            }
         } else {
             stopInternal()
         }
     }
 
-    override fun hasPreviousMediaItem(): Boolean = previousEnabled
+    override fun hasPreviousMediaItem(): Boolean = hasActiveQueueOrStation || previousEnabled
 
-    override fun hasNextMediaItem(): Boolean = nextEnabled
+    override fun hasNextMediaItem(): Boolean = hasActiveQueueOrStation || nextEnabled
 
-    fun hasPrevious(): Boolean = previousEnabled
+    fun hasPrevious(): Boolean = hasActiveQueueOrStation || previousEnabled
 
-    fun hasNext(): Boolean = nextEnabled
+    fun hasNext(): Boolean = hasActiveQueueOrStation || nextEnabled
 
     override fun seekToNext() {
-        if (onTransportSkipNext != null) {
-            onTransportSkipNext?.invoke()
+        if (isDispatchingTransport) {
+            super.seekToNext()
+            return
+        }
+        val cb = onTransportSkipNext
+        if (cb != null) {
+            isDispatchingTransport = true
+            try {
+                cb.invoke()
+            } finally {
+                isDispatchingTransport = false
+            }
         } else {
             super.seekToNext()
         }
@@ -175,8 +245,18 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     }
 
     override fun seekToPrevious() {
-        if (onTransportSkipPrevious != null) {
-            onTransportSkipPrevious?.invoke()
+        if (isDispatchingTransport) {
+            super.seekToPrevious()
+            return
+        }
+        val cb = onTransportSkipPrevious
+        if (cb != null) {
+            isDispatchingTransport = true
+            try {
+                cb.invoke()
+            } finally {
+                isDispatchingTransport = false
+            }
         } else {
             super.seekToPrevious()
         }
@@ -196,6 +276,17 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         if (isTracklistMode) {
             seekToMs(positionMs)
         }
+    }
+
+    override fun getCurrentMediaItem(): MediaItem? {
+        val superItem = super.getCurrentMediaItem()
+        if (activeSessionMetadata != MediaMetadata.EMPTY || hasActiveQueueOrStation) {
+            val builder = superItem?.buildUpon() ?: MediaItem.Builder().setMediaId("gt_radio_active")
+            return builder
+                .setMediaMetadata(activeSessionMetadata)
+                .build()
+        }
+        return superItem
     }
 
     override fun getMediaMetadata(): MediaMetadata = activeSessionMetadata
@@ -337,7 +428,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         }
         exoPlayer.addListener(cleanTrackListener!!)
         exoPlayer.prepare()
-        exoPlayer.play()
+        playInternal()
         notifyPlaybackStateChanged()
     }
 
@@ -348,8 +439,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         }
         cleanSegmentDurationsMs = emptyList()
         isTracklistMode = false
-        radioPlaybackState = RadioState.STOPPED
-        exoPlayer.stop()
+        stopInternal()
         exoPlayer.clearMediaItems()
         notifyPlaybackStateChanged()
     }
@@ -366,16 +456,15 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
             .add(Player.COMMAND_GET_METADATA)
             .add(Player.COMMAND_GET_TIMELINE)
 
-        if (hasNext()) {
+        if (hasActiveQueueOrStation || hasNext() || hasPrevious()) {
             builder.add(Player.COMMAND_SEEK_TO_NEXT)
             builder.add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
-        }
-        if (hasPrevious()) {
             builder.add(Player.COMMAND_SEEK_TO_PREVIOUS)
             builder.add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
         }
         if (isTracklistMode) {
             builder.add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+            builder.add(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
         }
         return builder.build()
     }

@@ -387,7 +387,7 @@ import java.util.*
             player.removeListener(activeListener!!)
             activeListener = null
         }
-        player.stop()
+        player.stopInternal()
     }
 
     override fun play() {
@@ -645,7 +645,7 @@ import java.util.*
             player.addListener(activeListener!!)
             if (!_playing || playGeneration.get() != expectedGen) return@post
             player.prepare()
-            player.play()
+            player.playInternal()
         }
     }
 }

@@ -169,7 +169,7 @@ class Gen1At3RadioStation(
             player.removeListener(activeListener!!)
             activeListener = null
         }
-        player.stop()
+        player.stopInternal()
     }
 
     override fun play() {
@@ -227,6 +227,6 @@ class Gen1At3RadioStation(
         }
         player.addListener(activeListener!!)
         player.prepare()
-        player.play()
+        player.playInternal()
     }
 }

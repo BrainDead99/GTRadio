@@ -78,7 +78,7 @@ import kotlin.math.abs
         _playing = false
         lastStoppedDurationSec = (player.getCurrentTrackPosition() / 1000).toInt()
         lastStoppedTime = Calendar.getInstance()
-        player.stop()
+        player.stopInternal()
     }
 
     override fun play() {
@@ -131,7 +131,7 @@ import kotlin.math.abs
             player.seekTo(seekPos)
         }
         player.repeatMode = Player.REPEAT_MODE_ALL
-        player.play()
+        player.playInternal()
     }
 
     private fun getSeekPosition(): Long {

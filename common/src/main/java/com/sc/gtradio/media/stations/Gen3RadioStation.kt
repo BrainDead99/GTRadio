@@ -423,7 +423,7 @@ import kotlin.collections.ArrayList
     override fun stop() {
         if (gen1Station == null) {
             _playing = false
-            player.stop()
+            player.stopInternal()
         } else {
             gen1Station.stop()
         }
@@ -644,7 +644,7 @@ import kotlin.collections.ArrayList
         }
         player.addListener(activeListener!!)
         player.prepare()
-        player.play()
+        player.playInternal()
     }
 
     private fun playNextAdvertOrNewsReport() {

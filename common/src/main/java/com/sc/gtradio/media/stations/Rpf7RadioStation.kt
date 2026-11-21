@@ -472,7 +472,7 @@ data class Rpf7ClipRef(
             player.removeListener(activeListener!!)
             activeListener = null
         }
-        player.stop()
+        player.stopInternal()
     }
 
     private fun areSegmentFilesValid(uris: List<Uri>): Boolean {
@@ -888,7 +888,7 @@ data class Rpf7ClipRef(
             player.addListener(activeListener!!)
             if (!_playing || playGeneration.get() != expectedGen) return@post
             player.prepare()
-            player.play()
+            player.playInternal()
 
             if (activeMixMarkers.isNotEmpty()) {
                 startMixPoller(expectedGen)
