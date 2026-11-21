@@ -1,6 +1,7 @@
 package com.sc.gtradio.media.stations
 
 import android.content.Context
+import android.os.SystemClock
 import com.sc.gtradio.common.GTRadioLogger
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -35,9 +36,27 @@ object AlbumHintRepository {
     private val hintMap = ConcurrentHashMap<String, AlbumHint>()
     private val allHints = ArrayList<AlbumHint>()
 
+    private val DIACRITICS_REGEX = Regex("\\p{M}+")
+    private val EXS_REGEX = Regex("\\bex['’]?s\\b", RegexOption.IGNORE_CASE)
+    private val COKANE_REGEX = Regex("\\bcokane\\b", RegexOption.IGNORE_CASE)
+    private val RABBITT_REGEX = Regex("\\brabbitt\\b", RegexOption.IGNORE_CASE)
+    private val WILLIE_REGEX = Regex("\\bwillie\\b", RegexOption.IGNORE_CASE)
+    private val WRECKX_REGEX = Regex("\\bwreckx\\b", RegexOption.IGNORE_CASE)
+    private val FUCK_REGEX = Regex("\\bf\\*\\*k\\b", RegexOption.IGNORE_CASE)
+    private val ING_REGEX = Regex("in['’]g?\\b", RegexOption.IGNORE_CASE)
+    private val RUNIN_REGEX = Regex("\\brunin\\b", RegexOption.IGNORE_CASE)
+    private val RUNNIN_REGEX = Regex("\\brunnin\\b", RegexOption.IGNORE_CASE)
+    private val SWINGIN_REGEX = Regex("\\bswingin\\b", RegexOption.IGNORE_CASE)
+    private val NON_ALPHANUMERIC_REGEX = Regex("[^\\p{L}\\p{N}\\s]")
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    private val PARENS_REGEX = Regex("\\(.*?\\)")
+    private val BRACKETS_REGEX = Regex("\\[.*?\\]")
+    private val DIGITS_REGEX = Regex("\\b\\d+\\b")
+    private val ARTIST_SPLIT_REGEX = Regex("\\b(featuring|feat\\.?|ft\\.?|with|meets|vs\\.?|and)\\b|[&/,+;]", RegexOption.IGNORE_CASE)
+
     private fun stripDiacritics(str: String): String {
         val nfd = Normalizer.normalize(str, Normalizer.Form.NFD)
-        return Regex("\\p{M}+").replace(nfd, "")
+        return DIACRITICS_REGEX.replace(nfd, "")
     }
 
     fun normalizeKey(input: String): String {
@@ -46,18 +65,18 @@ object AlbumHintRepository {
         s = s.replace("$", "s")
         s = s.replace("&", " and ")
         s = s.replace("+", " and ")
-        s = s.replace(Regex("\\bex['’]?s\\b", RegexOption.IGNORE_CASE), "exes")
-        s = s.replace(Regex("\\bcokane\\b", RegexOption.IGNORE_CASE), "cocaine")
-        s = s.replace(Regex("\\brabbitt\\b", RegexOption.IGNORE_CASE), "rabbit")
-        s = s.replace(Regex("\\bwillie\\b", RegexOption.IGNORE_CASE), "willi")
-        s = s.replace(Regex("\\bwreckx\\b", RegexOption.IGNORE_CASE), "wrecks")
-        s = s.replace(Regex("\\bf\\*\\*k\\b", RegexOption.IGNORE_CASE), "fuck")
-        s = s.replace(Regex("in['’]g?\\b", RegexOption.IGNORE_CASE), "ing")
-        s = s.replace(Regex("\\brunin\\b", RegexOption.IGNORE_CASE), "running")
-        s = s.replace(Regex("\\brunnin\\b", RegexOption.IGNORE_CASE), "running")
-        s = s.replace(Regex("\\bswingin\\b", RegexOption.IGNORE_CASE), "swinging")
-        s = s.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
-        s = s.replace(Regex("\\s+"), " ").trim()
+        s = EXS_REGEX.replace(s, "exes")
+        s = COKANE_REGEX.replace(s, "cocaine")
+        s = RABBITT_REGEX.replace(s, "rabbit")
+        s = WILLIE_REGEX.replace(s, "willi")
+        s = WRECKX_REGEX.replace(s, "wrecks")
+        s = FUCK_REGEX.replace(s, "fuck")
+        s = ING_REGEX.replace(s, "ing")
+        s = RUNIN_REGEX.replace(s, "running")
+        s = RUNNIN_REGEX.replace(s, "running")
+        s = SWINGIN_REGEX.replace(s, "swinging")
+        s = NON_ALPHANUMERIC_REGEX.replace(s, " ")
+        s = WHITESPACE_REGEX.replace(s, " ").trim()
         if (s.startsWith("the ")) {
             s = s.substring(4).trim()
         }
@@ -65,9 +84,7 @@ object AlbumHintRepository {
     }
 
     fun cleanTitleNoParens(s: String): String {
-        return s.replace(Regex("\\(.*?\\)"), "")
-            .replace(Regex("\\[.*?\\]"), "")
-            .trim()
+        return BRACKETS_REGEX.replace(PARENS_REGEX.replace(s, ""), "").trim()
     }
 
     fun stripStopWords(s: String): String {
@@ -76,15 +93,14 @@ object AlbumHintRepository {
     }
 
     fun stripDigits(s: String): String {
-        return s.replace(Regex("\\b\\d+\\b"), "").replace(Regex("\\s+"), " ").trim()
+        return WHITESPACE_REGEX.replace(DIGITS_REGEX.replace(s, ""), " ").trim()
     }
 
     fun extractPrimaryArtist(artist: String): String {
         val a = stripDiacritics(artist).lowercase(Locale.ROOT)
-        val splitRegex = Regex("\\b(featuring|feat\\.?|ft\\.?|with|meets|vs\\.?|and)\\b|[&/,+;]", RegexOption.IGNORE_CASE)
-        val parts = splitRegex.split(a)
+        val parts = ARTIST_SPLIT_REGEX.split(a)
         val first = if (parts.isNotEmpty()) parts[0] else a
-        var res = first.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+        var res = WHITESPACE_REGEX.replace(NON_ALPHANUMERIC_REGEX.replace(first, " "), " ").trim()
         if (res.startsWith("the ")) {
             res = res.substring(4).trim()
         }
@@ -128,14 +144,15 @@ object AlbumHintRepository {
     @Synchronized
     fun ensureLoaded(context: Context) {
         if (loaded && hintMap.isNotEmpty()) return
+        val startTimeMs = SystemClock.elapsedRealtime()
         loaded = true
 
         val assetFiles = try {
             val list = context.assets.list("")
             val filtered = list?.filter { it.startsWith("album_hints_") && it.endsWith(".tsv") }?.sorted()
-            if (!filtered.isNullOrEmpty()) filtered else listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv")
+            if (!filtered.isNullOrEmpty()) filtered else listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
         } catch (_: Exception) {
-            listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv")
+            listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
         }
 
         for (filename in assetFiles) {
@@ -176,6 +193,8 @@ object AlbumHintRepository {
                 GTRadioLogger.log("AlbumHintRepository: Failed to load $filename", e)
             }
         }
+        val elapsedMs = SystemClock.elapsedRealtime() - startTimeMs
+        GTRadioLogger.log("AlbumHintRepository: Loaded ${allHints.size} hints (${hintMap.size} keys) in ${elapsedMs}ms")
     }
 
     fun findHint(context: Context, artist: String, songTitle: String): AlbumHint? {

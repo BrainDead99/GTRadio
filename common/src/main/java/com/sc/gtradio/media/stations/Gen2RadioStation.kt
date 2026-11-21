@@ -21,6 +21,7 @@ import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
+import com.sc.gtradio.common.GTRadioLogger
 import java.util.*
 
 @UnstableApi class Gen2RadioStation(
@@ -667,25 +668,38 @@ import java.util.*
     ) {
         val song = allSongs.find { it.folderName == trackId || it.cleanTitle.equals(trackId, ignoreCase = true) } ?: return
         val token = cleanPlayGeneration.incrementAndGet()
-        val album = Gen2MetadataRepository.getCachedAlbumName(context, song.cleanArtist, song.cleanTitle) ?: groupTitle
-        onMetadataReady(song.cleanTitle, song.cleanArtist, album, 2004)
 
-        val uris = listOfNotNull(song.mainIntroUri, song.mainSongUri, song.mainOutroUri)
-        if (uris.isNotEmpty()) {
-            cleanPlayExecutor.submit {
-                val durations = uris.map { readAudioDurationMs(context, it) }
+        cleanPlayExecutor.submit {
+            try {
+                val album = Gen2MetadataRepository.getCachedAlbumName(context, song.cleanArtist, song.cleanTitle) ?: groupTitle
                 mainHandler.post {
                     if (token == cleanPlayGeneration.get()) {
-                        player.playCleanQueue(uris, durations) {
-                            if (token == cleanPlayGeneration.get()) {
-                                onTrackFinished()
+                        onMetadataReady(song.cleanTitle, song.cleanArtist, album, 2004)
+                    }
+                }
+                val uris = listOfNotNull(song.mainIntroUri, song.mainSongUri, song.mainOutroUri)
+                if (uris.isNotEmpty()) {
+                    val durations = uris.map { readAudioDurationMs(context, it) }
+                    mainHandler.post {
+                        if (token == cleanPlayGeneration.get()) {
+                            player.playCleanQueue(uris, durations) {
+                                if (token == cleanPlayGeneration.get()) {
+                                    onTrackFinished()
+                                }
                             }
                         }
                     }
+                } else {
+                    mainHandler.post {
+                        if (token == cleanPlayGeneration.get()) {
+                            onTrackFinished()
+                        }
+                    }
                 }
+            } catch (e: Exception) {
+                GTRadioLogger.log("Gen2RadioStation: Error playing clean track", e)
+                mainHandler.post { onTrackFinished() }
             }
-        } else {
-            onTrackFinished()
         }
     }
 

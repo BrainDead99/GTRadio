@@ -46,6 +46,22 @@ object AlbumArtDownloader {
         "\\b(remaster|deluxe|expanded|anniversary|reissue|bonus track|edition)\\b",
         RegexOption.IGNORE_CASE
     )
+    private val CACHE_KEY_REGEX = Regex("[^\\p{L}\\p{N}_]+")
+    private val DIACRITICS_REGEX = Regex("\\p{M}+")
+    private val PAREN_REMIX_REGEX = Regex("\\s*\\([^)]*(?:remix|radio edit|clean|explicit|version|mix)[^)]*\\)", RegexOption.IGNORE_CASE)
+    private val BRACKET_REMIX_REGEX = Regex("\\[[^]]*(?:remix|radio edit|clean|explicit|version|mix)[^]]*\\]", RegexOption.IGNORE_CASE)
+    private val FEAT_TAIL_REGEX = Regex("\\b(featuring|feat\\.?|ft\\.?)\\b.*", RegexOption.IGNORE_CASE)
+    private val EDIT_WORDS_REGEX = Regex("\\b(radio edit|clean|explicit)\\b", RegexOption.IGNORE_CASE)
+    private val AND_REGEX = Regex("\\b(and|&)\\b", RegexOption.IGNORE_CASE)
+    private val NON_ALPHANUMERIC_SPACE_REGEX = Regex("[^\\p{L}\\p{N}\\s]")
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    private val ARTIST_SPLIT_REGEX = Regex("\\b(featuring|feat\\.?|ft\\.?|with|meets|vs\\.?|and)\\b|[&/,+,;]", RegexOption.IGNORE_CASE)
+    private val PAREN_EDITION_REGEX = Regex("\\s*\\([^)]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue|Bonus Track)[^)]*\\)", RegexOption.IGNORE_CASE)
+    private val BRACKET_EDITION_REGEX = Regex("\\s*\\[[^]]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue|Bonus Track)[^]]*\\]", RegexOption.IGNORE_CASE)
+    private val DASH_DELUXE_REGEX = Regex("\\s*-\\s*(?:Deluxe Edition|Deluxe Version|Remastered|Remaster)\\s*$", RegexOption.IGNORE_CASE)
+    private val DASH_SINGLE_EP_REGEX = Regex("\\s*-\\s*(?:Single|EP)\\s*$", RegexOption.IGNORE_CASE)
+    private val PARENS_ANY_REGEX = Regex("\\(.*?\\)")
+    private val ALT_CACHE_KEY_REGEX = Regex("[^\\p{L}\\p{N}_]")
     private val SPAM_ARTIST_WORDS = setOf(
         "relaxing", "healing", "lullaby", "karaoke", "tribute", "soundtrack", "ambient"
     )
@@ -79,7 +95,7 @@ object AlbumArtDownloader {
     }
 
     fun cacheKey(artist: String, songTitle: String): String {
-        return "${artist.lowercase(Locale.ROOT)}_${songTitle.lowercase(Locale.ROOT)}".replace(Regex("[^\\p{L}\\p{N}_]+"), "")
+        return CACHE_KEY_REGEX.replace("${artist.lowercase(Locale.ROOT)}_${songTitle.lowercase(Locale.ROOT)}", "")
     }
 
     fun shouldSkip(artist: String, songTitle: String): Boolean {
@@ -94,34 +110,33 @@ object AlbumArtDownloader {
 
     private fun stripDiacritics(str: String): String {
         val nfd = Normalizer.normalize(str, Normalizer.Form.NFD)
-        return Regex("\\p{M}+").replace(nfd, "")
+        return DIACRITICS_REGEX.replace(nfd, "")
     }
 
     fun normalizeText(input: String): String {
         var s = stripDiacritics(input).lowercase(Locale.ROOT)
-        s = s.replace(Regex("\\s*\\([^)]*(?:remix|radio edit|clean|explicit|version|mix)[^)]*\\)", RegexOption.IGNORE_CASE), " ")
-        s = s.replace(Regex("\\[[^]]*(?:remix|radio edit|clean|explicit|version|mix)[^]]*\\]", RegexOption.IGNORE_CASE), " ")
-        s = s.replace(Regex("\\b(featuring|feat\\.?|ft\\.?)\\b.*", RegexOption.IGNORE_CASE), " ")
-        s = s.replace(Regex("\\b(radio edit|clean|explicit)\\b", RegexOption.IGNORE_CASE), " ")
-        s = s.replace(Regex("\\b(and|&)\\b", RegexOption.IGNORE_CASE), " ")
-        s = s.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
+        s = PAREN_REMIX_REGEX.replace(s, " ")
+        s = BRACKET_REMIX_REGEX.replace(s, " ")
+        s = FEAT_TAIL_REGEX.replace(s, " ")
+        s = EDIT_WORDS_REGEX.replace(s, " ")
+        s = AND_REGEX.replace(s, " ")
+        s = NON_ALPHANUMERIC_SPACE_REGEX.replace(s, " ")
         s = s.trim()
         if (s.startsWith("the ")) {
             s = s.substring(4).trim()
         }
-        return s.replace(Regex("\\s+"), " ").trim()
+        return WHITESPACE_REGEX.replace(s, " ").trim()
     }
 
     fun extractPrimaryArtist(artist: String): String {
         val a = stripDiacritics(artist).lowercase(Locale.ROOT)
-        val splitRegex = Regex("\\b(featuring|feat\\.?|ft\\.?|with|meets|vs\\.?|and)\\b|[&/,+,;]", RegexOption.IGNORE_CASE)
-        val parts = splitRegex.split(a)
+        val parts = ARTIST_SPLIT_REGEX.split(a)
         val first = if (parts.isNotEmpty()) parts[0] else a
-        var res = first.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ").trim()
+        var res = NON_ALPHANUMERIC_SPACE_REGEX.replace(first, " ").trim()
         if (res.startsWith("the ")) {
             res = res.substring(4).trim()
         }
-        return res.replace(Regex("\\s+"), " ").trim()
+        return WHITESPACE_REGEX.replace(res, " ").trim()
     }
 
     fun isArtistMatch(targetArtist: String, candidateArtist: String): Pair<Boolean, Int> {
@@ -224,16 +239,20 @@ object AlbumArtDownloader {
     }
 
     fun cleanCollectionName(rawCol: String): String {
-        return rawCol
-            .replace(Regex("\\s*\\([^)]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue|Bonus Track)[^)]*\\)", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\s*\\[[^]]*(?:Remaster|Deluxe|Expanded|Edition|Anniversary|Reissue|Bonus Track)[^]]*\\]", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\s*-\\s*(?:Deluxe Edition|Deluxe Version|Remastered|Remaster)\\s*$", RegexOption.IGNORE_CASE), "")
-            .replace(Regex("\\s*-\\s*(?:Single|EP)\\s*$", RegexOption.IGNORE_CASE), "")
-            .trim()
+        return DASH_SINGLE_EP_REGEX.replace(
+            DASH_DELUXE_REGEX.replace(
+                BRACKET_EDITION_REGEX.replace(
+                    PAREN_EDITION_REGEX.replace(rawCol, ""),
+                    ""
+                ),
+                ""
+            ),
+            ""
+        ).trim()
     }
 
     private fun cleanTrackTitleForQuery(songTitle: String): String {
-        val noParens = songTitle.replace(Regex("\\(.*?\\)"), "").trim()
+        val noParens = PARENS_ANY_REGEX.replace(songTitle, "").trim()
         return noParens.ifBlank { songTitle.trim() }
     }
 
@@ -368,7 +387,7 @@ object AlbumArtDownloader {
 
     private fun altCacheKey(artist: String, songTitle: String): String {
         val raw = "${artist.lowercase(Locale.ROOT).trim()}_${songTitle.lowercase(Locale.ROOT).trim()}"
-        return raw.replace(Regex("[^\\p{L}\\p{N}_]"), "_").take(80)
+        return ALT_CACHE_KEY_REGEX.replace(raw, "_").take(80)
     }
 
     fun getCachedAlbumArt(context: Context, artist: String, songTitle: String): Bitmap? {

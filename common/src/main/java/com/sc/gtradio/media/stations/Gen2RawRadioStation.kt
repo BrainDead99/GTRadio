@@ -67,31 +67,40 @@ import java.util.*
         val sg = stationMeta.songGroups.find { it.midTrack.toString() == trackId || it.cleanTitle.equals(trackId, ignoreCase = true) }
             ?: return
         val token = cleanPlayGeneration.incrementAndGet()
-        val album = Gen2MetadataRepository.getCachedAlbumName(context, sg.artist, sg.cleanTitle) ?: groupTitle
-        onMetadataReady(sg.cleanTitle, sg.artist, album, 2004)
 
         cleanPlayExecutor.submit {
-            val uris = ArrayList<Uri>()
-            if (sg.cleanIntroTrack != null && sg.cleanIntroTrack > 0) {
-                stationArchive.materializeTrackUri(sg.cleanIntroTrack)?.let { uris.add(it) }
-            }
-            stationArchive.materializeTrackUri(sg.midTrack)?.let { uris.add(it) }
-            if (sg.cleanOutroTrack != null && sg.cleanOutroTrack > 0) {
-                stationArchive.materializeTrackUri(sg.cleanOutroTrack)?.let { uris.add(it) }
-            }
-            val durations = uris.map { readAudioDurationMs(context, it) }
-            mainHandler.post {
-                if (token == cleanPlayGeneration.get()) {
-                    if (uris.isNotEmpty()) {
-                        player.playCleanQueue(uris, durations) {
-                            if (token == cleanPlayGeneration.get()) {
-                                onTrackFinished()
-                            }
-                        }
-                    } else {
-                        onTrackFinished()
+            try {
+                val album = Gen2MetadataRepository.getCachedAlbumName(context, sg.artist, sg.cleanTitle) ?: groupTitle
+                mainHandler.post {
+                    if (token == cleanPlayGeneration.get()) {
+                        onMetadataReady(sg.cleanTitle, sg.artist, album, 2004)
                     }
                 }
+                val uris = ArrayList<Uri>()
+                if (sg.cleanIntroTrack != null && sg.cleanIntroTrack > 0) {
+                    stationArchive.materializeTrackUri(sg.cleanIntroTrack)?.let { uris.add(it) }
+                }
+                stationArchive.materializeTrackUri(sg.midTrack)?.let { uris.add(it) }
+                if (sg.cleanOutroTrack != null && sg.cleanOutroTrack > 0) {
+                    stationArchive.materializeTrackUri(sg.cleanOutroTrack)?.let { uris.add(it) }
+                }
+                val durations = uris.map { readAudioDurationMs(context, it) }
+                mainHandler.post {
+                    if (token == cleanPlayGeneration.get()) {
+                        if (uris.isNotEmpty()) {
+                            player.playCleanQueue(uris, durations) {
+                                if (token == cleanPlayGeneration.get()) {
+                                    onTrackFinished()
+                                }
+                            }
+                        } else {
+                            onTrackFinished()
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("Gen2RawRadioStation: Error materializing clean track", e)
+                mainHandler.post { onTrackFinished() }
             }
         }
     }

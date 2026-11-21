@@ -1063,11 +1063,15 @@ data class Rpf7ClipRef(
         val meta = Rpf7MetadataRepository.getTrackMeta(targetItem.trackName, stationTitle)
         val title = meta.title
         val artist = meta.artist
-        val album = Rpf7MetadataRepository.getCachedAlbumName(context, artist, title) ?: stationTitle
-        onMetadataReady(title, artist, album, 2021)
 
         cleanPlayExecutor.submit {
             try {
+                val album = Rpf7MetadataRepository.getCachedAlbumName(context, artist, title) ?: stationTitle
+                mainHandler.post {
+                    if (token == cleanPlayGeneration.get()) {
+                        onMetadataReady(title, artist, album, 2021)
+                    }
+                }
                 val uri = targetItem.archive.materializeFullAudioUri(targetItem.trackName)
                 if (token != cleanPlayGeneration.get()) return@submit
                 if (uri == null) {

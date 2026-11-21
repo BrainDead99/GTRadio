@@ -555,6 +555,9 @@ enum class PlaybackMode {
         super.onCreate()
         GTRadioLogger.init(applicationContext)
         AlbumArtDownloader.init(applicationContext)
+        scanExecutor.submit {
+            AlbumHintRepository.ensureLoaded(applicationContext)
+        }
 
         //Subscribe to any SharedPref changes for things like the base folder, ads, and weather chatter
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
@@ -704,6 +707,7 @@ enum class PlaybackMode {
             if (needScan) {
                 scanExecutor.submit {
                     GTRadioLogger.log("GTRadioMusicService: Starting background station group scan on scanExecutor")
+                    AlbumHintRepository.ensureLoaded(applicationContext)
                     val groups = getStationGroups()
                     val fullList = ArrayList(groups.map { x -> x.stationList }.flatten())
                     val groupMediaItems = ArrayList(groups.map { x -> x.mediaItem })
@@ -752,6 +756,7 @@ enum class PlaybackMode {
 
     private fun ensureGroupsLoadedSync(currentUri: String) {
         if (!groupsLoaded || cachedUri != currentUri) {
+            AlbumHintRepository.ensureLoaded(applicationContext)
             val groups = getStationGroups()
             val fullList = ArrayList(groups.map { x -> x.stationList }.flatten())
             synchronized(pendingRootResults) {

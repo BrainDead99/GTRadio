@@ -1061,11 +1061,15 @@ data class Rpf3ClipRef(
         val meta = Rpf3MetadataRepository.getTrackMeta(context, targetItem.trackName, stationTitle)
         val title = meta?.title ?: targetItem.trackName
         val artist = meta?.artist ?: stationTitle
-        val album = Gen2MetadataRepository.getCachedAlbumName(context, artist, title) ?: stationTitle
-        onMetadataReady(title, artist, album, 2009)
 
         cleanPlayExecutor.submit {
             try {
+                val album = Gen2MetadataRepository.getCachedAlbumName(context, artist, title) ?: stationTitle
+                mainHandler.post {
+                    if (token == cleanPlayGeneration.get()) {
+                        onMetadataReady(title, artist, album, 2009)
+                    }
+                }
                 val uri = targetItem.archive.materializeFullAudioUri(targetItem.trackName)
                 if (token != cleanPlayGeneration.get()) return@submit
                 if (uri == null) {
