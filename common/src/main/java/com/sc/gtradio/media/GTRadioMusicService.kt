@@ -46,6 +46,7 @@ enum class PlaybackMode {
 const val NOW_PLAYING_CHANNEL_ID = "com.sc.gtradio.media.NOW_PLAYING"
 const val NOW_PLAYING_NOTIFICATION_ID = 0xb369
 const val ACTION_PLAY_MEDIA_ID = "com.sc.gtradio.ACTION_PLAY_MEDIA_ID"
+const val ACTION_SEEK_TO = "com.sc.gtradio.ACTION_SEEK_TO"
 const val ACTION_RELOAD_LIBRARY = "com.sc.gtradio.ACTION_RELOAD_LIBRARY"
 
 @UnstableApi
@@ -103,6 +104,7 @@ open class GTRadioMusicService : MediaLibraryService() {
 
     private var activeStation: RadioStation? = null
     private var activeStationGroupId: String? = null
+    private var activePlaybackStationGroup: StationGroup? = null
     @Volatile private var stationSwitchToken = 0L
     @Volatile private var playerReadyForCurrentSwitch = false
 
@@ -231,6 +233,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         ): MediaSession.ConnectionResult {
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
                 .add(SessionCommand(ACTION_PLAY_MEDIA_ID, Bundle.EMPTY))
+                .add(SessionCommand(ACTION_SEEK_TO, Bundle.EMPTY))
                 .add(SessionCommand(TracklistContract.ACTION_TOGGLE_SHUFFLE, Bundle.EMPTY))
                 .add(SessionCommand(TracklistContract.ACTION_CYCLE_REPEAT, Bundle.EMPTY))
                 .add(SessionCommand(ACTION_RELOAD_LIBRARY, Bundle.EMPTY))
@@ -244,6 +247,9 @@ open class GTRadioMusicService : MediaLibraryService() {
                 .add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
                 .add(Player.COMMAND_SEEK_TO_NEXT)
                 .add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_MEDIA_ITEM)
+                .add(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
                 .add(Player.COMMAND_GET_CURRENT_MEDIA_ITEM)
                 .add(Player.COMMAND_GET_METADATA)
                 .add(Player.COMMAND_GET_TIMELINE)
@@ -265,6 +271,12 @@ open class GTRadioMusicService : MediaLibraryService() {
                     val mediaId = args.getString("media_id") ?: ""
                     if (mediaId.isNotBlank()) {
                         playMediaId(mediaId, args)
+                    }
+                }
+                ACTION_SEEK_TO -> {
+                    val posMs = args.getLong("position_ms", -1L)
+                    if (posMs >= 0L) {
+                        radioPlayer.seekToMs(posMs)
                     }
                 }
                 "setActiveStationGroupId" -> {
@@ -448,15 +460,38 @@ open class GTRadioMusicService : MediaLibraryService() {
     fun playMediaId(mediaId: String, extras: Bundle?) {
         if (mediaId.isBlank()) return
 
+        radioPlayer.setTransitionLoading(true)
+
         if (mediaId.startsWith(TracklistContract.SONG_PREFIX)) {
             val payload = mediaId.removePrefix(TracklistContract.SONG_PREFIX)
             val stationId = payload.substringBefore("::")
             val trackId = payload.substringAfter("::")
 
-            if (activeStation != null) {
-                activeStation?.stop()
-                activeStation = null
+            val group = getStationGroupContainingMedia(stationId)
+            val station = group?.let { getRadioStation(it, stationId) } as? TracklistCapableStation
+            val tracks = station?.getCleanTracks() ?: emptyList()
+            val targetTrack = tracks.find { it.id.equals(trackId, ignoreCase = true) } ?: tracks.firstOrNull()
+            if (targetTrack != null) {
+                val cachedArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, targetTrack.artist, targetTrack.title)
+                val previewMeta = buildStationMediaMetadata(
+                    mediaId = mediaId,
+                    title = targetTrack.title,
+                    subtitle = "${targetTrack.artist} • ${targetTrack.stationName}",
+                    artist = targetTrack.artist,
+                    albumArtist = targetTrack.stationName,
+                    stationTitle = targetTrack.stationName,
+                    groupTitle = targetTrack.stationName,
+                    art = cachedArt,
+                    isSong = true,
+                    durationMs = -1L
+                )
+                radioPlayer.updateSessionMetadata(previewMeta)
             }
+
+            val departingStation = activeStation
+            activeStation = null
+            departingStation?.stop()
+
             DynamicThemeManager.stopTuningNoise("tracklist_start")
             radioPlayer.setStreamMuted(false)
             radioPlayer.isTracklistMode = true
@@ -464,15 +499,19 @@ open class GTRadioMusicService : MediaLibraryService() {
             playbackMode = PlaybackMode.TRACKLIST
             radioPlayer.notifyAvailableCommandsChanged()
 
-            val group = getStationGroupContainingMedia(stationId) ?: return
-            val station = getRadioStation(group, stationId) as? TracklistCapableStation ?: return
+            if (station == null || group == null) return
             activeTracklistStation = station
             activeTracklistStationId = stationId
-            activeTracklistTracks = station.getCleanTracks()
+            activeTracklistTracks = tracks
             val trackIndex = activeTracklistTracks.indexOfFirst { it.id.equals(trackId, ignoreCase = true) }
             val targetIndex = if (trackIndex >= 0) trackIndex else 0
             playTracklistTrack(targetIndex)
             return
+        }
+
+        val targetItem = fullStationList.find { it.mediaId == mediaId }
+        if (targetItem != null) {
+            radioPlayer.updateSessionMetadata(targetItem.mediaMetadata)
         }
 
         if (playbackMode == PlaybackMode.TRACKLIST) {
@@ -487,9 +526,6 @@ open class GTRadioMusicService : MediaLibraryService() {
         }
 
         val group = getStationGroupContainingMedia(mediaId) ?: return
-        if (activeStation?.mediaId != mediaId) {
-            activeStation?.stop()
-        }
         val st = getRadioStation(group, mediaId) ?: return
         val stationIndex = group.getStationIndex(st.mediaId)
         startStationWithTuningNoise(group, st, stationIndex, trigger = "in_app")
@@ -549,28 +585,27 @@ open class GTRadioMusicService : MediaLibraryService() {
             return
         }
 
-        if (activeStation == null) {
-            val group = (activeStationGroupId?.let { getStationGroup(it) })
-                ?: (fullStationList.firstOrNull()?.mediaId?.let { getStationGroupContainingMedia(it) })
-                ?: return
-            val firstStation = group.stationList.firstOrNull() ?: return
-            val st = getRadioStation(group, firstStation.mediaId) ?: return
-            startStationWithTuningNoise(group, st, 0, trigger = "skip_next")
-            return
-        }
-
-        val currentSt = activeStation ?: return
-        val group = (activeStationGroupId?.let { getStationGroup(it) })
-            ?: getStationGroup(currentSt.stationGroupId)
-            ?: getStationGroupContainingMedia(currentSt.mediaId)
+        val currentSt = activeStation
+        val group = activePlaybackStationGroup
+            ?: (currentSt?.stationGroupId?.let { getStationGroup(it) })
+            ?: (currentSt?.let { getStationGroupContainingMedia(it.mediaId) })
+            ?: (activeStationGroupId?.let { getStationGroup(it) })
+            ?: (fullStationList.firstOrNull()?.mediaId?.let { getStationGroupContainingMedia(it) })
             ?: return
 
         if (group.stationList.isEmpty()) return
-        val stationIndex = group.getStationIndex(currentSt.mediaId)
-        val nextStationIndex = if (stationIndex + 1 >= group.stationList.size) 0 else (stationIndex + 1)
+        val stationIndex = if (currentSt != null) group.getStationIndex(currentSt.mediaId) else -1
+        val nextStationIndex = if (stationIndex >= 0) {
+            if (stationIndex + 1 >= group.stationList.size) 0 else (stationIndex + 1)
+        } else {
+            0
+        }
 
-        currentSt.stop()
-        val nextSt = getRadioStation(group, group.stationList[nextStationIndex].mediaId) ?: return
+        val nextItem = group.stationList[nextStationIndex]
+        radioPlayer.setTransitionLoading(true)
+        radioPlayer.updateSessionMetadata(nextItem.mediaMetadata)
+
+        val nextSt = getRadioStation(group, nextItem.mediaId) ?: return
         startStationWithTuningNoise(group, nextSt, nextStationIndex, trigger = "skip_next")
     }
 
@@ -599,28 +634,27 @@ open class GTRadioMusicService : MediaLibraryService() {
             return
         }
 
-        if (activeStation == null) {
-            val group = (activeStationGroupId?.let { getStationGroup(it) })
-                ?: (fullStationList.firstOrNull()?.mediaId?.let { getStationGroupContainingMedia(it) })
-                ?: return
-            val firstStation = group.stationList.firstOrNull() ?: return
-            val st = getRadioStation(group, firstStation.mediaId) ?: return
-            startStationWithTuningNoise(group, st, 0, trigger = "skip_prev")
-            return
-        }
-
-        val currentSt = activeStation ?: return
-        val group = (activeStationGroupId?.let { getStationGroup(it) })
-            ?: getStationGroup(currentSt.stationGroupId)
-            ?: getStationGroupContainingMedia(currentSt.mediaId)
+        val currentSt = activeStation
+        val group = activePlaybackStationGroup
+            ?: (currentSt?.stationGroupId?.let { getStationGroup(it) })
+            ?: (currentSt?.let { getStationGroupContainingMedia(it.mediaId) })
+            ?: (activeStationGroupId?.let { getStationGroup(it) })
+            ?: (fullStationList.firstOrNull()?.mediaId?.let { getStationGroupContainingMedia(it) })
             ?: return
 
         if (group.stationList.isEmpty()) return
-        val stationIndex = group.getStationIndex(currentSt.mediaId)
-        val prevStationIndex = if (stationIndex - 1 < 0) group.stationList.lastIndex else (stationIndex - 1)
+        val stationIndex = if (currentSt != null) group.getStationIndex(currentSt.mediaId) else -1
+        val prevStationIndex = if (stationIndex >= 0) {
+            if (stationIndex - 1 < 0) group.stationList.lastIndex else (stationIndex - 1)
+        } else {
+            0
+        }
 
-        currentSt.stop()
-        val prevSt = getRadioStation(group, group.stationList[prevStationIndex].mediaId) ?: return
+        val prevItem = group.stationList[prevStationIndex]
+        radioPlayer.setTransitionLoading(true)
+        radioPlayer.updateSessionMetadata(prevItem.mediaMetadata)
+
+        val prevSt = getRadioStation(group, prevItem.mediaId) ?: return
         startStationWithTuningNoise(group, prevSt, prevStationIndex, trigger = "skip_prev")
     }
 
@@ -635,11 +669,14 @@ open class GTRadioMusicService : MediaLibraryService() {
         playerReadyForCurrentSwitch = false
 
         radioPlayer.setTransitionLoading(true)
-        radioPlayer.stopInternal()
-        activeStation?.stop()
+        val departingStation = activeStation
+        if (departingStation != null && departingStation !== station) {
+            departingStation.stop()
+        }
 
         activeStation = station
         activeStationGroupId = group.mediaItem.mediaId
+        activePlaybackStationGroup = group
 
         val canCycle = group.stationList.size > 1
         radioPlayer.hasActiveQueueOrStation = true
@@ -692,8 +729,13 @@ open class GTRadioMusicService : MediaLibraryService() {
     private fun playTracklistTrack(index: Int) {
         if (index !in activeTracklistTracks.indices) return
         val station = activeTracklistStation ?: return
+        val track = activeTracklistTracks[index]
 
         radioPlayer.setTransitionLoading(true)
+
+        val cachedArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
+        publishTracklistMetadata(track, index, cachedArt, -1L)
+
         radioPlayer.stopInternal()
 
         activeTracklistIndex = index
@@ -701,13 +743,9 @@ open class GTRadioMusicService : MediaLibraryService() {
             tracklistPlayedIndices.add(index)
         }
 
-        val track = activeTracklistTracks[index]
         val canNav = activeTracklistTracks.size > 1
         radioPlayer.hasActiveQueueOrStation = true
         radioPlayer.updateNavigationCommands(canNav, canNav)
-
-        val cachedArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
-        publishTracklistMetadata(track, index, cachedArt, -1L)
 
         val expectedIndex = index
         val expectedTrackId = track.id

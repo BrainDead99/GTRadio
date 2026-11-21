@@ -70,13 +70,17 @@ import kotlin.math.abs
         return stationFolder.name ?: ""
     }
 
+    private var isStationActive = false
+
     override fun stop() {
+        if (!isStationActive) return
+        isStationActive = false
         if (mediaSource == null) {
             return
         }
 
         _playing = false
-        lastStoppedDurationSec = (player.getCurrentTrackPosition() / 1000).toInt()
+        lastStoppedDurationSec = (player.exoPlayer.currentPosition.coerceAtLeast(0L) / 1000).toInt()
         lastStoppedTime = Calendar.getInstance()
         player.stopInternal()
     }
@@ -86,6 +90,7 @@ import kotlin.math.abs
             return
         }
 
+        isStationActive = true
         _playing = true
         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
 
@@ -128,7 +133,7 @@ import kotlin.math.abs
     private fun seekAndPlayFile() {
         val seekPos = getSeekPosition()
         if (seekPos > 0L) {
-            player.seekTo(seekPos)
+            player.exoPlayer.seekTo(seekPos)
         }
         player.repeatMode = Player.REPEAT_MODE_ALL
         player.playInternal()

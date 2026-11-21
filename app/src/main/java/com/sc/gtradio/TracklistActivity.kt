@@ -53,12 +53,15 @@ class TracklistActivity : AppCompatActivity() {
     private var currentNowPlaying: MediaMetadata = NOTHING_PLAYING
     private var isUserSeeking = false
     private var isActivityResumed = false
+    private var lastSeekRequestTimeMs: Long = 0L
 
     private fun Int.dpToPx(): Int = (this * resources.displayMetrics.density).toInt()
 
     private val tickerRunnable = object : Runnable {
         override fun run() {
-            if (isActivityResumed && currentPlaybackState.isPlaying && !isUserSeeking) {
+            val now = SystemClock.elapsedRealtime()
+            val isSeekingOrSettling = isUserSeeking || (now - lastSeekRequestTimeMs < 800L)
+            if (isActivityResumed && currentPlaybackState.isPlaying && !isSeekingOrSettling) {
                 val durationMs = musicServiceConnection.durationMs()
                 if (durationMs > 0L) {
                     if (binding.scrubSeekBar.max != durationMs.toInt()) {
@@ -317,6 +320,7 @@ class TracklistActivity : AppCompatActivity() {
 
             override fun onStopTrackingTouch(seekBar: SeekBar?) {
                 isUserSeeking = false
+                lastSeekRequestTimeMs = SystemClock.elapsedRealtime()
                 val targetMs = (seekBar?.progress ?: 0).toLong()
                 musicServiceConnection.transportControls.seekTo(targetMs)
             }
@@ -334,7 +338,8 @@ class TracklistActivity : AppCompatActivity() {
             binding.scrubSeekBar.max = 0
             binding.totalTimeText.text = "-:--"
         }
-        if (!isUserSeeking) {
+        val isSeekingOrSettling = isUserSeeking || (SystemClock.elapsedRealtime() - lastSeekRequestTimeMs < 800L)
+        if (!isSeekingOrSettling) {
             val currentPos = musicServiceConnection.currentPositionMs()
             val clampedPos = if (durationMs > 0L) currentPos.coerceIn(0L, durationMs) else currentPos.coerceAtLeast(0L)
             binding.scrubSeekBar.progress = clampedPos.toInt()
@@ -424,7 +429,8 @@ class TracklistActivity : AppCompatActivity() {
             binding.scrubSeekBar.max = durationMs.toInt()
             binding.totalTimeText.text = formatDurationMs(durationMs)
         }
-        if (!isUserSeeking) {
+        val isSeekingOrSettling = isUserSeeking || (SystemClock.elapsedRealtime() - lastSeekRequestTimeMs < 800L)
+        if (!isSeekingOrSettling) {
             val currentPos = musicServiceConnection.currentPositionMs()
             val clampedPos = if (durationMs > 0L) currentPos.coerceIn(0L, durationMs) else currentPos.coerceAtLeast(0L)
             binding.scrubSeekBar.progress = clampedPos.toInt()

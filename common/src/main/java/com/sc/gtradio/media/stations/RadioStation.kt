@@ -91,7 +91,11 @@ fun buildStationMediaMetadata(
     finalExtras.putString("station_name", stationTitle)
     finalExtras.putString("group_name", groupTitle)
     finalExtras.putBoolean("is_song", isSong)
-    finalExtras.putLong("duration_ms", durationMs)
+    if (durationMs > 0L) {
+        finalExtras.putLong("duration_ms", durationMs)
+    } else {
+        finalExtras.remove("duration_ms")
+    }
     b.setExtras(finalExtras)
 
     return b.build()

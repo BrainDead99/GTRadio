@@ -197,14 +197,23 @@ class Gen1RawRadioStation(
         return durMs
     }
 
+    private var isStationActive = false
+    private var lastStoppedTimeMs: Long = 0L
+    private var stoppedPositionMs: Long = 0L
+
     override fun stop() {
+        if (!isStationActive) return
+        isStationActive = false
         _playing = false
+        lastStoppedTimeMs = System.currentTimeMillis()
+        stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
         mainHandler.removeCallbacks(metadataTickRunnable)
         player.stopInternal()
     }
 
     override fun play() {
         GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: play() called (file=$fileName, isXorAdf=$isXorAdf)")
+        isStationActive = true
         _playing = true
         activeCueKey = "__INIT__"
         mainHandler.removeCallbacks(metadataTickRunnable)
@@ -214,10 +223,15 @@ class Gen1RawRadioStation(
         player.playWhenReady = false
 
         val durMs = estimateDurationMs()
-        val liveOffsetMs = if (durMs > 60_000L) {
-            (System.currentTimeMillis() % durMs).coerceIn(0L, durMs - 5_000L)
+        val liveOffsetMs = if (durMs > 0L) {
+            if (lastStoppedTimeMs > 0L) {
+                val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+                (stoppedPositionMs + elapsedMs) % durMs
+            } else {
+                (System.currentTimeMillis() % durMs).coerceIn(0L, (durMs - 5_000L).coerceAtLeast(0L))
+            }
         } else {
-            rng.nextInt(30_000).toLong()
+            0L
         }
 
         val dataSourceFactory = AdfXorDataSource.Factory(
@@ -239,7 +253,7 @@ class Gen1RawRadioStation(
 
         player.setMediaSource(mediaSource)
         if (liveOffsetMs > 0L) {
-            player.seekTo(0, liveOffsetMs)
+            player.exoPlayer.seekTo(0, liveOffsetMs)
         }
         player.prepare()
         player.playInternal()

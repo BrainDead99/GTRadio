@@ -420,7 +420,11 @@ import kotlin.collections.ArrayList
     }
 
 
+    private var isStationActive = false
+
     override fun stop() {
+        if (!isStationActive) return
+        isStationActive = false
         if (gen1Station == null) {
             _playing = false
             player.stopInternal()
@@ -430,6 +434,7 @@ import kotlin.collections.ArrayList
     }
 
     override fun play() {
+        isStationActive = true
         if (gen1Station == null) {
             _playing = true
             player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING

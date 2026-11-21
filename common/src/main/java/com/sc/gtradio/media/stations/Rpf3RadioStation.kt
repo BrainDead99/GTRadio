@@ -436,16 +436,37 @@ data class Rpf3ClipRef(
         onMetadataChanged?.invoke(_currentMetadata)
     }
 
-    private fun refreshCurrentSegmentMetadata() {
+    private var isStationActive = false
+
+    private fun updateMetadataForWindowIndex(winIdx: Int, expectedGen: Int = playGeneration.get()) {
         if (lastSegment == RadioSegmentType.Song && currentSongItem != null) {
-            applySongOrShowMetadata(currentSongItem!!)
+            val mainIdx = currentSegmentUris.size - 1
+            if (winIdx == mainIdx) {
+                applySongOrShowMetadata(currentSongItem!!)
+                if (activeMixMarkers.isNotEmpty()) {
+                    startMixPoller(expectedGen)
+                }
+            } else {
+                stopMixPoller()
+                setStationOnlyMetadata()
+            }
         } else {
+            stopMixPoller()
             setStationOnlyMetadata()
         }
     }
 
+    private fun refreshCurrentSegmentMetadata() {
+        updateMetadataForWindowIndex(player.exoPlayer.currentMediaItemIndex)
+    }
+
     private fun getFileDurationMs(uri: Uri): Long {
         durationCache[uri]?.let { return it }
+        val readDur = readAudioDurationMs(context, uri)
+        if (readDur > 0L) {
+            durationCache[uri] = readDur
+            return readDur
+        }
         var dur = 30_000L
         try {
             val path = uri.path
@@ -472,11 +493,13 @@ data class Rpf3ClipRef(
     override fun stop() {
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: stop() called (gen=$gen)")
+        if (!isStationActive) return
+        isStationActive = false
         stopMixPoller()
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
-            stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
-            stoppedPositionMs = player.getCurrentTrackPosition().coerceAtLeast(0L)
+            stoppedWindowIndex = player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
+            stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
         }
         _playing = false
         if (activeListener != null) {
@@ -499,6 +522,7 @@ data class Rpf3ClipRef(
     override fun play() {
         val currentGen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: play() called (gen=$currentGen)")
+        isStationActive = true
         _playing = true
         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
@@ -528,7 +552,10 @@ data class Rpf3ClipRef(
     }
 
     private fun resumeFromRealTime(rawElapsedMs: Long, expectedGen: Int) {
-        var remainingMs = if (rawElapsedMs > 180_000L) (rawElapsedMs % 180_000L) else rawElapsedMs
+        var remainingMs = rawElapsedMs
+        for (u in currentSegmentUris) {
+            getFileDurationMs(u)
+        }
         var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
 
@@ -551,6 +578,9 @@ data class Rpf3ClipRef(
             if (!advanceMultiChunkOrPickNext()) break
             winIdx = 0
             posMs = 0L
+            for (u in currentSegmentUris) {
+                getFileDurationMs(u)
+            }
         }
 
         if (currentSegmentUris.isNotEmpty()) {
@@ -856,8 +886,9 @@ data class Rpf3ClipRef(
             }
             player.setMediaSource(concatSource)
             if (startWindowIndex > 0 || startPositionMs > 0L) {
-                player.seekTo(startWindowIndex, startPositionMs)
+                player.exoPlayer.seekTo(startWindowIndex, startPositionMs)
             }
+            updateMetadataForWindowIndex(startWindowIndex, expectedGen)
 
             activeListener = object : Player.Listener {
                 private var alreadyHandled = false
@@ -869,6 +900,11 @@ data class Rpf3ClipRef(
                             playNext()
                         }
                     }
+                }
+
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    val curIdx = player.exoPlayer.currentMediaItemIndex
+                    updateMetadataForWindowIndex(curIdx, expectedGen)
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -897,7 +933,7 @@ data class Rpf3ClipRef(
         }
     }
 
-    private fun startMixPoller(expectedGen: Int) {
+    private fun startMixPoller(expectedGen: Int = playGeneration.get()) {
         mixPollerRunnable?.let { mainHandler.removeCallbacks(it) }
         val runnable = object : Runnable {
             override fun run() {

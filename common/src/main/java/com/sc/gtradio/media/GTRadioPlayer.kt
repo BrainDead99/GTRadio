@@ -373,13 +373,40 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         override fun getUidOfPeriod(periodIndex: Int): Any = Window.SINGLE_WINDOW_UID
     }
 
+    private class RadioForwardingTimeline(private val timeline: Timeline) : Timeline() {
+        override fun getWindowCount(): Int = timeline.windowCount
+        override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+            timeline.getWindow(windowIndex, window, defaultPositionProjectionUs)
+            window.isSeekable = false
+            window.isDynamic = true
+            window.durationUs = C.TIME_UNSET
+            window.presentationStartTimeMs = C.TIME_UNSET
+            window.windowStartTimeMs = 0L
+            return window
+        }
+
+        override fun getPeriodCount(): Int = timeline.periodCount
+        override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+            return timeline.getPeriod(periodIndex, period, setIds)
+        }
+
+        override fun getIndexOfPeriod(uid: Any): Int = timeline.getIndexOfPeriod(uid)
+        override fun getUidOfPeriod(periodIndex: Int): Any = timeline.getUidOfPeriod(periodIndex)
+    }
+
     override fun getCurrentTimeline(): Timeline {
         val superTimeline = super.getCurrentTimeline()
+        if (isTracklistMode) {
+            return superTimeline
+        }
         if (isTransitionLoading && super.getMediaItemCount() == 0) {
             val item = getCurrentMediaItem() ?: MediaItem.Builder().setMediaId("gt_radio_active").setMediaMetadata(activeSessionMetadata).build()
             return SyntheticTransitionTimeline(item)
         }
-        return superTimeline
+        if (superTimeline.isEmpty) {
+            return superTimeline
+        }
+        return RadioForwardingTimeline(superTimeline)
     }
 
     override fun getMediaItemCount(): Int {
@@ -413,12 +440,22 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
 
     override fun getPlaylistMetadata(): MediaMetadata = activeSessionMetadata
 
+    override fun isCurrentMediaItemSeekable(): Boolean = isTracklistMode
+
+    override fun isCurrentMediaItemLive(): Boolean = !isTracklistMode
+
     override fun getDuration(): Long {
         if (isTracklistMode) {
-            return getDurationMs()
+            return getDurationMs().takeIf { it > 0L } ?: super.getDuration()
         }
-        // For a faux live-stream, no items have a known duration
-        return -1L
+        return C.TIME_UNSET
+    }
+
+    override fun getContentDuration(): Long {
+        if (isTracklistMode) {
+            return getDurationMs().takeIf { it > 0L } ?: super.getContentDuration()
+        }
+        return C.TIME_UNSET
     }
 
     fun getDurationMs(): Long {
@@ -452,8 +489,14 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         if (isTracklistMode) {
             return getCurrentTrackPosition()
         }
-        // For a faux live-stream, we never really know the official "position" we are in
-        return -1L
+        return 0L
+    }
+
+    override fun getContentPosition(): Long {
+        if (isTracklistMode) {
+            return getCurrentTrackPosition()
+        }
+        return 0L
     }
 
     fun getCurrentTrackPosition(): Long {
@@ -520,6 +563,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         stopCleanQueue()
         cleanSegmentDurationsMs = segmentDurationsMs
         isTracklistMode = true
+        notifyAvailableCommandsChanged()
         radioPlaybackState = RadioState.PLAYING
         nextEnabled = true
         previousEnabled = true
@@ -559,6 +603,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         }
         cleanSegmentDurationsMs = emptyList()
         isTracklistMode = false
+        notifyAvailableCommandsChanged()
         stopInternal()
         exoPlayer.clearMediaItems()
         notifyPlaybackStateChanged()
@@ -585,6 +630,13 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         if (isTracklistMode) {
             builder.add(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
             builder.add(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
+            builder.add(Player.COMMAND_SEEK_BACK)
+            builder.add(Player.COMMAND_SEEK_FORWARD)
+        } else {
+            builder.remove(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+            builder.remove(Player.COMMAND_SEEK_TO_DEFAULT_POSITION)
+            builder.remove(Player.COMMAND_SEEK_BACK)
+            builder.remove(Player.COMMAND_SEEK_FORWARD)
         }
         return builder.build()
     }

@@ -211,7 +211,7 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
         }
 
         fun seekTo(positionMs: Long) {
-            mediaBrowser?.seekTo(positionMs)
+            this@MusicServiceConnection.seekTo(positionMs)
         }
 
         fun playFromMediaId(mediaId: String, extras: Bundle? = null) {
@@ -257,7 +257,14 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
     }
 
     fun seekTo(positionMs: Long) {
-        mediaBrowser?.seekTo(positionMs)
+        GTRadioLogger.logVerbose("SEEK") { "MusicServiceConnection.seekTo: positionMs=$positionMs" }
+        val b = mediaBrowser
+        if (b != null) {
+            b.seekTo(positionMs)
+            if (!b.isCommandAvailable(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)) {
+                sendCommand(ACTION_SEEK_TO, Bundle().apply { putLong("position_ms", positionMs) })
+            }
+        }
     }
 
     private inner class BrowserListener : MediaBrowser.Listener {

@@ -280,12 +280,23 @@ import java.util.*
         }
     }
 
-    private fun refreshCurrentSegmentMetadata() {
+    private var isStationActive = false
+
+    private fun updateMetadataForWindowIndex(winIdx: Int) {
         if (lastSegment == RadioSegmentType.Song && currentSongGroup != null) {
-            applySongMetadata(currentSongGroup!!)
+            val mainUri = stationArchive.materializeTrackUri(currentSongGroup!!.midTrack)
+            if (winIdx in currentSegmentUris.indices && currentSegmentUris[winIdx] == mainUri) {
+                applySongMetadata(currentSongGroup!!)
+            } else {
+                setStationOnlyMetadata()
+            }
         } else {
             setStationOnlyMetadata()
         }
+    }
+
+    private fun refreshCurrentSegmentMetadata() {
+        updateMetadataForWindowIndex(player.exoPlayer.currentMediaItemIndex)
     }
 
     private fun getHourBucket(): Int {
@@ -361,15 +372,7 @@ import java.util.*
 
     private fun getFileDurationMs(uri: Uri): Long {
         durationCache[uri]?.let { return it }
-        var dur = 30_000L
-        val retriever = MediaMetadataRetriever()
-        try {
-            retriever.setDataSource(context, uri)
-            dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 30_000L
-        } catch (_: Exception) {
-        } finally {
-            try { retriever.release() } catch (_: Exception) {}
-        }
+        val dur = readAudioDurationMs(context, uri).takeIf { it > 0L } ?: 30_000L
         durationCache[uri] = dur
         return dur
     }
@@ -377,12 +380,12 @@ import java.util.*
     override fun stop() {
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: stop() called (gen=$gen)")
-        if (_playing) {
-            lastStoppedTimeMs = System.currentTimeMillis()
-            stoppedWindowIndex = player.getCurrentWindowIndex().coerceAtLeast(0)
-            stoppedPositionMs = player.getCurrentTrackPosition().coerceAtLeast(0L)
-        }
+        if (!isStationActive) return
+        isStationActive = false
         _playing = false
+        lastStoppedTimeMs = System.currentTimeMillis()
+        stoppedWindowIndex = player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
+        stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
         if (activeListener != null) {
             player.removeListener(activeListener!!)
             activeListener = null
@@ -393,6 +396,7 @@ import java.util.*
     override fun play() {
         val currentGen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: play() called (gen=$currentGen)")
+        isStationActive = true
         _playing = true
         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
@@ -413,7 +417,10 @@ import java.util.*
     }
 
     private fun resumeFromRealTime(rawElapsedMs: Long, expectedGen: Int) {
-        var remainingMs = if (rawElapsedMs > 600_000L) (rawElapsedMs % 600_000L) else rawElapsedMs
+        var remainingMs = rawElapsedMs
+        for (u in currentSegmentUris) {
+            getFileDurationMs(u)
+        }
         var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
 
@@ -436,6 +443,9 @@ import java.util.*
             pickNextSegment()
             winIdx = 0
             posMs = 0L
+            for (u in currentSegmentUris) {
+                getFileDurationMs(u)
+            }
         }
 
         if (currentSegmentUris.isNotEmpty()) {
@@ -614,8 +624,9 @@ import java.util.*
             }
             player.setMediaSource(concatSource)
             if (startWindowIndex > 0 || startPositionMs > 0L) {
-                player.seekTo(startWindowIndex, startPositionMs)
+                player.exoPlayer.seekTo(startWindowIndex, startPositionMs)
             }
+            updateMetadataForWindowIndex(startWindowIndex)
 
             activeListener = object : Player.Listener {
                 private var alreadyHandled = false
@@ -627,6 +638,11 @@ import java.util.*
                             playNext()
                         }
                     }
+                }
+
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    val curIdx = player.exoPlayer.currentMediaItemIndex
+                    updateMetadataForWindowIndex(curIdx)
                 }
 
                 override fun onPlayerError(error: PlaybackException) {

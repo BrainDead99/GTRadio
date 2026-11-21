@@ -1138,7 +1138,6 @@ object AlbumArtDownloader {
         Gen2MetadataRepository.clearMemoryCache()
         Rpf7MetadataRepository.clearMemoryCache()
         Gen1MetadataRepository.clearMemoryCache()
-        AlbumHintRepository.clearMemoryCache()
         GTRadioLogger.logVerbose("ART") {
             "Album art cache cleared: ${stats.first} files, ${stats.second} bytes deleted"
         }

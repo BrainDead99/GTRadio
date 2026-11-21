@@ -162,7 +162,11 @@ class Gen1At3RadioStation(
         )
     }
 
+    private var isStationActive = false
+
     override fun stop() {
+        if (!isStationActive) return
+        isStationActive = false
         _playing = false
         mainHandler.removeCallbacks(metadataTickRunnable)
         if (activeListener != null) {
@@ -174,6 +178,7 @@ class Gen1At3RadioStation(
 
     override fun play() {
         GTRadioLogger.log("Gen1At3RadioStation[$stationTitle]: play() called (file=${archive.fileName})")
+        isStationActive = true
         archive.ensureHeaderParsed()
         _playing = true
         activeCueKey = "__INIT__"
