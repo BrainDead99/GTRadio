@@ -31,7 +31,6 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.SimpleExoPlayer
 import androidx.media3.ui.PlayerNotificationManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
@@ -137,10 +136,11 @@ enum class PlaybackMode {
 
     //Exoplayer will handle audio focus
     private val exoPlayer: ExoPlayer by lazy {
-        SimpleExoPlayer.Builder(this).build().apply {
-            setAudioAttributes(gtrAudioAttributes, true)
-            setHandleAudioBecomingNoisy(true)
-        }
+        ExoPlayer.Builder(this)
+            .setAudioAttributes(gtrAudioAttributes, true)
+            .setHandleAudioBecomingNoisy(true)
+            .experimentalSetDynamicSchedulingEnabled(true)
+            .build()
     }
 
     //Our own custom player will wrap ExoPlayer in order to provide more accurate playback status as well as other fields for our faux-stream use case

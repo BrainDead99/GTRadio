@@ -34,7 +34,7 @@ const val NOW_PLAYING_NOTIFICATION_ID = 0xb369 // Arbitrary number used to ident
             .setMediaDescriptionAdapter(DescriptionAdapter(mediaController))
             .setNotificationListener(notificationListener)
             .build().apply {
-                setMediaSessionToken(sessionToken)
+                setMediaSessionToken(sessionToken.token as android.media.session.MediaSession.Token)
                 // Don't display the rewind or fast-forward buttons, or the media time
                 setUseChronometer(false)
                 registerReceiver(
@@ -64,12 +64,12 @@ const val NOW_PLAYING_NOTIFICATION_ID = 0xb369 // Arbitrary number used to ident
             notificationManager.setUsePlayPauseActions(false)
             notificationManager.setUseStopAction(false)
         } else {
-            notificationManager.setUseNextActionInCompactView(player.hasNext())
-            notificationManager.setUseNextAction(player.hasNext())
+            notificationManager.setUseNextActionInCompactView(player.hasNextMediaItem())
+            notificationManager.setUseNextAction(player.hasNextMediaItem())
             notificationManager.setUsePlayPauseActions(true)
             notificationManager.setUseStopAction(false)
-            notificationManager.setUsePreviousActionInCompactView(player.hasPrevious())
-            notificationManager.setUsePreviousAction(player.hasPrevious())
+            notificationManager.setUsePreviousActionInCompactView(player.hasPreviousMediaItem())
+            notificationManager.setUsePreviousAction(player.hasPreviousMediaItem())
         }
     }
 
