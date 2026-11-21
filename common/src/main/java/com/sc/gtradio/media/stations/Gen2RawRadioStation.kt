@@ -153,6 +153,7 @@ import java.util.*
     // Real-time radio state tracking
     private var currentSegmentUris: List<Uri> = emptyList()
     private var currentSongGroup: Gen2SongGroup? = null
+    private var currentSongMainUri: Uri? = null
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedWindowIndex: Int = 0
     private var stoppedPositionMs: Long = 0L
@@ -283,9 +284,8 @@ import java.util.*
     private var isStationActive = false
 
     private fun updateMetadataForWindowIndex(winIdx: Int) {
-        if (lastSegment == RadioSegmentType.Song && currentSongGroup != null) {
-            val mainUri = stationArchive.materializeTrackUri(currentSongGroup!!.midTrack)
-            if (winIdx in currentSegmentUris.indices && currentSegmentUris[winIdx] == mainUri) {
+        if (lastSegment == RadioSegmentType.Song && currentSongGroup != null && currentSongMainUri != null) {
+            if (winIdx in currentSegmentUris.indices && currentSegmentUris[winIdx] == currentSongMainUri) {
                 applySongMetadata(currentSongGroup!!)
             } else {
                 setStationOnlyMetadata()
@@ -387,9 +387,10 @@ import java.util.*
         stoppedWindowIndex = player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
         stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
         if (activeListener != null) {
-            player.removeListener(activeListener!!)
+            player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
+        currentSongMainUri = null
         player.stopInternal()
     }
 
@@ -537,6 +538,7 @@ import java.util.*
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongGroup = null
+        currentSongMainUri = null
         currentSegmentUris = listOf(uri)
         return true
     }
@@ -548,6 +550,7 @@ import java.util.*
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongGroup = null
+        currentSongMainUri = null
         currentSegmentUris = listOf(uri)
         return true
     }
@@ -568,6 +571,7 @@ import java.util.*
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongGroup = null
+        currentSongMainUri = null
         currentSegmentUris = list
         return true
     }
@@ -601,6 +605,7 @@ import java.util.*
         if (outroTrack != null) stationArchive.materializeTrackUri(outroTrack)?.let { list.add(it) }
 
         currentSongGroup = song
+        currentSongMainUri = mainUri
         currentSegmentUris = list
         return true
     }
@@ -611,7 +616,7 @@ import java.util.*
             refreshCurrentSegmentMetadata()
 
             if (activeListener != null) {
-                player.removeListener(activeListener!!)
+                player.exoPlayer.removeListener(activeListener!!)
                 activeListener = null
             }
 
@@ -633,7 +638,7 @@ import java.util.*
                 override fun onPlaybackStateChanged(state: Int) {
                     if (!alreadyHandled && state == Player.STATE_ENDED) {
                         alreadyHandled = true
-                        player.removeListener(this)
+                        player.exoPlayer.removeListener(this)
                         if (_playing && playGeneration.get() == expectedGen) {
                             playNext()
                         }
@@ -649,7 +654,7 @@ import java.util.*
                     GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
                     if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
                         alreadyHandled = true
-                        player.removeListener(this)
+                        player.exoPlayer.removeListener(this)
                         mainHandler.post {
                             if (_playing && playGeneration.get() == expectedGen) {
                                 playNext()
@@ -658,7 +663,7 @@ import java.util.*
                     }
                 }
             }
-            player.addListener(activeListener!!)
+            player.exoPlayer.addListener(activeListener!!)
             if (!_playing || playGeneration.get() != expectedGen) return@post
             player.prepare()
             player.playInternal()

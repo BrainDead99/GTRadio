@@ -104,19 +104,19 @@ import kotlin.math.abs
                 override fun onTimelineChanged(timeline: Timeline, reason: Int) {
                     if (reason == Player.TIMELINE_CHANGE_REASON_SOURCE_UPDATE) {
                         if (durationSec != 0) {
-                            player.removeListener(activeListener!!)
+                            player.exoPlayer.removeListener(activeListener!!)
                             return
                         }
                         val stuff = timeline.getPeriod(0, Timeline.Period())
                         if (stuff.durationMs > 0) {
                             durationSec = (stuff.durationMs / 1000).toInt()
-                            player.removeListener(activeListener!!)
+                            player.exoPlayer.removeListener(activeListener!!)
                             seekAndPlayFile()
                         }
                     }
                 }
             }
-            player.addListener(activeListener!!)
+            player.exoPlayer.addListener(activeListener!!)
         }
 
         // Prepare the player.

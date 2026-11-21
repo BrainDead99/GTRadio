@@ -19,6 +19,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 object GTRadioLogger {
     private const val TAG = "GTRadioDiag"
@@ -36,7 +37,7 @@ object GTRadioLogger {
     private var appContext: Context? = null
     private var previousSessionTail: String = ""
 
-    private val sessionLogExecutor = Executors.newSingleThreadExecutor()
+    private val sessionLogExecutor = Executors.newSingleThreadScheduledExecutor()
     @Volatile private var lastSessionFlushUptime = 0L
     @Volatile private var sessionFlushPending = false
     private val sessionFlushLock = Any()
@@ -148,7 +149,10 @@ object GTRadioLogger {
             }
             memoryLogs.addLast(fullMsg)
         }
-        appendToDisk(fullMsg + "\n")
+        val lineToAppend = fullMsg + "\n"
+        sessionLogExecutor.execute {
+            appendToDisk(lineToAppend)
+        }
         val isCritical = error != null ||
             message.contains("ERROR", ignoreCase = true) ||
             message.contains("CRASH", ignoreCase = true) ||
@@ -162,23 +166,22 @@ object GTRadioLogger {
             if (forceImmediate) {
                 lastSessionFlushUptime = now
                 sessionFlushPending = false
-                sessionLogExecutor.submit { flushSessionLogToDisk() }
+                sessionLogExecutor.execute { flushSessionLogToDisk() }
             } else {
                 if (now - lastSessionFlushUptime >= 3000L) {
                     lastSessionFlushUptime = now
                     sessionFlushPending = false
-                    sessionLogExecutor.submit { flushSessionLogToDisk() }
+                    sessionLogExecutor.execute { flushSessionLogToDisk() }
                 } else if (!sessionFlushPending) {
                     sessionFlushPending = true
                     val delay = 3000L - (now - lastSessionFlushUptime)
-                    sessionLogExecutor.submit {
-                        SystemClock.sleep(delay)
+                    sessionLogExecutor.schedule({
                         synchronized(sessionFlushLock) {
                             sessionFlushPending = false
                             lastSessionFlushUptime = SystemClock.uptimeMillis()
                         }
                         flushSessionLogToDisk()
-                    }
+                    }, delay, TimeUnit.MILLISECONDS)
                 }
             }
         }
@@ -498,13 +501,15 @@ object GTRadioLogger {
         memoryLogs.clear()
         artMemoryLogs.clear()
         previousSessionTail = ""
-        try {
-            context?.let {
-                File(it.filesDir, "gtradio_debug.log").delete()
-                File(it.filesDir, SESSION_LOG_FILE).delete()
-            }
-            File("/sdcard/GTA SA RADIO PROJECT/gtradio_debug.log").delete()
-        } catch (_: Exception) {}
+        sessionLogExecutor.execute {
+            try {
+                context?.let {
+                    File(it.filesDir, "gtradio_debug.log").delete()
+                    File(it.filesDir, SESSION_LOG_FILE).delete()
+                }
+                File("/sdcard/GTA SA RADIO PROJECT/gtradio_debug.log").delete()
+            } catch (_: Exception) {}
+        }
         log("Logs cleared by user.")
     }
 }

@@ -398,7 +398,7 @@ import java.util.*
         stoppedWindowIndex = player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
         stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
         if (activeListener != null) {
-            player.removeListener(activeListener!!)
+            player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
         player.stopInternal()
@@ -612,7 +612,7 @@ import java.util.*
 
     private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long) {
         if (activeListener != null) {
-            player.removeListener(activeListener!!)
+            player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
 
@@ -634,7 +634,7 @@ import java.util.*
             override fun onPlaybackStateChanged(state: Int) {
                 if (!alreadyHandled && state == Player.STATE_ENDED) {
                     alreadyHandled = true
-                    player.removeListener(this)
+                    player.exoPlayer.removeListener(this)
                     playNext()
                 }
             }
@@ -644,7 +644,7 @@ import java.util.*
                 updateMetadataForWindowIndex(curIdx)
             }
         }
-        player.addListener(activeListener!!)
+        player.exoPlayer.addListener(activeListener!!)
         player.prepare()
         player.playInternal()
     }

@@ -51,15 +51,19 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     var activeSessionMetadata: MediaMetadata = MediaMetadata.EMPTY
         private set
 
+    private var isUpdatingMetadata = false
+
     fun updateSessionMetadata(metadata: MediaMetadata) {
-        activeSessionMetadata = metadata
-        val currentItem = currentMediaItem
-        for (l in playerListeners) {
-            l.onMediaMetadataChanged(metadata)
-            l.onPlaylistMetadataChanged(metadata)
-            if (currentItem != null) {
-                l.onMediaItemTransition(currentItem, Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED)
+        if (isUpdatingMetadata) return
+        isUpdatingMetadata = true
+        try {
+            activeSessionMetadata = metadata
+            for (l in playerListeners) {
+                l.onMediaMetadataChanged(metadata)
+                l.onPlaylistMetadataChanged(metadata)
             }
+        } finally {
+            isUpdatingMetadata = false
         }
     }
 
@@ -128,6 +132,78 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
                 override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                     val effectivePwr = if (isTransitionLoading) true else this@GTRadioPlayer.playWhenReady
                     listener.onPlayWhenReadyChanged(effectivePwr, reason)
+                }
+
+                override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                    if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+                        listener.onTimelineChanged(this@GTRadioPlayer.currentTimeline, reason)
+                    } else {
+                        listener.onTimelineChanged(timeline, reason)
+                    }
+                }
+
+                override fun onPositionDiscontinuity(
+                    oldPosition: Player.PositionInfo,
+                    newPosition: Player.PositionInfo,
+                    reason: Int
+                ) {
+                    if (isTracklistMode && cleanSegmentDurationsMs.size > 1) {
+                        if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+                            return
+                        }
+                        val curPos = this@GTRadioPlayer.currentPosition
+                        val item = this@GTRadioPlayer.currentMediaItem
+                        val oldUnifiedPos = if (cleanSegmentDurationsMs.isNotEmpty() && oldPosition.mediaItemIndex in cleanSegmentDurationsMs.indices) {
+                            cleanSegmentDurationsMs.take(oldPosition.mediaItemIndex).sum() + oldPosition.positionMs.coerceAtLeast(0L)
+                        } else {
+                            oldPosition.positionMs
+                        }
+                        val unifiedOld = Player.PositionInfo(
+                            Timeline.Window.SINGLE_WINDOW_UID,
+                            0,
+                            item,
+                            Timeline.Window.SINGLE_WINDOW_UID,
+                            0,
+                            oldUnifiedPos,
+                            oldUnifiedPos,
+                            -1,
+                            -1
+                        )
+                        val unifiedNew = Player.PositionInfo(
+                            Timeline.Window.SINGLE_WINDOW_UID,
+                            0,
+                            item,
+                            Timeline.Window.SINGLE_WINDOW_UID,
+                            0,
+                            curPos,
+                            curPos,
+                            -1,
+                            -1
+                        )
+                        listener.onPositionDiscontinuity(unifiedOld, unifiedNew, reason)
+                        return
+                    }
+                    listener.onPositionDiscontinuity(oldPosition, newPosition, reason)
+                }
+
+                @Deprecated("Deprecated in Java")
+                override fun onPositionDiscontinuity(reason: Int) {
+                    if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) {
+                        return
+                    }
+                    @Suppress("DEPRECATION")
+                    listener.onPositionDiscontinuity(reason)
+                }
+
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    if (isTracklistMode && cleanSegmentDurationsMs.size > 1) {
+                        if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || reason == Player.MEDIA_ITEM_TRANSITION_REASON_SEEK) {
+                            return
+                        }
+                        listener.onMediaItemTransition(this@GTRadioPlayer.currentMediaItem, reason)
+                        return
+                    }
+                    listener.onMediaItemTransition(mediaItem, reason)
                 }
 
                 override fun onEvents(player: Player, events: Player.Events) {
@@ -394,7 +470,52 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         override fun getUidOfPeriod(periodIndex: Int): Any = timeline.getUidOfPeriod(periodIndex)
     }
 
+    private class TracklistUnifiedTimeline(private val totalDurationUs: Long, private val mediaItem: MediaItem) : Timeline() {
+        override fun getWindowCount(): Int = 1
+        override fun getWindow(windowIndex: Int, window: Window, defaultPositionProjectionUs: Long): Window {
+            window.set(
+                Window.SINGLE_WINDOW_UID,
+                mediaItem,
+                null,
+                C.TIME_UNSET,
+                C.TIME_UNSET,
+                C.TIME_UNSET,
+                true,
+                false,
+                null,
+                0L,
+                totalDurationUs,
+                0,
+                0,
+                0L
+            )
+            return window
+        }
+
+        override fun getPeriodCount(): Int = 1
+        override fun getPeriod(periodIndex: Int, period: Period, setIds: Boolean): Period {
+            period.set(
+                if (setIds) 0 else null,
+                if (setIds) Window.SINGLE_WINDOW_UID else null,
+                0,
+                totalDurationUs,
+                0L
+            )
+            return period
+        }
+
+        override fun getIndexOfPeriod(uid: Any): Int {
+            return if (uid == Window.SINGLE_WINDOW_UID) 0 else C.INDEX_UNSET
+        }
+
+        override fun getUidOfPeriod(periodIndex: Int): Any = Window.SINGLE_WINDOW_UID
+    }
+
     override fun getCurrentTimeline(): Timeline {
+        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+            val item = getCurrentMediaItem() ?: MediaItem.Builder().setMediaId("gt_radio_active").setMediaMetadata(activeSessionMetadata).build()
+            return TracklistUnifiedTimeline(getDurationMs() * 1000L, item)
+        }
         val superTimeline = super.getCurrentTimeline()
         if (isTracklistMode) {
             return superTimeline
@@ -409,7 +530,31 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         return RadioForwardingTimeline(superTimeline)
     }
 
+    override fun getCurrentMediaItemIndex(): Int {
+        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+            return 0
+        }
+        return super.getCurrentMediaItemIndex()
+    }
+
+    override fun getCurrentPeriodIndex(): Int {
+        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+            return 0
+        }
+        return super.getCurrentPeriodIndex()
+    }
+
+    override fun getCurrentWindowIndex(): Int {
+        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+            return 0
+        }
+        return super.getCurrentWindowIndex()
+    }
+
     override fun getMediaItemCount(): Int {
+        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+            return 1
+        }
         val superCount = super.getMediaItemCount()
         if (superCount == 0 && isTransitionLoading) {
             return 1
@@ -640,8 +785,6 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         }
         return builder.build()
     }
-
-    override fun getCurrentWindowIndex(): Int = super.getCurrentWindowIndex()
 
     // ExoPlayer-specific forwarding helpers
     fun setMediaSource(mediaSource: MediaSource) {

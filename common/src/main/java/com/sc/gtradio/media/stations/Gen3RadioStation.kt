@@ -427,6 +427,10 @@ import kotlin.collections.ArrayList
         isStationActive = false
         if (gen1Station == null) {
             _playing = false
+            if (activeListener != null) {
+                player.exoPlayer.removeListener(activeListener!!)
+                activeListener = null
+            }
             player.stopInternal()
         } else {
             gen1Station.stop()
@@ -449,7 +453,8 @@ import kotlin.collections.ArrayList
     private fun playNext() {
         if (activeListener != null) {
             //Remove/clear any active exoplayer listeners to prevent incidental or repeated callbacks
-            player.removeListener(activeListener!!)
+            player.exoPlayer.removeListener(activeListener!!)
+            activeListener = null
         }
 
         if (_playing) {
@@ -642,12 +647,13 @@ import kotlin.collections.ArrayList
             override fun onPlaybackStateChanged(state: Int) {
                 if (!alreadyHandled && state == Player.STATE_ENDED) {
                     alreadyHandled = true
-                    player.removeListener(activeListener!!)
+                    player.exoPlayer.removeListener(this)
+                    activeListener = null
                     playNext()
                 }
             }
         }
-        player.addListener(activeListener!!)
+        player.exoPlayer.addListener(activeListener!!)
         player.prepare()
         player.playInternal()
     }

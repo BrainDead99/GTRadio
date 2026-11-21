@@ -170,7 +170,7 @@ class Gen1At3RadioStation(
         _playing = false
         mainHandler.removeCallbacks(metadataTickRunnable)
         if (activeListener != null) {
-            player.removeListener(activeListener!!)
+            player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
         player.stopInternal()
@@ -210,7 +210,7 @@ class Gen1At3RadioStation(
 
     private fun startPlayback(uri: Uri) {
         if (activeListener != null) {
-            player.removeListener(activeListener!!)
+            player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
 
@@ -225,12 +225,12 @@ class Gen1At3RadioStation(
             override fun onPlaybackStateChanged(state: Int) {
                 if (!handled && state == Player.STATE_ENDED) {
                     handled = true
-                    player.removeListener(this)
+                    player.exoPlayer.removeListener(this)
                     playChunkAtFrame(nextChunkStartFrame)
                 }
             }
         }
-        player.addListener(activeListener!!)
+        player.exoPlayer.addListener(activeListener!!)
         player.prepare()
         player.playInternal()
     }

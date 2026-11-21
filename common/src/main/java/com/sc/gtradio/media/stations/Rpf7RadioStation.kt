@@ -492,7 +492,7 @@ data class Rpf7ClipRef(
         _playing = false
         prefetchGeneration++ // Cancel any active background prefetches immediately
         if (activeListener != null) {
-            player.removeListener(activeListener!!)
+            player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
         player.stopInternal()
@@ -868,7 +868,7 @@ data class Rpf7ClipRef(
             refreshCurrentSegmentMetadata()
 
             if (activeListener != null) {
-                player.removeListener(activeListener!!)
+                player.exoPlayer.removeListener(activeListener!!)
                 activeListener = null
             }
 
@@ -894,7 +894,7 @@ data class Rpf7ClipRef(
                 override fun onPlaybackStateChanged(state: Int) {
                     if (!alreadyHandled && state == Player.STATE_ENDED) {
                         alreadyHandled = true
-                        player.removeListener(this)
+                        player.exoPlayer.removeListener(this)
                         if (_playing && playGeneration.get() == expectedGen) {
                             playNext()
                         }
@@ -910,7 +910,7 @@ data class Rpf7ClipRef(
                     GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
                     if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
                         alreadyHandled = true
-                        player.removeListener(this)
+                        player.exoPlayer.removeListener(this)
                         mainHandler.post {
                             if (_playing && playGeneration.get() == expectedGen) {
                                 playNext()
@@ -919,7 +919,7 @@ data class Rpf7ClipRef(
                     }
                 }
             }
-            player.addListener(activeListener!!)
+            player.exoPlayer.addListener(activeListener!!)
             if (!_playing || playGeneration.get() != expectedGen) return@post
             player.prepare()
             player.playInternal()
