@@ -2,110 +2,269 @@ package com.sc.gtradio.media
 
 import android.content.ComponentName
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.Bundle
 import android.os.Handler
-import android.os.ResultReceiver
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.MediaControllerCompat
-import android.support.v4.media.session.MediaSessionCompat
-import android.support.v4.media.session.PlaybackStateCompat
+import android.os.Looper
+import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.MutableLiveData
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.session.LibraryResult
+import androidx.media3.session.MediaBrowser
+import androidx.media3.session.MediaController
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionToken
+import com.sc.gtradio.common.GTRadioLogger
+import java.util.Collections
+import java.util.HashMap
+import java.util.HashSet
 
-class MusicServiceConnection(context: Context, serviceComponent: ComponentName) {
-    val isConnected = MutableLiveData<Boolean>()
-        .apply { postValue(false) }
+data class GTRadioPlaybackState(
+    val isPlaying: Boolean = false,
+    val isSkipToNextEnabled: Boolean = true,
+    val isSkipToPreviousEnabled: Boolean = true,
+    val position: Long = 0L,
+    val lastPositionUpdateTime: Long = SystemClock.elapsedRealtime(),
+    val playbackSpeed: Float = 1.0f,
+    val extras: Bundle? = null
+)
 
-    val playbackState = MutableLiveData<PlaybackStateCompat>()
-        .apply { postValue(EMPTY_PLAYBACK_STATE) }
-    val nowPlaying = MutableLiveData<MediaMetadataCompat>()
-        .apply { postValue(NOTHING_PLAYING) }
+val EMPTY_PLAYBACK_STATE = GTRadioPlaybackState()
+val NOTHING_PLAYING: MediaMetadata = MediaMetadata.EMPTY
 
-    val transportControls: MediaControllerCompat.TransportControls
-        get() = mediaController.transportControls
-
-    private val mediaBrowserConnectionCallback = MediaBrowserConnectionCallback(context)
-    private val mediaBrowser = MediaBrowserCompat(
-        context,
-        serviceComponent,
-        mediaBrowserConnectionCallback, null
-    ).apply { connect() }
-    private lateinit var mediaController: MediaControllerCompat
-
-    fun subscribe(parentId: String, callback: MediaBrowserCompat.SubscriptionCallback) {
-        mediaBrowser.subscribe(parentId, callback)
+inline val GTRadioPlaybackState.currentPlayBackPosition: Long
+    get() = if (isPlaying) {
+        val timeDelta = SystemClock.elapsedRealtime() - lastPositionUpdateTime
+        (position + (timeDelta * playbackSpeed)).toLong()
+    } else {
+        position
     }
 
-    fun unsubscribe(parentId: String, callback: MediaBrowserCompat.SubscriptionCallback) {
-        mediaBrowser.unsubscribe(parentId, callback)
-    }
+abstract class SubscriptionCallback {
+    open fun onChildrenLoaded(parentId: String, children: List<MediaItem>) {}
+    open fun onError(parentId: String) {}
+}
 
-    fun sendCommand(command: String, parameters: Bundle?) =
-        sendCommand(command, parameters) { _, _ -> }
+@UnstableApi
+class MusicServiceConnection(private val context: Context, serviceComponent: ComponentName) {
+    val isConnected = MutableLiveData<Boolean>().apply { postValue(false) }
+    val playbackState = MutableLiveData<GTRadioPlaybackState>().apply { postValue(EMPTY_PLAYBACK_STATE) }
+    val nowPlaying = MutableLiveData<MediaMetadata>().apply { postValue(NOTHING_PLAYING) }
+    val isPlaying = MutableLiveData<Boolean>().apply { postValue(false) }
 
-    fun sendCommand(command: String, parameters: Bundle?, resultCallback: ((Int, Bundle?) -> Unit)) =
-        if (mediaBrowser.isConnected) {
-            mediaController.sendCommand(command, parameters, object : ResultReceiver(Handler()) {
-                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
-                    resultCallback(resultCode, resultData)
+    val transportControls = TransportControls()
+
+    private var mediaBrowser: MediaBrowser? = null
+    private val subscriptions = HashMap<String, MutableSet<SubscriptionCallback>>()
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var currentExtras: Bundle? = null
+
+    init {
+        val sessionToken = SessionToken(context, serviceComponent)
+        val browserFuture = MediaBrowser.Builder(context, sessionToken)
+            .setListener(BrowserListener())
+            .buildAsync()
+
+        browserFuture.addListener({
+            try {
+                val browser = browserFuture.get()
+                mediaBrowser = browser
+                browser.addListener(PlayerListener())
+                isConnected.postValue(true)
+                GTRadioLogger.log("MusicServiceConnection: MediaBrowser connected successfully")
+
+                // Resubscribe any pending subscriptions
+                synchronized(subscriptions) {
+                    for (parentId in subscriptions.keys) {
+                        browser.subscribe(parentId, null)
+                        fetchChildren(parentId)
+                    }
                 }
-            })
-            true
-        } else {
-            false
-        }
-
-    private inner class MediaBrowserConnectionCallback(private val context: Context) :
-        MediaBrowserCompat.ConnectionCallback() {
-
-        override fun onConnected() {
-            // Get a MediaController for the MediaSession.
-            mediaController = MediaControllerCompat(context, mediaBrowser.sessionToken).apply {
-                registerCallback(MediaControllerCallback())
+                updatePlaybackState()
+            } catch (e: Exception) {
+                GTRadioLogger.log("MusicServiceConnection: MediaBrowser connection failed", e)
+                isConnected.postValue(false)
             }
+        }, ContextCompat.getMainExecutor(context))
+    }
 
-            isConnected.postValue(true)
+    fun subscribe(parentId: String, callback: SubscriptionCallback) {
+        synchronized(subscriptions) {
+            subscriptions.getOrPut(parentId) { HashSet() }.add(callback)
         }
-
-        override fun onConnectionSuspended() {
-            isConnected.postValue(false)
-        }
-
-        override fun onConnectionFailed() {
-            isConnected.postValue(false)
+        val browser = mediaBrowser
+        if (browser != null && browser.isConnected) {
+            browser.subscribe(parentId, null)
+            fetchChildren(parentId)
         }
     }
 
-    private inner class MediaControllerCallback : MediaControllerCompat.Callback() {
+    fun unsubscribe(parentId: String, callback: SubscriptionCallback) {
+        synchronized(subscriptions) {
+            val set = subscriptions[parentId]
+            if (set != null) {
+                set.remove(callback)
+                if (set.isEmpty()) {
+                    subscriptions.remove(parentId)
+                    mediaBrowser?.unsubscribe(parentId)
+                }
+            }
+        }
+    }
 
-        override fun onPlaybackStateChanged(state: PlaybackStateCompat?) {
-            playbackState.postValue(state ?: EMPTY_PLAYBACK_STATE)
+    private fun fetchChildren(parentId: String) {
+        val browser = mediaBrowser ?: return
+        val callbacks: List<SubscriptionCallback> = synchronized(subscriptions) {
+            subscriptions[parentId]?.toList() ?: emptyList()
+        }
+        if (callbacks.isEmpty()) return
+
+        val future = browser.getChildren(parentId, 0, Int.MAX_VALUE, null)
+        future.addListener({
+            try {
+                val res = future.get()
+                if (res != null && res.resultCode == LibraryResult.RESULT_SUCCESS) {
+                    val children = res.value ?: emptyList()
+                    mainHandler.post {
+                        callbacks.forEach { it.onChildrenLoaded(parentId, children) }
+                    }
+                } else {
+                    mainHandler.post {
+                        callbacks.forEach { it.onError(parentId) }
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.log("MusicServiceConnection: fetchChildren failed for $parentId", e)
+                mainHandler.post {
+                    callbacks.forEach { it.onError(parentId) }
+                }
+            }
+        }, ContextCompat.getMainExecutor(context))
+    }
+
+    fun sendCommand(command: String, parameters: Bundle?): Boolean =
+        sendCommand(command, parameters, null)
+
+    fun sendCommand(command: String, parameters: Bundle?, resultCallback: ((Int, Bundle?) -> Unit)?): Boolean {
+        val browser = mediaBrowser ?: return false
+        val sessionCommand = SessionCommand(command, Bundle.EMPTY)
+        val future = browser.sendCustomCommand(sessionCommand, parameters ?: Bundle.EMPTY)
+        future.addListener({
+            val res = try { future.get() } catch (e: Exception) { null }
+            resultCallback?.invoke(res?.resultCode ?: -1, res?.extras)
+        }, ContextCompat.getMainExecutor(context))
+        return true
+    }
+
+    private fun updatePlaybackState() {
+        val browser = mediaBrowser ?: return
+        val playing = browser.isPlaying
+        val canNext = browser.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT) ||
+            browser.isCommandAvailable(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
+        val canPrev = browser.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS) ||
+            browser.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
+        val pos = browser.currentPosition.coerceAtLeast(0L)
+
+        val state = GTRadioPlaybackState(
+            isPlaying = playing,
+            isSkipToNextEnabled = canNext,
+            isSkipToPreviousEnabled = canPrev,
+            position = pos,
+            lastPositionUpdateTime = SystemClock.elapsedRealtime(),
+            playbackSpeed = browser.playbackParameters.speed,
+            extras = currentExtras
+        )
+        isPlaying.postValue(playing)
+        playbackState.postValue(state)
+        nowPlaying.postValue(browser.mediaMetadata)
+    }
+
+    inner class TransportControls {
+        fun play() {
+            mediaBrowser?.play()
         }
 
-        override fun onMetadataChanged(metadata: MediaMetadataCompat?) {
-            nowPlaying.postValue(
-                if (metadata?.description?.mediaId.isNullOrEmpty()) {
-                    NOTHING_PLAYING
-                } else {
-                    metadata
+        fun pause() {
+            mediaBrowser?.pause()
+        }
+
+        fun stop() {
+            mediaBrowser?.stop()
+        }
+
+        fun skipToNext() {
+            mediaBrowser?.seekToNext()
+        }
+
+        fun skipToPrevious() {
+            mediaBrowser?.seekToPrevious()
+        }
+
+        fun seekTo(positionMs: Long) {
+            mediaBrowser?.seekTo(positionMs)
+        }
+
+        fun playFromMediaId(mediaId: String, extras: Bundle? = null) {
+            sendCommand(
+                ACTION_PLAY_MEDIA_ID,
+                Bundle().apply {
+                    putString("media_id", mediaId)
+                    extras?.let { putAll(it) }
                 }
             )
         }
 
-        override fun onQueueChanged(queue: MutableList<MediaSessionCompat.QueueItem>?) {
+        fun sendCustomAction(action: String, extras: Bundle? = null) {
+            sendCommand(action, extras ?: Bundle.EMPTY)
+        }
+    }
+
+    private inner class BrowserListener : MediaBrowser.Listener {
+        override fun onChildrenChanged(
+            browser: MediaBrowser,
+            parentId: String,
+            itemCount: Int,
+            params: MediaLibraryService.LibraryParams?
+        ) {
+            fetchChildren(parentId)
         }
 
-        override fun onSessionEvent(event: String?, extras: Bundle?) {
-            super.onSessionEvent(event, extras)
+        override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
+            currentExtras = extras
+            updatePlaybackState()
         }
 
-        override fun onSessionDestroyed() {
-            mediaBrowserConnectionCallback.onConnectionSuspended()
+        override fun onDisconnected(controller: MediaController) {
+            isConnected.postValue(false)
+        }
+    }
+
+    private inner class PlayerListener : Player.Listener {
+        override fun onIsPlayingChanged(playing: Boolean) {
+            updatePlaybackState()
+        }
+
+        override fun onPlaybackStateChanged(state: Int) {
+            updatePlaybackState()
+        }
+
+        override fun onMediaMetadataChanged(metadata: MediaMetadata) {
+            nowPlaying.postValue(metadata)
+            updatePlaybackState()
+        }
+
+        override fun onAvailableCommandsChanged(availableCommands: Player.Commands) {
+            updatePlaybackState()
         }
     }
 
     companion object {
-        // For Singleton instantiation.
         @Volatile
         private var instance: MusicServiceConnection? = null
 
@@ -117,13 +276,23 @@ class MusicServiceConnection(context: Context, serviceComponent: ComponentName) 
     }
 }
 
-@Suppress("PropertyName")
-val EMPTY_PLAYBACK_STATE: PlaybackStateCompat = PlaybackStateCompat.Builder()
-    .setState(PlaybackStateCompat.STATE_NONE, 0, 0f)
-    .build()
+val MediaMetadata.mediaId: String?
+    get() = extras?.getString("media_id")
 
-@Suppress("PropertyName")
-val NOTHING_PLAYING: MediaMetadataCompat = MediaMetadataCompat.Builder()
-    .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, "")
-    .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, 0)
-    .build()
+val MediaMetadata.durationMs: Long
+    get() {
+        val b = extras ?: return -1L
+        return b.getLong("duration_ms", -1L)
+    }
+
+val MediaMetadata.iconBitmap: Bitmap?
+    get() = artworkData?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+
+val MediaMetadata.isSong: Boolean
+    get() = (trackNumber == 1) || (extras?.getBoolean("is_song") == true)
+
+val MediaMetadata.stationName: String?
+    get() = writer?.toString() ?: extras?.getString("station_name")
+
+val MediaMetadata.groupName: String?
+    get() = albumTitle?.toString() ?: extras?.getString("group_name")

@@ -43,7 +43,8 @@ android {
 }
 
 dependencies {
-    api "androidx.media:media:$androidx_media_version"
+    api "androidx.media3:media3-session:$media3_version"
+    api "androidx.media3:media3-common:$media3_version"
     api "androidx.documentfile:documentfile:1.1.0"
 
     implementation "androidx.preference:preference-ktx:1.2.1"

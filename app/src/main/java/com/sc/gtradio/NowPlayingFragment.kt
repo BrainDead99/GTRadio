@@ -1,13 +1,12 @@
 package com.sc.gtradio
 
 import android.os.Bundle
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Observer
+import androidx.media3.common.MediaMetadata
 import com.sc.gtradio.databinding.FragmentNowplayingBinding
 import com.sc.gtradio.media.*
 import com.sc.gtradio.media.stations.TracklistContract
@@ -16,15 +15,15 @@ import com.sc.gtradio.utils.InjectorUtils
 class NowPlayingFragment : Fragment() {
     private var _binding: FragmentNowplayingBinding? = null
     private var musicServiceConnection: MusicServiceConnection? = null
-    private var playbackState: PlaybackStateCompat = EMPTY_PLAYBACK_STATE
+    private var playbackState: GTRadioPlaybackState = EMPTY_PLAYBACK_STATE
 
-    private val playbackStateObserver = Observer<PlaybackStateCompat> {
+    private val playbackStateObserver = Observer<GTRadioPlaybackState> {
         playbackState = it ?: EMPTY_PLAYBACK_STATE
         val metadata = musicServiceConnection?.nowPlaying?.value ?: NOTHING_PLAYING
         updateState(playbackState, metadata)
     }
 
-    private val mediaMetadataObserver = Observer<MediaMetadataCompat> {
+    private val mediaMetadataObserver = Observer<MediaMetadata> {
         updateState(playbackState, it)
     }
 
@@ -47,7 +46,7 @@ class NowPlayingFragment : Fragment() {
         binding.stationTitle.isSelected = true
 
         binding.playStopButton.setOnClickListener {
-            val isTracklist = musicServiceConnection?.nowPlaying?.value?.description?.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
+            val isTracklist = musicServiceConnection?.nowPlaying?.value?.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
             if (playbackState.isPlaying) {
                 if (isTracklist) {
                     musicServiceConnection?.transportControls?.pause()
@@ -74,17 +73,17 @@ class NowPlayingFragment : Fragment() {
         _binding = null
     }
 
-    private fun updateState(playbackState: PlaybackStateCompat, mediaMetadata: MediaMetadataCompat) {
+    private fun updateState(playbackState: GTRadioPlaybackState, mediaMetadata: MediaMetadata) {
         if (_binding == null) return
 
-        if (mediaMetadata.description.mediaId?.isNotBlank() == true) {
-            binding.stationTitle.text = mediaMetadata.description.title
-            val sub = mediaMetadata.description.subtitle?.toString() ?: ""
+        if (!mediaMetadata.mediaId.isNullOrBlank()) {
+            binding.stationTitle.text = mediaMetadata.title
+            val sub = mediaMetadata.subtitle?.toString() ?: ""
             binding.stationAlbum.text = sub
             binding.stationAlbum.visibility = if (sub.isBlank()) View.GONE else View.VISIBLE
 
-            val bmp = mediaMetadata.description.iconBitmap
-            val isTracklist = mediaMetadata.description.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
+            val bmp = mediaMetadata.iconBitmap
+            val isTracklist = mediaMetadata.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
             if (bmp != null) {
                 binding.albumArt.setImageBitmap(bmp)
             } else {
@@ -98,7 +97,7 @@ class NowPlayingFragment : Fragment() {
         }
 
         if (playbackState.isPlaying) {
-            val isTracklist = mediaMetadata.description.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
+            val isTracklist = mediaMetadata.mediaId?.startsWith(TracklistContract.SONG_PREFIX) == true
             binding.playStopButton.setImageResource(if (isTracklist) R.drawable.pause_24px else R.drawable.stop_24px)
         } else {
             binding.playStopButton.setImageResource(R.drawable.play_arrow_24px)

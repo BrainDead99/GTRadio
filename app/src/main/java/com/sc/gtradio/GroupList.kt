@@ -5,7 +5,6 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Bundle
-import android.support.v4.media.MediaBrowserCompat
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -13,22 +12,25 @@ import android.widget.ImageView
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.fragment.app.Fragment
+import androidx.media3.common.MediaItem
 import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.databinding.FragmentGrouplistBinding
 import com.sc.gtradio.databinding.FragmentStationgroupitemBinding
 import com.sc.gtradio.media.MusicServiceConnection
+import com.sc.gtradio.media.SubscriptionCallback
 import com.sc.gtradio.utils.InjectorUtils
 
 class GroupList : Fragment() {
     private var _binding: FragmentGrouplistBinding? = null
     private var musicServiceConnection: MusicServiceConnection? = null
 
-    private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
-        override fun onChildrenLoaded(parentId: String, children: List<MediaBrowserCompat.MediaItem>) {
+    private val subscriptionCallback = object : SubscriptionCallback() {
+        override fun onChildrenLoaded(parentId: String, children: List<MediaItem>) {
             GTRadioLogger.log("GroupList.onChildrenLoaded: parentId=$parentId, count=${children.size}")
             if (_binding != null) {
                 binding.groupLoadingProgress.visibility = View.GONE
@@ -201,8 +203,8 @@ class GroupList : Fragment() {
 }
 
 class StationGroupMediaItemListAdapter(
-    private val itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
-) : ListAdapter<MediaBrowserCompat.MediaItem, StationGroupViewHolder>(MediaItemDiffCallback) {
+    private val itemClickedListener: (MediaItem) -> Unit
+) : ListAdapter<MediaItem, StationGroupViewHolder>(MediaItemDiffCallback) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): StationGroupViewHolder {
         val inflater = LayoutInflater.from(parent.context)
@@ -214,8 +216,9 @@ class StationGroupMediaItemListAdapter(
         val mediaItem = getItem(position)
         if (payloads.isEmpty()) {
             holder.item = mediaItem
-            holder.titleView.text = mediaItem.description.title
-            val bmp = mediaItem.description.iconBitmap
+            holder.titleView.text = mediaItem.mediaMetadata.title
+            val artUri = mediaItem.mediaMetadata.artworkUri
+            val bmp = if (artUri != null) DynamicThemeManager.loadBitmap(holder.itemView.context, artUri, 512) else null
             if (bmp != null) {
                 holder.groupArt.setImageBitmap(bmp)
             } else {
@@ -231,12 +234,12 @@ class StationGroupMediaItemListAdapter(
 
 class StationGroupViewHolder(
     binding: FragmentStationgroupitemBinding,
-    itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
+    itemClickedListener: (MediaItem) -> Unit
 ) : RecyclerView.ViewHolder(binding.root) {
 
     val titleView: TextView = binding.groupTitle
     val groupArt: ImageView = binding.groupArt
-    var item: MediaBrowserCompat.MediaItem? = null
+    var item: MediaItem? = null
 
     init {
         binding.root.setOnClickListener { item?.let { itemClickedListener(it) } }

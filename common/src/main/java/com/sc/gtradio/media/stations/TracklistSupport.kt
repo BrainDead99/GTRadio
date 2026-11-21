@@ -1,6 +1,6 @@
 package com.sc.gtradio.media.stations
 
-import GTRadioPlayer
+import com.sc.gtradio.media.GTRadioPlayer
 
 data class TracklistTrack(
     val id: String,
@@ -29,6 +29,9 @@ object TracklistContract {
     const val SONG_PREFIX = "tracklist_song::"
     const val ACTION_TOGGLE_SHUFFLE = "com.sc.gtradio.ACTION_TOGGLE_SHUFFLE"
     const val ACTION_CYCLE_REPEAT = "com.sc.gtradio.ACTION_CYCLE_REPEAT"
+    const val REPEAT_MODE_NONE = 0
+    const val REPEAT_MODE_ONE = 1
+    const val REPEAT_MODE_ALL = 2
     const val EXTRA_PLAYBACK_MODE = "gtradio_playback_mode"
     const val EXTRA_SHUFFLE_ENABLED = "gtradio_shuffle_enabled"
     const val EXTRA_REPEAT_MODE = "gtradio_repeat_mode"

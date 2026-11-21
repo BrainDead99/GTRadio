@@ -2,15 +2,13 @@ package com.sc.gtradio.media.stations
 
 import android.content.Context
 import android.net.Uri
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.Util
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
-import GTRadioPlayer
+import com.sc.gtradio.media.GTRadioPlayer
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
@@ -22,7 +20,7 @@ import kotlin.collections.ArrayList
 @UnstableApi class Gen3RadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
-    override val mediaItem: MediaBrowserCompat.MediaItem,
+    override val mediaItem: MediaItem,
     baseStationFolderDoc: DocumentFile,
     advertsFolderDoc: DocumentFile,
     newsFolderDoc: DocumentFile,
@@ -34,25 +32,19 @@ import kotlin.collections.ArrayList
     override var newsReportsEnabled: Boolean
 ) : RadioStation {
 
-    override val metadata: MediaMetadataCompat =
-        MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, mediaItem.description.title as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, mediaItem.description.title as String?)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, mediaItem.description.iconBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, mediaItem.description.description as String?)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, mediaItem.description.iconBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, mediaItem.description.subtitle as String?)
-            .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, 1)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, 1)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DISC_NUMBER, 1)
-            .build()
+    override val metadata: MediaMetadata = buildStationMediaMetadata(
+        mediaId = mediaItem.mediaId,
+        title = mediaItem.mediaMetadata.title?.toString() ?: "",
+        subtitle = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        artist = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        albumArtist = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        stationTitle = mediaItem.mediaMetadata.title?.toString() ?: "",
+        groupTitle = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        art = null,
+        isSong = true
+    )
 
-    override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
+    override var onMetadataChanged: ((MediaMetadata) -> Unit)? = null
     override var stationName: String = ""
 
     //Ad files
@@ -440,7 +432,7 @@ import kotlin.collections.ArrayList
     override fun play() {
         if (gen1Station == null) {
             _playing = true
-            player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
+            player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
             player.repeatMode = Player.REPEAT_MODE_OFF
             player.playWhenReady = false
             playNext()

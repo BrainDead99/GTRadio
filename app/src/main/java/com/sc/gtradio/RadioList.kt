@@ -12,9 +12,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
@@ -24,6 +21,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Observer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
@@ -44,7 +43,7 @@ class RadioList : Fragment() {
     private var musicServiceConnection: MusicServiceConnection? = null
 
     private data class StripSlot(
-        val item: MediaBrowserCompat.MediaItem,
+        val item: MediaItem,
         val mediaId: String,
         val imageView: ImageView
     )
@@ -55,7 +54,7 @@ class RadioList : Fragment() {
     }
 
     private var activeThemePack: DynamicThemePack? = null
-    private var loadedStations: List<MediaBrowserCompat.MediaItem> = emptyList()
+    private var loadedStations: List<MediaItem> = emptyList()
     private val stationIconViews = HashMap<String, ImageView>()
     private val stripSlots = ArrayList<StripSlot>()
     private val stripViewsByMediaId = HashMap<String, MutableList<ImageView>>()
@@ -73,8 +72,8 @@ class RadioList : Fragment() {
     private var isUserScrollingStrip: Boolean = false
     private var isProgrammaticScroll: Boolean = false
 
-    private var currentPlaybackState: PlaybackStateCompat = EMPTY_PLAYBACK_STATE
-    private var currentMetadata: MediaMetadataCompat = NOTHING_PLAYING
+    private var currentPlaybackState: GTRadioPlaybackState = EMPTY_PLAYBACK_STATE
+    private var currentMetadata: MediaMetadata = NOTHING_PLAYING
 
     private val bgHandler = Handler(Looper.getMainLooper())
     private val scrollHandler = Handler(Looper.getMainLooper())
@@ -93,11 +92,11 @@ class RadioList : Fragment() {
         val slot = findClosestCenteredSlot() ?: return@Runnable
         val targetId = slot.mediaId
         centeredMediaId = targetId
-        selectedStationTitle = slot.item.description.title?.toString() ?: ""
+        selectedStationTitle = slot.item.mediaMetadata.title?.toString() ?: ""
 
         scrollSlotToCenter(slot, smooth = true)
 
-        val nowPlayingId = currentMetadata.description.mediaId ?: ""
+        val nowPlayingId = currentMetadata.mediaId ?: ""
         if (!currentPlaybackState.isPlaying || targetId != nowPlayingId) {
             lastAutoScrolledMediaId = targetId
             musicServiceConnection?.transportControls?.playFromMediaId(targetId, null)
@@ -132,8 +131,8 @@ class RadioList : Fragment() {
         }
     }
 
-    private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
-        override fun onChildrenLoaded(parentId: String, children: List<MediaBrowserCompat.MediaItem>) {
+    private val subscriptionCallback = object : SubscriptionCallback() {
+        override fun onChildrenLoaded(parentId: String, children: List<MediaItem>) {
             if (parentId == stationGroupId) {
                 loadedStations = children
                 listAdapter.submitList(children)
@@ -142,12 +141,12 @@ class RadioList : Fragment() {
         }
     }
 
-    private val playbackStateObserver = Observer<PlaybackStateCompat> { state ->
+    private val playbackStateObserver = Observer<GTRadioPlaybackState> { state ->
         currentPlaybackState = state ?: EMPTY_PLAYBACK_STATE
         updateDynamicThemePlaybackUi()
     }
 
-    private val mediaMetadataObserver = Observer<MediaMetadataCompat> { meta ->
+    private val mediaMetadataObserver = Observer<MediaMetadata> { meta ->
         currentMetadata = meta ?: NOTHING_PLAYING
         updateDynamicThemePlaybackUi()
     }
@@ -247,12 +246,12 @@ class RadioList : Fragment() {
         val clickedItem = slot.item
         val clickedId = slot.mediaId
         val transportControls = musicServiceConnection?.transportControls
-        val activeMediaId = currentMetadata.description.mediaId ?: ""
+        val activeMediaId = currentMetadata.mediaId ?: ""
 
         scrollHandler.removeCallbacks(scrollSnapRunnable)
         isUserScrollingStrip = false
 
-        val title = clickedItem.description.title?.toString() ?: ""
+        val title = clickedItem.mediaMetadata.title?.toString() ?: ""
         selectedStationTitle = title
 
         if (currentPlaybackState.isPlaying && clickedId == activeMediaId) {
@@ -279,10 +278,10 @@ class RadioList : Fragment() {
         updateDynamicThemePlaybackUi()
     }
 
-    private fun onStationClicked(clickedItem: MediaBrowserCompat.MediaItem) {
+    private fun onStationClicked(clickedItem: MediaItem) {
         val pack = activeThemePack
         if (pack != null && isStripLayout(pack)) {
-            val slot = findClosestSlotForMediaId(clickedItem.mediaId ?: "")
+            val slot = findClosestSlotForMediaId(clickedItem.mediaId)
             if (slot != null) {
                 onStripSlotTapped(slot)
                 return
@@ -291,9 +290,9 @@ class RadioList : Fragment() {
 
         val nowPlaying = musicServiceConnection?.nowPlaying?.value
         val transportControls = musicServiceConnection?.transportControls
-        selectedStationTitle = clickedItem.description.title?.toString() ?: ""
+        selectedStationTitle = clickedItem.mediaMetadata.title?.toString() ?: ""
 
-        if (clickedItem.mediaId == nowPlaying?.description?.mediaId) {
+        if (clickedItem.mediaId == nowPlaying?.mediaId) {
             musicServiceConnection?.playbackState?.value?.let { state ->
                 if (state.isPlaying) {
                     DynamicThemeManager.stopTuningNoise("user_stop")
@@ -317,11 +316,11 @@ class RadioList : Fragment() {
             transportControls?.stop()
         } else {
             val targetItem = loadedStations.find { it.mediaId == centeredMediaId }
-                ?: loadedStations.find { it.description.title?.toString().equals(selectedStationTitle, ignoreCase = true) }
+                ?: loadedStations.find { it.mediaMetadata.title?.toString().equals(selectedStationTitle, ignoreCase = true) }
                 ?: loadedStations.firstOrNull()
             if (targetItem != null) {
-                centeredMediaId = targetItem.mediaId ?: ""
-                selectedStationTitle = targetItem.description.title?.toString() ?: ""
+                centeredMediaId = targetItem.mediaId
+                selectedStationTitle = targetItem.mediaMetadata.title?.toString() ?: ""
                 lastAutoScrolledMediaId = centeredMediaId
                 scrollIconToCenter(centeredMediaId, smooth = true)
                 transportControls?.playFromMediaId(targetItem.mediaId, null)
@@ -387,7 +386,7 @@ class RadioList : Fragment() {
                 val centerSlot = findClosestCenteredSlot()
                 if (centerSlot != null) {
                     val cId = centerSlot.mediaId
-                    val cTitle = centerSlot.item.description.title?.toString() ?: ""
+                    val cTitle = centerSlot.item.mediaMetadata.title?.toString() ?: ""
                     if (cId != centeredMediaId) {
                         centeredMediaId = cId
                         selectedStationTitle = cTitle
@@ -449,9 +448,9 @@ class RadioList : Fragment() {
         volumeObserver = obs
     }
 
-    private fun setupDynamicThemeIfAvailable(children: List<MediaBrowserCompat.MediaItem>) {
+    private fun setupDynamicThemeIfAvailable(children: List<MediaItem>) {
         if (_binding == null) return
-        val seriesName = children.firstOrNull()?.description?.subtitle?.toString() ?: ""
+        val seriesName = children.firstOrNull()?.mediaMetadata?.subtitle?.toString() ?: children.firstOrNull()?.mediaMetadata?.groupName ?: ""
         if (seriesName.isBlank() || !DynamicThemeManager.isDynamicThemeEnabled(requireContext())) {
             applyDynamicTheme(null, children)
             return
@@ -475,7 +474,7 @@ class RadioList : Fragment() {
                         DynamicThemeManager.loadBitmap(ctx, bgList[0], 1440)
                     }
                     for (item in children) {
-                        val stTitle = item.description.title?.toString() ?: ""
+                        val stTitle = item.mediaMetadata.title?.toString() ?: ""
                         val onUri = DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, stTitle)
                         val offUri = DynamicThemeManager.resolveStationIconUri(pack.stationOffIconUris, stTitle)
                         DynamicThemeManager.loadBitmap(ctx, onUri, 256)
@@ -495,7 +494,7 @@ class RadioList : Fragment() {
         }
     }
 
-    private fun applyDynamicTheme(pack: DynamicThemePack?, children: List<MediaBrowserCompat.MediaItem>) {
+    private fun applyDynamicTheme(pack: DynamicThemePack?, children: List<MediaItem>) {
         if (_binding == null) return
 
         if (pack == null || !pack.hasFullThemeUi) {
@@ -592,13 +591,13 @@ class RadioList : Fragment() {
         stripCycleWidthPx = children.size * stripItemSpanPx
 
         for (item in children) {
-            val mId = item.mediaId ?: continue
-            val stTitle = item.description.title?.toString() ?: ""
+            val mId = item.mediaId
+            val stTitle = item.mediaMetadata.title?.toString() ?: ""
             val onUri = DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, stTitle)
             val offUri = DynamicThemeManager.resolveStationIconUri(pack.stationOffIconUris, stTitle)
 
             val onBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), onUri, 256)
-                ?: item.description.iconBitmap
+                ?: item.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(requireContext(), it, 256) }
             val offBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), offUri, 256)
                 ?: onBmp
 
@@ -610,7 +609,7 @@ class RadioList : Fragment() {
             val hasOffIcons = pack.stationOffIconUris.isNotEmpty()
             for (cycle in 0 until REPEAT_CYCLES) {
                 for (item in children) {
-                    val mId = item.mediaId ?: continue
+                    val mId = item.mediaId
                     val offBmp = stationOffBitmaps[mId]
                     val iv = ImageView(requireContext()).apply {
                         layoutParams = LinearLayout.LayoutParams(iconSizePx, iconSizePx).apply {
@@ -641,7 +640,7 @@ class RadioList : Fragment() {
                 binding.themeStripIconScroll.setPadding(0, 0, 0, 0)
                 binding.themeStripIconRow.setPadding(sidePad, 0, sidePad, 0)
                 val initialId = centeredMediaId.ifBlank {
-                    currentMetadata.description.mediaId ?: children.firstOrNull()?.mediaId ?: ""
+                    currentMetadata.mediaId ?: children.firstOrNull()?.mediaId ?: ""
                 }
                 if (initialId.isNotBlank()) {
                     centeredMediaId = initialId
@@ -656,7 +655,7 @@ class RadioList : Fragment() {
             }
         } else {
             children.forEachIndexed { idx, item ->
-                val mId = item.mediaId ?: return@forEachIndexed
+                val mId = item.mediaId
                 val onBmp = stationOnBitmaps[mId]
                 val iv = ImageView(requireContext()).apply {
                     layoutParams = LinearLayout.LayoutParams(iconSizePx, iconSizePx).apply {
@@ -681,7 +680,7 @@ class RadioList : Fragment() {
         }
 
         if (selectedStationTitle.isBlank()) {
-            selectedStationTitle = children.firstOrNull()?.description?.title?.toString() ?: ""
+            selectedStationTitle = children.firstOrNull()?.mediaMetadata?.title?.toString() ?: ""
         }
         if (centeredMediaId.isBlank()) {
             centeredMediaId = children.firstOrNull()?.mediaId ?: ""
@@ -695,7 +694,7 @@ class RadioList : Fragment() {
 
         val stripMode = isStripLayout(pack)
         val isPlaying = currentPlaybackState.isPlaying
-        val activeMediaId = currentMetadata.description.mediaId ?: ""
+        val activeMediaId = currentMetadata.mediaId ?: ""
 
         // Check if pending tapped station should expire or cleared
         if (pendingTappedMediaId != null) {
@@ -708,8 +707,8 @@ class RadioList : Fragment() {
         val effectivePlaying = isPlaying && activeBelongsToThisSeries
 
         val activeStationFromMeta = if (activeBelongsToThisSeries) {
-            currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_WRITER)
-                ?: loadedStations.find { it.mediaId == activeMediaId }?.description?.title?.toString()
+            currentMetadata.stationName
+                ?: loadedStations.find { it.mediaId == activeMediaId }?.mediaMetadata?.title?.toString()
                 ?: ""
         } else ""
 
@@ -739,9 +738,9 @@ class RadioList : Fragment() {
             }
 
             val displayStationTitle = if (isUserScrollingStrip) {
-                loadedStations.find { it.mediaId == centeredMediaId }?.description?.title?.toString() ?: ""
+                loadedStations.find { it.mediaId == centeredMediaId }?.mediaMetadata?.title?.toString() ?: ""
             } else {
-                selectedItem?.description?.title?.toString() ?: ""
+                selectedItem?.mediaMetadata?.title?.toString() ?: ""
             }
             if (binding.themeStripActiveStationName.text.toString() != displayStationTitle) {
                 binding.themeStripActiveStationName.text = displayStationTitle
@@ -762,7 +761,7 @@ class RadioList : Fragment() {
             }
 
             val isSongOrShow = effectivePlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
-                currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
+                currentMetadata.isSong
 
             if (effectivePlaying) {
                 binding.themeSongTitle.setTextColor(pack.activeTextColor)
@@ -770,9 +769,9 @@ class RadioList : Fragment() {
                 binding.themeSongAlbum.setTextColor(pack.activeTextColor)
 
                 if (isSongOrShow) {
-                    val songTitle = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: ""
-                    val cleanArtist = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ARTIST) ?: ""
-                    val cleanAlbum = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST) ?: ""
+                    val songTitle = currentMetadata.title?.toString() ?: ""
+                    val cleanArtist = currentMetadata.artist?.toString() ?: ""
+                    val cleanAlbum = currentMetadata.albumArtist?.toString() ?: currentMetadata.albumTitle?.toString() ?: ""
 
                     binding.themeSongTitle.text = songTitle.uppercase()
                     binding.themeSongArtist.text = cleanArtist.uppercase()
@@ -785,9 +784,9 @@ class RadioList : Fragment() {
                     binding.themeSongAlbum.text = ""
                 }
 
-                val artBmp = stationOnBitmaps[selectedMediaId] ?: currentMetadata.description.iconBitmap
-                val songArtBmp = if (isSongOrShow && currentMetadata.description.iconBitmap != null) {
-                    currentMetadata.description.iconBitmap
+                val artBmp = stationOnBitmaps[selectedMediaId] ?: currentMetadata.iconBitmap
+                val songArtBmp = if (isSongOrShow && currentMetadata.iconBitmap != null) {
+                    currentMetadata.iconBitmap
                 } else {
                     artBmp
                 }
@@ -819,11 +818,11 @@ class RadioList : Fragment() {
 
         val gridStationTitle = if (effectivePlaying) {
             activeStationFromMeta.ifBlank {
-                loadedStations.find { it.mediaId == activeMediaId }?.description?.title?.toString() ?: ""
+                loadedStations.find { it.mediaId == activeMediaId }?.mediaMetadata?.title?.toString() ?: ""
             }
         } else {
-            loadedStations.find { it.mediaId == centeredMediaId }?.description?.title?.toString()
-                ?: loadedStations.firstOrNull()?.description?.title?.toString()
+            loadedStations.find { it.mediaId == centeredMediaId }?.mediaMetadata?.title?.toString()
+                ?: loadedStations.firstOrNull()?.mediaMetadata?.title?.toString()
                 ?: ""
         }
         val gridStationUpper = gridStationTitle.uppercase()
@@ -838,13 +837,13 @@ class RadioList : Fragment() {
         }
 
         val isSongOrShow = effectivePlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
-            currentMetadata.getLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER) == 1L
+            currentMetadata.isSong
         if (isSongOrShow) {
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
             binding.themeSongArt.alpha = 1.0f
-            val songTitle = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_TITLE) ?: ""
-            val cleanArtist = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ARTIST) ?: ""
-            val cleanAlbum = currentMetadata.getString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST) ?: ""
+            val songTitle = currentMetadata.title?.toString() ?: ""
+            val cleanArtist = currentMetadata.artist?.toString() ?: ""
+            val cleanAlbum = currentMetadata.albumArtist?.toString() ?: currentMetadata.albumTitle?.toString() ?: ""
 
             binding.themeSongTitle.text = songTitle.uppercase()
             binding.themeSongArtist.text = cleanArtist.uppercase()
@@ -856,7 +855,7 @@ class RadioList : Fragment() {
                 binding.themeSongAlbum.visibility = View.INVISIBLE
             }
 
-            val artBmp = currentMetadata.description.iconBitmap
+            val artBmp = currentMetadata.iconBitmap
             if (artBmp != null) {
                 binding.themeSongArt.setImageBitmap(artBmp)
             } else {
@@ -884,8 +883,8 @@ class RadioList : Fragment() {
 }
 
 class MediaItemListAdapter(
-    private val itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
-) : ListAdapter<MediaBrowserCompat.MediaItem, MediaViewHolder>(MediaItemDiffCallback) {
+    private val itemClickedListener: (MediaItem) -> Unit
+) : ListAdapter<MediaItem, MediaViewHolder>(MediaItemDiffCallback) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): MediaViewHolder {
         val inflater = LayoutInflater.from(parent.context)
@@ -897,8 +896,9 @@ class MediaItemListAdapter(
         val mediaItem = getItem(position)
         if (payloads.isEmpty()) {
             holder.item = mediaItem
-            holder.titleView.text = mediaItem.description.title
-            val bmp = mediaItem.description.iconBitmap
+            holder.titleView.text = mediaItem.mediaMetadata.title
+            val bmp = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(holder.itemView.context, it, 256) }
+                ?: mediaItem.mediaMetadata.iconBitmap
             if (bmp != null) {
                 holder.albumArt.setImageBitmap(bmp)
             } else {
@@ -914,24 +914,24 @@ class MediaItemListAdapter(
 
 class MediaViewHolder(
     binding: FragmentStationitemBinding,
-    itemClickedListener: (MediaBrowserCompat.MediaItem) -> Unit
+    itemClickedListener: (MediaItem) -> Unit
 ) : RecyclerView.ViewHolder(binding.root) {
 
     val titleView: TextView = binding.title
     val albumArt: ImageView = binding.albumArt
-    var item: MediaBrowserCompat.MediaItem? = null
+    var item: MediaItem? = null
 
     init {
         binding.root.setOnClickListener { item?.let { itemClickedListener(it) } }
     }
 }
 
-val MediaItemDiffCallback = object : DiffUtil.ItemCallback<MediaBrowserCompat.MediaItem>() {
-    override fun areItemsTheSame(oldItem: MediaBrowserCompat.MediaItem, newItem: MediaBrowserCompat.MediaItem): Boolean =
+val MediaItemDiffCallback = object : DiffUtil.ItemCallback<MediaItem>() {
+    override fun areItemsTheSame(oldItem: MediaItem, newItem: MediaItem): Boolean =
         oldItem.mediaId == newItem.mediaId
 
-    override fun areContentsTheSame(oldItem: MediaBrowserCompat.MediaItem, newItem: MediaBrowserCompat.MediaItem) =
+    override fun areContentsTheSame(oldItem: MediaItem, newItem: MediaItem) =
         oldItem.mediaId == newItem.mediaId
 
-    override fun getChangePayload(oldItem: MediaBrowserCompat.MediaItem, newItem: MediaBrowserCompat.MediaItem): Nothing? = null
+    override fun getChangePayload(oldItem: MediaItem, newItem: MediaItem): Nothing? = null
 }

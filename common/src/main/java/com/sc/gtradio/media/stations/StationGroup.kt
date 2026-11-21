@@ -3,16 +3,13 @@ package com.sc.gtradio.media.stations
 import java.util.Locale
 import java.util.UUID
 
-import android.support.v4.media.MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
-
-import GTRadioPlayer
+import com.sc.gtradio.media.GTRadioPlayer
 
 import android.content.Context
 import android.net.Uri
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaBrowserCompat.MediaItem.FLAG_PLAYABLE
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
+import android.os.Bundle
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.documentfile.provider.DocumentFile
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
@@ -26,8 +23,8 @@ import java.io.InputStreamReader
 
 class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
 
-    lateinit var mediaItem: MediaBrowserCompat.MediaItem
-    var stationList: ArrayList<MediaBrowserCompat.MediaItem> = ArrayList()
+    lateinit var mediaItem: MediaItem
+    var stationList: ArrayList<MediaItem> = ArrayList()
     var generation: Int = -1
     var groupName: String = ""
 
@@ -314,8 +311,6 @@ init {
         val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
         val logoUri = allFiles.find { !it.isDirectory && it.name.uppercase().contains("LOGO") }?.uri
             ?: themePack?.groupLogoUri
-        val logoBitmap = DynamicThemeManager.loadBitmap(context, logoUri, 512)
-            ?: FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
 
         val sortedFiles = stationFiles.sortedBy {
             Gen1MetadataRepository.getStationInfo(it.name, gameCode)?.displayName ?: it.name
@@ -327,32 +322,43 @@ init {
             val stMediaId = UUID.randomUUID().toString()
 
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
-            val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
 
-            val meta = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, stMediaId)
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stDisplayName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, stDisplayName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupName)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, iconBmp)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, iconBmp)
+            val meta = MediaMetadata.Builder()
+                .setTitle(stDisplayName)
+                .setDisplayTitle(stDisplayName)
+                .setSubtitle(groupName)
+                .setArtist(groupName)
+                .setAlbumTitle(groupName)
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .apply {
+                    if (iconUri != null) setArtworkUri(iconUri)
+                }
+                .setExtras(Bundle().apply {
+                    putString("media_id", stMediaId)
+                    putString("group_name", groupName)
+                })
                 .build()
 
-            stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
+            stationList.add(MediaItem.Builder().setMediaId(stMediaId).setMediaMetadata(meta).build())
             gen1StationFiles[stMediaId] = stFile
             gen1StationFiles[stDisplayName] = stFile
         }
 
         if (stationList.isNotEmpty()) {
-            val groupMeta = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, groupName)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, logoBitmap)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, logoBitmap)
+            val groupMeta = MediaMetadata.Builder()
+                .setTitle(groupName)
+                .setDisplayTitle(groupName)
+                .setIsPlayable(false)
+                .setIsBrowsable(true)
+                .apply {
+                    if (logoUri != null) setArtworkUri(logoUri)
+                }
+                .setExtras(Bundle().apply {
+                    putString("media_id", mediaId)
+                })
                 .build()
-            mediaItem = MediaBrowserCompat.MediaItem(groupMeta.description, FLAG_BROWSABLE)
+            mediaItem = MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(groupMeta).build()
             isValid = true
         }
     }
@@ -360,14 +366,14 @@ init {
     fun createGen1RawStation(
         stationGroupId: String,
         stMediaId: String,
-        stMediaItem: MediaBrowserCompat.MediaItem,
+        stMediaItem: MediaItem,
         player: GTRadioPlayer,
         ctx: Context,
         adsEnabled: Boolean,
         weatherChatterEnabled: Boolean,
         newsReportsEnabled: Boolean
     ): RadioStation {
-        val titleKey = stMediaItem.description.title?.toString() ?: ""
+        val titleKey = stMediaItem.mediaMetadata.title?.toString() ?: ""
         val fileInfo = gen1StationFiles[stMediaId]
             ?: gen1StationFiles[titleKey]
             ?: gen1StationFiles.values.first()
@@ -487,19 +493,25 @@ init {
             val stMediaId = UUID.randomUUID().toString()
 
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
-            val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
 
-            val meta = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, stMediaId)
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stDisplayName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, stDisplayName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupName)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, iconBmp)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, iconBmp)
+            val meta = MediaMetadata.Builder()
+                .setTitle(stDisplayName)
+                .setDisplayTitle(stDisplayName)
+                .setSubtitle(groupName)
+                .setArtist(groupName)
+                .setAlbumTitle(groupName)
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .apply {
+                    if (iconUri != null) setArtworkUri(iconUri)
+                }
+                .setExtras(Bundle().apply {
+                    putString("media_id", stMediaId)
+                    putString("group_name", groupName)
+                })
                 .build()
 
-            stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
+            stationList.add(MediaItem.Builder().setMediaId(stMediaId).setMediaMetadata(meta).build())
             rpf3StationArchives[stMediaId] = item.archive
             rpf3StationArchives[stDisplayName] = item.archive
             rpf3StationKeys[stMediaId] = item.stationKey
@@ -507,14 +519,19 @@ init {
         }
 
         if (stationList.isNotEmpty()) {
-            val groupMeta = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, groupName)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, logoBitmap)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, logoBitmap)
+            val groupMeta = MediaMetadata.Builder()
+                .setTitle(groupName)
+                .setDisplayTitle(groupName)
+                .setIsPlayable(false)
+                .setIsBrowsable(true)
+                .apply {
+                    if (logoUri != null) setArtworkUri(logoUri)
+                }
+                .setExtras(Bundle().apply {
+                    putString("media_id", mediaId)
+                })
                 .build()
-            mediaItem = MediaBrowserCompat.MediaItem(groupMeta.description, FLAG_BROWSABLE)
+            mediaItem = MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(groupMeta).build()
             isValid = true
         }
     }
@@ -522,14 +539,14 @@ init {
     fun createRpf3Station(
         stationGroupId: String,
         stMediaId: String,
-        stMediaItem: MediaBrowserCompat.MediaItem,
+        stMediaItem: MediaItem,
         player: GTRadioPlayer,
         ctx: Context,
         adsEnabled: Boolean,
         weatherChatterEnabled: Boolean,
         newsReportsEnabled: Boolean
     ): RadioStation {
-        val titleKey = stMediaItem.description.title?.toString() ?: ""
+        val titleKey = stMediaItem.mediaMetadata.title?.toString() ?: ""
         val arch = rpf3StationArchives[stMediaId]
             ?: rpf3StationArchives[titleKey]
             ?: rpf3StationArchives.values.first()
@@ -636,19 +653,25 @@ init {
             val arch = Rpf7Archive(context, stFile.name, stFile.uri)
 
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
-            val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512) ?: logoBitmap
 
-            val meta = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, stMediaId)
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stDisplayName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, stDisplayName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupName)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, iconBmp)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, iconBmp)
+            val meta = MediaMetadata.Builder()
+                .setTitle(stDisplayName)
+                .setDisplayTitle(stDisplayName)
+                .setSubtitle(groupName)
+                .setArtist(groupName)
+                .setAlbumTitle(groupName)
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .apply {
+                    if (iconUri != null) setArtworkUri(iconUri)
+                }
+                .setExtras(Bundle().apply {
+                    putString("media_id", stMediaId)
+                    putString("group_name", groupName)
+                })
                 .build()
 
-            stationList.add(MediaBrowserCompat.MediaItem(meta.description, FLAG_PLAYABLE))
+            stationList.add(MediaItem.Builder().setMediaId(stMediaId).setMediaMetadata(meta).build())
             rpf7StationArchives[stMediaId] = arch
             rpf7StationArchives[stDisplayName] = arch
             rpf7StationKeys[stMediaId] = stKey
@@ -656,14 +679,19 @@ init {
         }
 
         if (stationList.isNotEmpty()) {
-            val groupMeta = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, groupName)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, logoBitmap)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, logoBitmap)
+            val groupMeta = MediaMetadata.Builder()
+                .setTitle(groupName)
+                .setDisplayTitle(groupName)
+                .setIsPlayable(false)
+                .setIsBrowsable(true)
+                .apply {
+                    if (logoUri != null) setArtworkUri(logoUri)
+                }
+                .setExtras(Bundle().apply {
+                    putString("media_id", mediaId)
+                })
                 .build()
-            mediaItem = MediaBrowserCompat.MediaItem(groupMeta.description, FLAG_BROWSABLE)
+            mediaItem = MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(groupMeta).build()
             isValid = true
         }
     }
@@ -785,14 +813,14 @@ init {
     fun createRpf7Station(
         stationGroupId: String,
         stMediaId: String,
-        stMediaItem: MediaBrowserCompat.MediaItem,
+        stMediaItem: MediaItem,
         player: GTRadioPlayer,
         ctx: Context,
         adsEnabled: Boolean,
         weatherChatterEnabled: Boolean,
         newsReportsEnabled: Boolean
     ): RadioStation {
-        val titleKey = stMediaItem.description.title?.toString() ?: ""
+        val titleKey = stMediaItem.mediaMetadata.title?.toString() ?: ""
         val arch = rpf7StationArchives[stMediaId]
             ?: rpf7StationArchives[titleKey]
             ?: rpf7StationArchives.values.first()
@@ -873,8 +901,8 @@ init {
         return arch
     }
 
-    private fun getGen2RawStationsList(): ArrayList<MediaBrowserCompat.MediaItem> {
-        val list = ArrayList<MediaBrowserCompat.MediaItem>()
+    private fun getGen2RawStationsList(): ArrayList<MediaItem> {
+        val list = ArrayList<MediaItem>()
         Gen2MetadataRepository.ensureLoaded(context)
 
         for ((code, _) in rawStreamUris) {
@@ -885,44 +913,48 @@ init {
 
             val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stName) }
-            val iconBmp = DynamicThemeManager.loadBitmap(context, iconUri, 512)
-            val metadata = MediaMetadataCompat.Builder()
-                .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaId)
-                .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stName)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, iconBmp)
-                .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, iconBmp)
-                .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, stName)
-                .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, groupName)
-                .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, groupName)
+            val metadata = MediaMetadata.Builder()
+                .setTitle(stName)
+                .setDisplayTitle(stName)
+                .setSubtitle(groupName)
+                .setArtist(groupName)
+                .setAlbumTitle(groupName)
+                .setIsPlayable(true)
+                .setIsBrowsable(false)
+                .apply {
+                    if (iconUri != null) setArtworkUri(iconUri)
+                }
+                .setExtras(Bundle().apply {
+                    putString("media_id", mediaId)
+                    putString("group_name", groupName)
+                })
                 .build()
-            list.add(MediaBrowserCompat.MediaItem(metadata.description, FLAG_PLAYABLE))
+            list.add(MediaItem.Builder().setMediaId(mediaId).setMediaMetadata(metadata).build())
         }
-        list.sortBy { it.description.title.toString() }
+        list.sortBy { it.mediaMetadata.title?.toString() ?: "" }
         return list
     }
 
-    private fun getMediaItem(folderDoc: DocumentFile, simpleFiles: Array<SimpleFileInfo>, groupName: String): MediaBrowserCompat.MediaItem {
+    private fun getMediaItem(folderDoc: DocumentFile, simpleFiles: Array<SimpleFileInfo>, groupName: String): MediaItem {
         val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
         val logoUri = simpleFiles.find { x -> !x.isDirectory && x.name.uppercase().contains("LOGO") }?.uri ?: themePack?.groupLogoUri
-        val logoBitmap = DynamicThemeManager.loadBitmap(context, logoUri, 512) ?: FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
 
-        val metadata = MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, folderDoc.uri.toString())
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, groupName)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, logoBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, groupName)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, "")
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, logoBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, "")
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, "")
+        val metadata = MediaMetadata.Builder()
+            .setTitle(groupName)
+            .setDisplayTitle(groupName)
+            .setIsPlayable(false)
+            .setIsBrowsable(true)
+            .apply {
+                if (logoUri != null) setArtworkUri(logoUri)
+            }
+            .setExtras(Bundle().apply {
+                putString("media_id", folderDoc.uri.toString())
+            })
             .build()
-        return MediaBrowserCompat.MediaItem(
-            metadata.description,
-            MediaBrowserCompat.MediaItem.FLAG_BROWSABLE
-        )
+        return MediaItem.Builder()
+            .setMediaId(folderDoc.uri.toString())
+            .setMediaMetadata(metadata)
+            .build()
     }
 
     private fun setupDataFromJson(folderDoc: DocumentFile, simpleFiles: Array<SimpleFileInfo>) {
@@ -953,8 +985,8 @@ init {
         groupName = try { jsonObj.getString("name") } catch (_: Exception) { folderDoc.name ?: "" }
     }
 
-    private fun getStationsList(folderDoc: DocumentFile): ArrayList<MediaBrowserCompat.MediaItem> {
-        val list = ArrayList<MediaBrowserCompat.MediaItem>()
+    private fun getStationsList(folderDoc: DocumentFile): ArrayList<MediaItem> {
+        val list = ArrayList<MediaItem>()
         if (generation !in 1..3) return list
 
         val subDirs = folderDoc.listFiles().filter { x -> x.isDirectory }
@@ -965,44 +997,36 @@ init {
 
             val stationName = subDir.name ?: ""
             val logoUri = subDir.listSimpleFiles(context).find { x -> !x.isDirectory && x.name.uppercase().contains("LOGO") }?.uri
-            val logoBitmap = FileUtils.getBitmapFromUri(context.contentResolver, logoUri)
 
             if (stationName.isNotBlank()) {
-                val metadata = MediaMetadataCompat.Builder()
-                    .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, subDir.uri.toString())
-                    .putString(MediaMetadataCompat.METADATA_KEY_TITLE, stationName)
-                    .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-                    .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, logoBitmap)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, stationName)
-                    .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, groupName)
-                    .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, logoBitmap)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, groupName)
-                    .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, groupName)
+                val metadata = MediaMetadata.Builder()
+                    .setTitle(stationName)
+                    .setDisplayTitle(stationName)
+                    .setSubtitle(groupName)
+                    .setArtist(groupName)
+                    .setAlbumTitle(groupName)
+                    .setIsPlayable(true)
+                    .setIsBrowsable(false)
+                    .apply {
+                        if (logoUri != null) setArtworkUri(logoUri)
+                    }
+                    .setExtras(Bundle().apply {
+                        putString("media_id", subDir.uri.toString())
+                        putString("group_name", groupName)
+                    })
                     .build()
-                val item = MediaBrowserCompat.MediaItem(metadata.description, FLAG_PLAYABLE)
+                val item = MediaItem.Builder()
+                    .setMediaId(subDir.uri.toString())
+                    .setMediaMetadata(metadata)
+                    .build()
                 list.add(item)
             }
         }
-        list.sortBy { x -> x.description.title.toString() }
+        list.sortBy { x -> x.mediaMetadata.title?.toString() ?: "" }
         return list
     }
 
     fun getStationIndex(stationMediaId: String): Int {
         return stationList.indexOfFirst { x -> x.mediaId == stationMediaId }
-    }
-
-    fun getPlaybackActionsForStation(stationIndex: Int): Long {
-        return getPlaybackActions((stationIndex < stationList.lastIndex), (stationIndex > 0))
-    }
-
-    private fun getPlaybackActions(hasNext: Boolean = false, hasPrevious: Boolean = false): Long {
-        if (hasNext && hasPrevious) {
-            return PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID or PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH or PlaybackStateCompat.ACTION_SKIP_TO_NEXT or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-        } else if (hasNext) {
-            return PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID or PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH or PlaybackStateCompat.ACTION_SKIP_TO_NEXT
-        } else if (hasPrevious) {
-            return PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID or PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH or PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS
-        }
-        return PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP or PlaybackStateCompat.ACTION_PLAY_FROM_MEDIA_ID or PlaybackStateCompat.ACTION_PLAY_FROM_SEARCH
     }
 }

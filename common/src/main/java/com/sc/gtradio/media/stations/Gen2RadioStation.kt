@@ -1,6 +1,6 @@
 package com.sc.gtradio.media.stations
 
-import GTRadioPlayer
+import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -8,11 +8,9 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
@@ -20,6 +18,7 @@ import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
+import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import com.sc.gtradio.common.GTRadioLogger
 import java.util.*
@@ -27,7 +26,7 @@ import java.util.*
 @UnstableApi class Gen2RadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
-    override val mediaItem: MediaBrowserCompat.MediaItem,
+    override val mediaItem: MediaItem,
     baseStationFolderDoc: DocumentFile,
     advertsFolderDoc: DocumentFile,
     private val player: GTRadioPlayer,
@@ -42,7 +41,7 @@ import java.util.*
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override var newsReportsEnabled: Boolean = false
-    override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
+    override var onMetadataChanged: ((MediaMetadata) -> Unit)? = null
 
     override var weatherChatterEnabled: Boolean
         get() = _weatherChatterEnabled
@@ -53,18 +52,18 @@ import java.util.*
             }
         }
 
-    private val stationTitle: String = (mediaItem.description.title ?: "").toString()
-    private val groupTitle: String = (mediaItem.description.subtitle ?: "").toString()
-    private val stationLogo: Bitmap? = mediaItem.description.iconBitmap
+    private val stationTitle: String = (mediaItem.mediaMetadata.title ?: "").toString()
+    private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: "").toString()
+    private val stationLogo: Bitmap? = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
     private val isWctr: Boolean = stationTitle.uppercase().contains("WCTR")
 
-    private var _currentMetadata: MediaMetadataCompat = buildStationMetadata(
+    private var _currentMetadata: MediaMetadata = buildStationMetadata(
         trackTitle = stationTitle,
         trackSubtitle = "",
         art = stationLogo
     )
 
-    override val metadata: MediaMetadataCompat
+    override val metadata: MediaMetadata
         get() = _currentMetadata
 
     override var stationName: String = ""
@@ -148,22 +147,19 @@ import java.util.*
         isSongOrShow: Boolean = false,
         cleanArtist: String = "",
         cleanAlbum: String = ""
-    ): MediaMetadataCompat {
-        return MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, trackTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, trackTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, trackSubtitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, cleanArtist.ifBlank { trackSubtitle })
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, cleanAlbum)
-            .putString(MediaMetadataCompat.METADATA_KEY_WRITER, stationTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, "$stationTitle • $groupTitle")
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, if (isSongOrShow) 1L else 0L)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, art)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, art)
-            .build()
+    ): MediaMetadata {
+        return buildStationMediaMetadata(
+            mediaId = mediaItem.mediaId,
+            title = trackTitle,
+            subtitle = trackSubtitle,
+            artist = cleanArtist.ifBlank { trackSubtitle },
+            albumArtist = cleanAlbum,
+            stationTitle = stationTitle,
+            groupTitle = groupTitle,
+            art = art,
+            isSong = isSongOrShow,
+            durationMs = -1L
+        )
     }
 
     private fun setStationOnlyMetadata() {
@@ -411,7 +407,7 @@ import java.util.*
 
     override fun play() {
         _playing = true
-        player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
+        player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 

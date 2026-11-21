@@ -5,9 +5,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import android.view.LayoutInflater
 import android.view.MenuItem
 import android.view.View
@@ -16,14 +13,13 @@ import android.widget.SeekBar
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.sc.gtradio.databinding.ActivityTracklistBinding
 import com.sc.gtradio.databinding.ItemTracklistRowBinding
-import com.sc.gtradio.media.EMPTY_PLAYBACK_STATE
-import com.sc.gtradio.media.MusicServiceConnection
-import com.sc.gtradio.media.NOTHING_PLAYING
-import com.sc.gtradio.media.isPlaying
+import com.sc.gtradio.media.*
 import com.sc.gtradio.media.stations.AlbumArtDownloader
 import com.sc.gtradio.media.stations.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
@@ -50,11 +46,11 @@ class TracklistActivity : AppCompatActivity() {
     private var currentStationName: String? = null
     private var currentSubscribedId: String? = null
 
-    private val currentItems = mutableListOf<MediaBrowserCompat.MediaItem>()
+    private val currentItems = mutableListOf<MediaItem>()
     private lateinit var adapter: TracklistAdapter
 
-    private var currentPlaybackState: PlaybackStateCompat = EMPTY_PLAYBACK_STATE
-    private var currentNowPlaying: MediaMetadataCompat = NOTHING_PLAYING
+    private var currentPlaybackState: GTRadioPlaybackState = EMPTY_PLAYBACK_STATE
+    private var currentNowPlaying: MediaMetadata = NOTHING_PLAYING
     private var isUserSeeking = false
     private var isActivityResumed = false
 
@@ -75,8 +71,8 @@ class TracklistActivity : AppCompatActivity() {
         }
     }
 
-    private val subscriptionCallback = object : MediaBrowserCompat.SubscriptionCallback() {
-        override fun onChildrenLoaded(parentId: String, children: MutableList<MediaBrowserCompat.MediaItem>) {
+    private val subscriptionCallback = object : SubscriptionCallback() {
+        override fun onChildrenLoaded(parentId: String, children: List<MediaItem>) {
             if (parentId != currentSubscribedId) return
             binding.progressBar.visibility = View.GONE
             currentItems.clear()
@@ -115,13 +111,13 @@ class TracklistActivity : AppCompatActivity() {
         }
     }
 
-    private val playbackStateObserver = Observer<PlaybackStateCompat> { state ->
+    private val playbackStateObserver = Observer<GTRadioPlaybackState> { state ->
         currentPlaybackState = state ?: EMPTY_PLAYBACK_STATE
         updatePlaybackState(currentPlaybackState)
         adapter.notifyDataSetChanged()
     }
 
-    private val nowPlayingObserver = Observer<MediaMetadataCompat> { metadata ->
+    private val nowPlayingObserver = Observer<MediaMetadata> { metadata ->
         currentNowPlaying = metadata ?: NOTHING_PLAYING
         updateNowPlaying(currentNowPlaying)
         adapter.notifyDataSetChanged()
@@ -268,7 +264,7 @@ class TracklistActivity : AppCompatActivity() {
             if (currentPlaybackState.isPlaying) {
                 musicServiceConnection.transportControls.pause()
             } else {
-                val curMediaId = currentNowPlaying.description.mediaId
+                val curMediaId = currentNowPlaying.mediaId
                 if (!curMediaId.isNullOrBlank()) {
                     musicServiceConnection.transportControls.play()
                 } else if (currentLevel == NavLevel.SONGS && currentItems.isNotEmpty()) {
@@ -314,22 +310,22 @@ class TracklistActivity : AppCompatActivity() {
         })
     }
 
-    private fun updateNowPlaying(metadata: MediaMetadataCompat) {
-        val mediaId = metadata.description.mediaId
+    private fun updateNowPlaying(metadata: MediaMetadata) {
+        val mediaId = metadata.mediaId
         if (!mediaId.isNullOrBlank()) {
-            binding.playerTrackTitle.text = metadata.description.title ?: getString(R.string.nothing_playing)
-            val sub = metadata.description.subtitle?.toString() ?: ""
+            binding.playerTrackTitle.text = metadata.title ?: getString(R.string.nothing_playing)
+            val sub = metadata.subtitle?.toString() ?: ""
             binding.playerTrackSubtitle.text = sub
             binding.playerTrackSubtitle.visibility = if (sub.isBlank()) View.GONE else View.VISIBLE
 
-            val bmp = metadata.description.iconBitmap
+            val bmp = metadata.iconBitmap
             if (bmp != null) {
                 binding.playerAlbumArt.setImageBitmap(bmp)
             } else {
                 binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
             }
 
-            val durationMs = metadata.getLong(MediaMetadataCompat.METADATA_KEY_DURATION)
+            val durationMs = metadata.durationMs ?: -1L
             if (durationMs > 0) {
                 binding.scrubSeekBar.max = durationMs.toInt()
                 binding.totalTimeText.text = formatDurationMs(durationMs)
@@ -349,7 +345,7 @@ class TracklistActivity : AppCompatActivity() {
         }
     }
 
-    private fun updatePlaybackState(state: PlaybackStateCompat) {
+    private fun updatePlaybackState(state: GTRadioPlaybackState) {
         if (state.isPlaying) {
             binding.playPauseButton.setImageResource(R.drawable.pause_24px)
             startTicker()
@@ -367,15 +363,15 @@ class TracklistActivity : AppCompatActivity() {
             binding.shuffleButton.alpha = 0.5f
         }
 
-        val repeatMode = state.extras?.getInt(TracklistContract.EXTRA_REPEAT_MODE, PlaybackStateCompat.REPEAT_MODE_NONE)
-            ?: PlaybackStateCompat.REPEAT_MODE_NONE
+        val repeatMode = state.extras?.getInt(TracklistContract.EXTRA_REPEAT_MODE, TracklistContract.REPEAT_MODE_NONE)
+            ?: TracklistContract.REPEAT_MODE_NONE
         when (repeatMode) {
-            PlaybackStateCompat.REPEAT_MODE_ONE -> {
+            TracklistContract.REPEAT_MODE_ONE -> {
                 binding.repeatButton.setImageResource(R.drawable.repeat_one_24px)
                 binding.repeatButton.setColorFilter(ContextCompat.getColor(this, R.color.yellow_500))
                 binding.repeatButton.alpha = 1.0f
             }
-            PlaybackStateCompat.REPEAT_MODE_ALL -> {
+            TracklistContract.REPEAT_MODE_ALL -> {
                 binding.repeatButton.setImageResource(R.drawable.repeat_24px)
                 binding.repeatButton.setColorFilter(ContextCompat.getColor(this, R.color.yellow_500))
                 binding.repeatButton.alpha = 1.0f
@@ -409,10 +405,10 @@ class TracklistActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: TracklistViewHolder, position: Int) {
             val item = currentItems[position]
-            val desc = item.description
+            val meta = item.mediaMetadata
 
-            holder.binding.rowTitle.text = desc.title
-            holder.binding.rowSubtitle.text = desc.subtitle ?: ""
+            holder.binding.rowTitle.text = meta.title
+            holder.binding.rowSubtitle.text = meta.subtitle ?: ""
 
             when (currentLevel) {
                 NavLevel.SERIES -> {
@@ -426,7 +422,7 @@ class TracklistActivity : AppCompatActivity() {
                     holder.binding.cardView.strokeWidth = 0
                 }
                 NavLevel.SONGS -> {
-                    val curMediaId = currentNowPlaying.description.mediaId ?: ""
+                    val curMediaId = currentNowPlaying.mediaId ?: ""
                     val isPlayingThis = curMediaId.isNotBlank() && curMediaId == item.mediaId
                     if (isPlayingThis) {
                         holder.binding.rowPlayingIndicator.visibility = View.VISIBLE
@@ -437,10 +433,10 @@ class TracklistActivity : AppCompatActivity() {
                         holder.binding.cardView.strokeWidth = 0
                     }
 
-                    val artist = desc.extras?.getString(TracklistContract.EXTRA_TRACK_ARTIST)
-                        ?: desc.subtitle?.toString() ?: ""
-                    val title = desc.extras?.getString(TracklistContract.EXTRA_TRACK_TITLE)
-                        ?: desc.title?.toString() ?: ""
+                    val artist = meta.extras?.getString(TracklistContract.EXTRA_TRACK_ARTIST)
+                        ?: meta.subtitle?.toString() ?: ""
+                    val title = meta.extras?.getString(TracklistContract.EXTRA_TRACK_TITLE)
+                        ?: meta.title?.toString() ?: ""
                     val key = "$artist - $title"
                     holder.binding.rowIcon.tag = key
 
@@ -466,19 +462,17 @@ class TracklistActivity : AppCompatActivity() {
             holder.itemView.setOnClickListener {
                 when (currentLevel) {
                     NavLevel.SERIES -> {
-                        val groupId = item.mediaId?.removePrefix(TracklistContract.GROUP_PREFIX)
-                        val name = desc.title?.toString()
+                        val groupId = item.mediaId.removePrefix(TracklistContract.GROUP_PREFIX)
+                        val name = meta.title?.toString()
                         navigateTo(NavLevel.STATIONS, groupId, name)
                     }
                     NavLevel.STATIONS -> {
-                        val stationId = item.mediaId?.removePrefix(TracklistContract.STATION_PREFIX)
-                        val name = desc.title?.toString()
+                        val stationId = item.mediaId.removePrefix(TracklistContract.STATION_PREFIX)
+                        val name = meta.title?.toString()
                         navigateTo(NavLevel.SONGS, stationId, name)
                     }
                     NavLevel.SONGS -> {
-                        item.mediaId?.let { mediaId ->
-                            musicServiceConnection.transportControls.playFromMediaId(mediaId, null)
-                        }
+                        musicServiceConnection.transportControls.playFromMediaId(item.mediaId, null)
                     }
                 }
             }

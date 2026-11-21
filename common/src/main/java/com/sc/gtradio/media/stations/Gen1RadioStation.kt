@@ -1,13 +1,11 @@
 package com.sc.gtradio.media.stations
 
-import GTRadioPlayer
+import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.icu.util.Calendar
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
@@ -21,30 +19,24 @@ import kotlin.math.abs
 @UnstableApi class Gen1RadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
-    override val mediaItem: MediaBrowserCompat.MediaItem,
+    override val mediaItem: MediaItem,
     baseStationDoc: DocumentFile,
     private val player: GTRadioPlayer,
     context: Context) : RadioStation {
 
-    override val metadata: MediaMetadataCompat =
-        MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, mediaItem.description.title as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, mediaItem.description.title as String?)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, mediaItem.description.iconBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, mediaItem.description.description as String?)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, mediaItem.description.iconBitmap)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, mediaItem.description.subtitle as String?)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, mediaItem.description.subtitle as String?)
-            .putLong(MediaMetadataCompat.METADATA_KEY_NUM_TRACKS, 1)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, 1)
-            .putLong(MediaMetadataCompat.METADATA_KEY_DISC_NUMBER, 1)
-            .build()
+    override val metadata: MediaMetadata = buildStationMediaMetadata(
+        mediaId = mediaId,
+        title = mediaItem.mediaMetadata.title?.toString() ?: "",
+        subtitle = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        artist = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        albumArtist = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        stationTitle = mediaItem.mediaMetadata.title?.toString() ?: "",
+        groupTitle = mediaItem.mediaMetadata.subtitle?.toString() ?: "",
+        art = null,
+        isSong = true
+    )
 
-    override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
+    override var onMetadataChanged: ((MediaMetadata) -> Unit)? = null
     override var stationName: String = ""
 
     //These fields are irrelevant to these stations
@@ -95,7 +87,7 @@ import kotlin.math.abs
         }
 
         _playing = true
-        player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
+        player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
 
         /* Have to listen to some timeline changes just to get track duration.
          * MediaMetadataRetriever is dated and throws exceptions when using Uri, and using MetadataRetriever is also an async operation where

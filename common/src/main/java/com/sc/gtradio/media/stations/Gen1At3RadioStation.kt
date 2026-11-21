@@ -1,28 +1,27 @@
 package com.sc.gtradio.media.stations
 
-import GTRadioPlayer
+import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
-import android.support.v4.media.MediaBrowserCompat
-import android.support.v4.media.MediaMetadataCompat
-import android.support.v4.media.session.PlaybackStateCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
+import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 
 @UnstableApi
 class Gen1At3RadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
-    override val mediaItem: MediaBrowserCompat.MediaItem,
+    override val mediaItem: MediaItem,
     private val archive: At3AudioArchive,
     private val stationInfo: Gen1StationInfo?,
     private val isVcs: Boolean,
@@ -33,12 +32,12 @@ class Gen1At3RadioStation(
     override var newsReportsEnabled: Boolean = false
 ) : RadioStation {
 
-    override var onMetadataChanged: ((MediaMetadataCompat) -> Unit)? = null
-    override var stationName: String = (mediaItem.description.title ?: stationInfo?.displayName ?: archive.fileName).toString()
+    override var onMetadataChanged: ((MediaMetadata) -> Unit)? = null
+    override var stationName: String = (mediaItem.mediaMetadata.title ?: stationInfo?.displayName ?: archive.fileName).toString()
 
     private val stationTitle: String = stationName
-    private val groupTitle: String = (mediaItem.description.subtitle ?: if (isVcs) "GTA: Vice City Stories" else "GTA: Liberty City Stories").toString()
-    private val stationLogo: Bitmap? = mediaItem.description.iconBitmap
+    private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: if (isVcs) "GTA: Vice City Stories" else "GTA: Liberty City Stories").toString()
+    private val stationLogo: Bitmap? = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
     private val gameCode: Int = if (isVcs) 4 else 3
 
     private var _playing = false
@@ -46,8 +45,8 @@ class Gen1At3RadioStation(
     private var nextChunkStartFrame = 0
     private var activeListener: Player.Listener? = null
     private var activeCueKey: String = "__INIT__"
-    private var _currentMetadata: MediaMetadataCompat = buildMetadata(null, null)
-    override val metadata: MediaMetadataCompat
+    private var _currentMetadata: MediaMetadata = buildMetadata(null, null)
+    override val metadata: MediaMetadata
         get() = _currentMetadata
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -119,7 +118,7 @@ class Gen1At3RadioStation(
         }
     }
 
-    private fun buildMetadata(cue: Gen1TrackCue?, customArt: Bitmap?): MediaMetadataCompat {
+    private fun buildMetadata(cue: Gen1TrackCue?, customArt: Bitmap?): MediaMetadata {
         val showMeta = isMetadataEnabled()
         val displayTitle: String
         val displaySubtitle: String
@@ -149,21 +148,18 @@ class Gen1At3RadioStation(
 
         val artToUse = customArt ?: stationLogo
 
-        return MediaMetadataCompat.Builder()
-            .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, mediaItem.mediaId)
-            .putString(MediaMetadataCompat.METADATA_KEY_TITLE, displayTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_TITLE, displayTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_SUBTITLE, displaySubtitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, cleanArtist)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM_ARTIST, cleanAlbum)
-            .putString(MediaMetadataCompat.METADATA_KEY_WRITER, stationTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, groupTitle)
-            .putString(MediaMetadataCompat.METADATA_KEY_DISPLAY_DESCRIPTION, "$stationTitle • $groupTitle")
-            .putLong(MediaMetadataCompat.METADATA_KEY_DURATION, -1L)
-            .putLong(MediaMetadataCompat.METADATA_KEY_TRACK_NUMBER, if (isSong) 1L else 0L)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, artToUse)
-            .putBitmap(MediaMetadataCompat.METADATA_KEY_DISPLAY_ICON, artToUse)
-            .build()
+        return buildStationMediaMetadata(
+            mediaId = mediaItem.mediaId,
+            title = displayTitle,
+            subtitle = displaySubtitle,
+            artist = cleanArtist,
+            albumArtist = cleanAlbum,
+            stationTitle = stationTitle,
+            groupTitle = groupTitle,
+            art = artToUse,
+            isSong = isSong,
+            durationMs = -1L
+        )
     }
 
     override fun stop() {
@@ -183,7 +179,7 @@ class Gen1At3RadioStation(
         activeCueKey = "__INIT__"
         mainHandler.removeCallbacks(metadataTickRunnable)
 
-        player.radioPlaybackState = PlaybackStateCompat.STATE_PLAYING
+        player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
