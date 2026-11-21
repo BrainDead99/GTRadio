@@ -79,7 +79,7 @@ object AlbumArtDownloader {
     }
 
     fun cacheKey(artist: String, songTitle: String): String {
-        return "${artist.lowercase(Locale.ROOT)}_${songTitle.lowercase(Locale.ROOT)}".replace(Regex("[^a-z0-9_]+"), "")
+        return "${artist.lowercase(Locale.ROOT)}_${songTitle.lowercase(Locale.ROOT)}".replace(Regex("[^\\p{L}\\p{N}_]+"), "")
     }
 
     fun shouldSkip(artist: String, songTitle: String): Boolean {
@@ -104,7 +104,7 @@ object AlbumArtDownloader {
         s = s.replace(Regex("\\b(featuring|feat\\.?|ft\\.?)\\b.*", RegexOption.IGNORE_CASE), " ")
         s = s.replace(Regex("\\b(radio edit|clean|explicit)\\b", RegexOption.IGNORE_CASE), " ")
         s = s.replace(Regex("\\b(and|&)\\b", RegexOption.IGNORE_CASE), " ")
-        s = s.replace(Regex("[^a-z0-9\\s]"), " ")
+        s = s.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
         s = s.trim()
         if (s.startsWith("the ")) {
             s = s.substring(4).trim()
@@ -117,7 +117,7 @@ object AlbumArtDownloader {
         val splitRegex = Regex("\\b(featuring|feat\\.?|ft\\.?|with|meets|vs\\.?|and)\\b|[&/,+,;]", RegexOption.IGNORE_CASE)
         val parts = splitRegex.split(a)
         val first = if (parts.isNotEmpty()) parts[0] else a
-        var res = first.replace(Regex("[^a-z0-9\\s]"), " ").trim()
+        var res = first.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ").trim()
         if (res.startsWith("the ")) {
             res = res.substring(4).trim()
         }
@@ -368,7 +368,7 @@ object AlbumArtDownloader {
 
     private fun altCacheKey(artist: String, songTitle: String): String {
         val raw = "${artist.lowercase(Locale.ROOT).trim()}_${songTitle.lowercase(Locale.ROOT).trim()}"
-        return raw.replace(Regex("[^a-z0-9_]"), "_").take(80)
+        return raw.replace(Regex("[^\\p{L}\\p{N}_]"), "_").take(80)
     }
 
     fun getCachedAlbumArt(context: Context, artist: String, songTitle: String): Bitmap? {

@@ -798,7 +798,9 @@ data class Rpf3ClipRef(
             currentMultiChunksPlayedInRow = 1
 
             val markers = item.archive.readTrackMarkers(item.trackName)
-            if (markers.isNotEmpty()) {
+            val distinctMusicIds = markers.map { it.trackId }.filter { it > 1 && it != 153 }.distinct()
+            val useMixPoller = distinctMusicIds.size >= 2 || isContinuousMixStation()
+            if (useMixPoller && markers.isNotEmpty()) {
                 activeMixMarkers = markers
                 activeMixChunkStartMs = item.archive.getChunkStartMs(item.trackName, startBlk)
                 lastDisplayedMixTrackId = -1
@@ -812,7 +814,9 @@ data class Rpf3ClipRef(
             currentMultiChunksPlayedInRow = 1
 
             val markers = item.archive.readTrackMarkers(item.trackName)
-            if (markers.isNotEmpty()) {
+            val distinctMusicIds = markers.map { it.trackId }.filter { it > 1 && it != 153 }.distinct()
+            val useMixPoller = distinctMusicIds.size >= 2 || isContinuousMixStation()
+            if (useMixPoller && markers.isNotEmpty()) {
                 activeMixMarkers = markers
                 activeMixChunkStartMs = 0L
                 lastDisplayedMixTrackId = -1

@@ -577,14 +577,17 @@ data class Rpf7ClipRef(
                     currentMultiChunksPlayedInRow += 1
                     currentSegmentUris = listOf(nextUri)
 
-                    // Background prefetch subsequent chunk with generation check
+                    // Background prefetch subsequent chunk strictly inside decodeExecutor guarded by playGeneration
                     if (currentMultiChunkNextBlock < currentMultiChunkTotalBlocks) {
-                        val gen = prefetchGeneration
-                        item.archive.prefetchBlockChunk(
-                            item.trackName,
-                            currentMultiChunkNextBlock,
-                            chunkBlocks
-                        ) { !_playing || prefetchGeneration != gen }
+                        val gen = playGeneration.get()
+                        decodeExecutor.submit {
+                            if (!_playing || playGeneration.get() != gen) return@submit
+                            item.archive.prefetchBlockChunk(
+                                item.trackName,
+                                currentMultiChunkNextBlock,
+                                chunkBlocks
+                            ) { !_playing || playGeneration.get() != gen }
+                        }
                     }
                     return true
                 }
@@ -790,13 +793,16 @@ data class Rpf7ClipRef(
                 stopMixPoller()
             }
 
-            // Prefetch next chunk with generation counter
-            val gen = prefetchGeneration
-            item.archive.prefetchBlockChunk(
-                item.trackName,
-                currentMultiChunkNextBlock,
-                chunkBlocks
-            ) { !_playing || prefetchGeneration != gen }
+            // Prefetch next chunk strictly inside decodeExecutor guarded by playGeneration
+            val gen = playGeneration.get()
+            decodeExecutor.submit {
+                if (!_playing || playGeneration.get() != gen) return@submit
+                item.archive.prefetchBlockChunk(
+                    item.trackName,
+                    currentMultiChunkNextBlock,
+                    chunkBlocks
+                ) { !_playing || playGeneration.get() != gen }
+            }
         } else {
             mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false
             currentMultiChunkTotalBlocks = totalBlocks

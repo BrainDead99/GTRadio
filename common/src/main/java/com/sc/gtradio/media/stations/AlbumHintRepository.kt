@@ -56,7 +56,7 @@ object AlbumHintRepository {
         s = s.replace(Regex("\\brunin\\b", RegexOption.IGNORE_CASE), "running")
         s = s.replace(Regex("\\brunnin\\b", RegexOption.IGNORE_CASE), "running")
         s = s.replace(Regex("\\bswingin\\b", RegexOption.IGNORE_CASE), "swinging")
-        s = s.replace(Regex("[^a-z0-9\\s]"), " ")
+        s = s.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
         s = s.replace(Regex("\\s+"), " ").trim()
         if (s.startsWith("the ")) {
             s = s.substring(4).trim()
@@ -84,7 +84,7 @@ object AlbumHintRepository {
         val splitRegex = Regex("\\b(featuring|feat\\.?|ft\\.?|with|meets|vs\\.?|and)\\b|[&/,+;]", RegexOption.IGNORE_CASE)
         val parts = splitRegex.split(a)
         val first = if (parts.isNotEmpty()) parts[0] else a
-        var res = first.replace(Regex("[^a-z0-9\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+        var res = first.replace(Regex("[^\\p{L}\\p{N}\\s]"), " ").replace(Regex("\\s+"), " ").trim()
         if (res.startsWith("the ")) {
             res = res.substring(4).trim()
         }
@@ -132,16 +132,16 @@ object AlbumHintRepository {
 
         val assetFiles = try {
             val list = context.assets.list("")
-            val filtered = list?.filter { it.startsWith("album_hints_") && it.endsWith(".tsv") }
-            if (!filtered.isNullOrEmpty()) filtered else listOf("album_hints_gen2.tsv")
+            val filtered = list?.filter { it.startsWith("album_hints_") && it.endsWith(".tsv") }?.sorted()
+            if (!filtered.isNullOrEmpty()) filtered else listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv")
         } catch (_: Exception) {
-            listOf("album_hints_gen2.tsv")
+            listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv")
         }
 
         for (filename in assetFiles) {
             try {
                 context.assets.open(filename).use { inputStream ->
-                    BufferedReader(InputStreamReader(inputStream)).use { reader ->
+                    BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).use { reader ->
                         var line = reader.readLine()
                         while (line != null) {
                             val trimmed = line.trim()

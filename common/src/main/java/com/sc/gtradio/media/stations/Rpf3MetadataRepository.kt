@@ -56,19 +56,19 @@ object Rpf3MetadataRepository {
 
     val beatExtraTracks = setOf(
         "WHEREMY", "GETAWAY", "DIRTYNY", "PRICEONHEAD", "WETEMUP",
-        "ITHOUGHT", "STICKEM", "WHATSTHEPROBLEM", "WARIS", "NICKNAME", "DAORDER"
+        "ITHOUGHT", "STICKEM", "WHATSTHEPROBLEM", "WARIS", "NICKNAME", "ANYBODYCAN"
     )
 
     val massiveBExtraTracks = setOf(
-        "BADDERDEN", "SETITOFF", "REALMCKOY", "RAISEITUP", "BRAINLEECH",
+        "BADDERDEN", "SETITOFF", "REALMCKOY", "RAISEITUP",
         "DRIVER", "CALLPON", "YOUTHDEM", "ALLABOUTWEED", "NOFRAID",
-        "ANYBODYCAN", "CHURCH", "BULLETPROOF"
+        "CHURCH", "BULLETPROOF", "DAORDER", "LASTNIGHT", "BRRRT"
     )
 
     val electroChocExtraTracks = setOf(
         "SIGNALFAILURE", "TURNTORED", "MAKEIT", "OPTIMO", "TITS",
         "TESTAROSSA", "WATERSNAZARETH", "ANDDOWN", "BAGRAIDERS",
-        "BRRRT", "LETYOURBODY", "LASTNIGHT", "DEVILINUS", "NOPRESSURE"
+        "BRAINLEECH", "LETYOURBODY", "DEVILINUS", "NOPRESSURE"
     )
 
     val ramJamExtraTracks = setOf(
@@ -161,6 +161,12 @@ object Rpf3MetadataRepository {
         if (cleanKey == "COCAINE" && stationName.uppercase().contains("BROKER")) {
             return Rpf3TrackMeta("COCAINE", "Cocaine", "Cheeseburger")
         }
+        if (cleanKey == "LASTNIGHT" && stationName.uppercase().contains("ELECTRO")) {
+            return Rpf3TrackMeta("LASTNIGHT", "I Thought Inside Out (Original Mix)", "Chris Lake vs. Deadmau5")
+        }
+        if (cleanKey == "ITHOUGHT" && stationName.uppercase().contains("ELECTRO")) {
+            return Rpf3TrackMeta("ITHOUGHT", "I Thought Inside Out (Original Mix)", "Chris Lake vs. Deadmau5")
+        }
         return trackMetaMap[cleanKey]
     }
 
@@ -187,7 +193,7 @@ object Rpf3MetadataRepository {
         173 to Rpf3TrackMeta("173", "Tits & Acid", "Simian Mobile Disco"),
         174 to Rpf3TrackMeta("174", "Let Your Body Learn", "Nitzer Ebb"),
         175 to Rpf3TrackMeta("175", "Testarossa Autodrive (SebastiAn Remix)", "Kavinsky"),
-        176 to Rpf3TrackMeta("176", "I Thought Inside Out", "Chris Lake vs. Deadmau5"),
+        176 to Rpf3TrackMeta("176", "I Thought Inside Out (Original Mix)", "Chris Lake vs. Deadmau5"),
         177 to Rpf3TrackMeta("177", "& Down", "Boys Noize"),
         178 to Rpf3TrackMeta("178", "Waters of Nazareth", "Justice"),
         179 to Rpf3TrackMeta("179", "Turn to Red", "Killing Joke"),
@@ -366,7 +372,7 @@ object Rpf3MetadataRepository {
         addSong("GIANTSTEPS", "Giant Steps", "John Coltrane")
         addSong("LETSGETLOST", "Let's Get Lost", "Chet Baker")
         addSong("MOANIN", "Moanin'", "Art Blakey and the Jazz Messengers")
-        addSong("MORE", "More Than You Know", "Miles Davis")
+        addSong("MORE", "Move", "Miles Davis")
         addSong("NIGHTANDDAY", "Night and Day", "Charlie Parker")
         addSong("SNAPCRACKLE", "Snap Crackle", "Roy Haynes")
         addSong("STTHOMAS", "St. Thomas", "Sonny Rollins")
@@ -499,9 +505,9 @@ object Rpf3MetadataRepository {
         addSong("ITHOUGHT", "I Thought", "Red Café")
         addSong("STICKEM", "Stick'm", "Red Café")
         addSong("WHATSTHEPROBLEM", "What's the Problem", "Styles P")
-        addSong("WARIS", "Anybody Can Get It", "Uncle Murda")
+        addSong("WARIS", "War Is Necessary", "Nas")
         addSong("NICKNAME", "Nickname", "Qadir")
-        addSong("DAORDER", "Getaway Driver", "Maino")
+        addSong("DAORDER", "Da Order", "Spragga Benz")
         addShow("E1_BEAT_MIX_P1", "The Beat 102.7 Mix", "Funkmaster Flex")
         addShow("E1_BEAT_MIX_P2", "The Beat 102.7 Mix", "Statik Selektah")
         addSong("HERE_IN_LIBERTY_CITY", "Here in Liberty City", "Termanology")
@@ -517,7 +523,7 @@ object Rpf3MetadataRepository {
         addSong("CALLPON", "Call Pon Dem", "Chezidek")
         addSong("YOUTHDEM", "Youth Dem Cold", "Richie Spice")
         addSong("ALLABOUTWEED", "All About da Weed", "Chuck Fenda")
-        addSong("NOFRAID", "Last Night", "Mavado")
+        addSong("NOFRAID", "No Fraid A", "Munga")
         addSong("ANYBODYCAN", "Anybody Can Get It", "Uncle Murda")
         addSong("CHURCH", "Church Heathen", "Shaggy")
         addSong("BULLETPROOF", "Bullet Proof Skin", "Bounty Killer")
@@ -526,15 +532,15 @@ object Rpf3MetadataRepository {
         addSong("TURNTORED", "Turn to Red", "Killing Joke")
         addSong("MAKEIT", "Make It Happen", "Playgroup")
         addSong("OPTIMO", "Optimo", "Liquid Liquid")
-        addSong("TITS", "No Pressure (Deadmau5 Remix)", "One + One")
+        addSong("TITS", "Tits & Acid", "Simian Mobile Disco")
         addSong("TESTAROSSA", "Testarossa Autodrive (SebastiAn Remix)", "Kavinsky")
         addSong("WATERSNAZARETH", "Waters of Nazareth", "Justice")
         addSong("ANDDOWN", "& Down", "Boys Noize")
         addSong("BAGRAIDERS", "Fun Punch", "Bag Raiders")
-        addSong("BRRRT", "Brrr", "Modeselektor")
+        addSong("BRRRT", "Brrrt", "Bunji Garlin")
         addSong("LETYOURBODY", "Let Your Body Learn", "Nitzer Ebb")
-        addSong("LASTNIGHT", "Theicked", "Chris Lake")
-        addSong("DEVILINUS", "The Devil in Us (Dub)", "Make Model")
+        addSong("LASTNIGHT", "Last Night", "Mavado")
+        addSong("DEVILINUS", "The Devil in Us (Dub)", "Black Devil Disco Club")
         addSong("NOPRESSURE", "No Pressure", "One + One")
         addShow("CROOKERS_MIX", "Electro-Choc Mix", "Crookers")
         addSong("A_CITY_UNDER_SIEGE", "A City Under Siege", "Boy 8-Bit")
@@ -586,7 +592,7 @@ object Rpf3MetadataRepository {
         // Self-Actualization FM (EFLC)
         addSong("ARTIFACTS", "Artifacts & Prophecies", "The Orb")
         addSong("BIKE", "Bike", "Autechre")
-        addSong("COSMOGONICMYTH", "A Cosmogonic Myth", "Larry Fast")
+        addSong("COSMOGONICMYTH", "A Cosmogonic Myth", "Larry Heard")
         addSong("GOFORWARD", "Go Forward (Love Bubble Mix)", "Chilled by Nature")
         addSong("MOONBATHING", "Moonbathing", "Tom Middleton")
         addSong("ORB", "Little Fluffy Clouds", "The Orb")
