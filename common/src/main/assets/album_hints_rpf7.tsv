@@ -1,0 +1,406 @@
+station|artist|title|officialAlbum|year|status|hintArtist|hintAlbum
+Los Santos Rock Radio|Simple Minds|All the Things She Said|Once Upon a Time|1985|STUDIO_LP||
+Los Santos Rock Radio|Gerry Rafferty|Baker Street|City to City|1978|STUDIO_LP||
+Los Santos Rock Radio|Robert Plant|Big Log|The Principle of Moments|1983|STUDIO_LP||
+Los Santos Rock Radio|Foreigner|Dirty White Boy|Head Games|1979|STUDIO_LP||
+Los Santos Rock Radio|Don Johnson|Heartbeat|Heartbeat|1986|STUDIO_LP||
+Los Santos Rock Radio|Steve Winwood|Higher Love|Back in the High Life|1986|STUDIO_LP||
+Los Santos Rock Radio|Bob Seger & The Silver Bullet Band|Hollywood Nights|Stranger in Town|1978|STUDIO_LP||
+Los Santos Rock Radio|Stevie Nicks|I Can't Wait|Rock a Little|1985|STUDIO_LP||
+Los Santos Rock Radio|Phil Collins|I Don't Care Anymore|Hello, I Must Be Going!|1982|STUDIO_LP||
+Los Santos Rock Radio|The Alan Parsons Project|I Wouldn't Want to Be Like You|I Robot|1977|STUDIO_LP||
+Los Santos Rock Radio|Chicago|If You Leave Me Now|Chicago X|1976|STUDIO_LP||
+Los Santos Rock Radio|Kenny Loggins|I'm Free (Heaven Helps the Man)|Footloose (Original Soundtrack)|1984|CANONICAL_OST_COMP|Kenny Loggins|Footloose
+Los Santos Rock Radio|Billy Squier|Lonely Is the Night|Don't Say No|1981|STUDIO_LP||
+Los Santos Rock Radio|Bob Seger & The Silver Bullet Band|Night Moves|Night Moves|1976|STUDIO_LP||
+Los Santos Rock Radio|Small Faces|Ogdens' Nut Gone Flake|Ogdens' Nut Gone Flake|1968|STUDIO_LP||
+Los Santos Rock Radio|Def Leppard|Photograph|Pyromania|1983|STUDIO_LP||
+Los Santos Rock Radio|Queen|Radio Ga Ga|The Works|1984|STUDIO_LP||
+Los Santos Rock Radio|The Cult|Rain|Love|1985|STUDIO_LP||
+Los Santos Rock Radio|Steve Miller Band|Rock'n Me|Fly Like an Eagle|1976|STUDIO_LP||
+Los Santos Rock Radio|Elton John|Saturday Night's Alright for Fighting|Goodbye Yellow Brick Road|1973|STUDIO_LP||
+Los Santos Rock Radio|The Greg Kihn Band|The Breakup Song (They Don't Write 'Em)|RocKihnRoll|1981|STUDIO_LP|Greg Kihn Band|RocKihnRoll
+Los Santos Rock Radio|Julian Lennon|Too Late for Goodbyes|Valotte|1984|STUDIO_LP||
+Los Santos Rock Radio|The Doobie Brothers|What a Fool Believes|Minute by Minute|1978|STUDIO_LP||
+Los Santos Rock Radio|Humble Pie|30 Days in the Hole|Smokin'|1972|STUDIO_LP||
+Los Santos Rock Radio|Alannah Myles|Black Velvet|Alannah Myles|1989|STUDIO_LP||
+Los Santos Rock Radio|Survivor|Burning Heart|Rocky IV (Original Motion Picture Soundtrack)|1985|CANONICAL_OST_COMP|Survivor|Rocky IV
+Los Santos Rock Radio|Kansas|Carry On Wayward Son|Leftoverture|1976|STUDIO_LP||
+Los Santos Rock Radio|Harry Chapin|Cat's in the Cradle|Verities & Balderdash|1974|STUDIO_LP||
+Los Santos Rock Radio|Belinda Carlisle|Circle in the Sand|Heaven on Earth|1987|STUDIO_LP||
+Los Santos Rock Radio|Broken English|Coming On Strong|Comin' On Strong|1987|SINGLE_EP|Broken English|Comin' On Strong
+Los Santos Rock Radio|Kenny Loggins|Danger Zone|Top Gun (Original Motion Picture Soundtrack)|1986|CANONICAL_OST_COMP|Kenny Loggins|Top Gun
+Los Santos Rock Radio|Creedence Clearwater Revival|Fortunate Son|Willy and the Poor Boys|1969|STUDIO_LP||
+Los Santos Rock Radio|ZZ Top|Gimme All Your Lovin'|Eliminator|1983|STUDIO_LP||
+Los Santos Rock Radio|Mountain|Mississippi Queen|Climbing!|1970|STUDIO_LP||
+Los Santos Rock Radio|Boston|Peace of Mind|Boston|1976|STUDIO_LP||
+Los Santos Rock Radio|Yes|Roundabout|Fragile|1971|STUDIO_LP||
+Los Santos Rock Radio|Pat Benatar|Shadows of the Night|Get Nervous|1982|STUDIO_LP||
+Los Santos Rock Radio|Starship|We Built This City|Knee Deep in the Hoopla|1985|STUDIO_LP||
+Non-Stop-Pop FM|Amerie|1 Thing|Touch|2005|STUDIO_LP||
+Non-Stop-Pop FM|Hall & Oates|Adult Education|Rock 'n Soul Part 1|1983|CANONICAL_OST_COMP|Daryl Hall & John Oates|Rock 'n Soul Part 1
+Non-Stop-Pop FM|N-Joi|Anthem|Anthem|1990|SINGLE_EP|NJOI|Anthem
+Non-Stop-Pop FM|Jane Child|Don't Wanna Fall in Love|Jane Child|1990|STUDIO_LP||
+Non-Stop-Pop FM|Wham!|Everything She Wants|Make It Big|1984|STUDIO_LP||
+Non-Stop-Pop FM|Britney Spears|Gimme More|Blackout|2007|STUDIO_LP||
+Non-Stop-Pop FM|Fergie feat. Ludacris|Glamorous|The Dutchess|2006|STUDIO_LP|Fergie|The Dutchess
+Non-Stop-Pop FM|Modjo|Lady (Hear Me Tonight)|Modjo|2000|STUDIO_LP||
+Non-Stop-Pop FM|Stardust|Music Sounds Better with You|Music Sounds Better with You|1998|SINGLE_EP|Stardust|Music Sounds Better with You
+Non-Stop-Pop FM|Rihanna|Only Girl (In the World)|Loud|2010|STUDIO_LP||
+Non-Stop-Pop FM|All Saints|Pure Shores|Saints & Sinners|2000|STUDIO_LP||
+Non-Stop-Pop FM|Mis-Teeq|Scandalous|Eye Candy|2003|STUDIO_LP||
+Non-Stop-Pop FM|Corona|The Rhythm of the Night|The Rhythm of the Night|1993|STUDIO_LP||
+Non-Stop-Pop FM|Pet Shop Boys|West End Girls|Please|1986|STUDIO_LP||
+Non-Stop-Pop FM|Robyn feat. Kleerup|With Every Heartbeat|Robyn|2007|STUDIO_LP|Kleerup|Kleerup
+Non-Stop-Pop FM|Kelly Rowland|Work (Freemasons Remix)|Ms. Kelly|2007|STUDIO_LP|Kelly Rowland|Work (Remix Bundle)
+Non-Stop-Pop FM|Sneaker Pimps|6 Underground|Becoming X|1996|STUDIO_LP||
+Non-Stop-Pop FM|Jamiroquai|Alright|Travelling Without Moving|1996|STUDIO_LP||
+Non-Stop-Pop FM|Lady Gaga|Applause|ARTPOP|2013|STUDIO_LP||
+Non-Stop-Pop FM|M.I.A.|Bad Girls|Matangi|2013|STUDIO_LP||
+Non-Stop-Pop FM|Mike Posner|Cooler Than Me|31 Minutes to Takeoff|2010|STUDIO_LP||
+Non-Stop-Pop FM|Dirty Vegas|Days Go By|Dirty Vegas|2002|STUDIO_LP||
+Non-Stop-Pop FM|Gorillaz feat. De La Soul|Feel Good Inc.|Demon Days|2005|STUDIO_LP|Gorillaz|Demon Days
+Non-Stop-Pop FM|Backstreet Boys|I Want It That Way|Millennium|1999|STUDIO_LP||
+Non-Stop-Pop FM|Robbie Williams & Kylie Minogue|Kids|Sing When You're Winning|2000|STUDIO_LP|Robbie Williams|Light Years
+Non-Stop-Pop FM|Sly Fox|Let's Go All the Way|Let's Go All the Way|1985|STUDIO_LP||
+Non-Stop-Pop FM|Living in a Box|Living in a Box|Living in a Box|1987|STUDIO_LP||
+Non-Stop-Pop FM|Cassie|Me & U|Cassie|2006|STUDIO_LP||
+Non-Stop-Pop FM|Black Eyed Peas|Meet Me Halfway|The E.N.D.|2009|STUDIO_LP||
+Non-Stop-Pop FM|M83|Midnight City|Hurry Up, We're Dreaming|2011|STUDIO_LP||
+Non-Stop-Pop FM|Maroon 5 feat. Christina Aguilera|Moves Like Jagger|Hands All Over|2011|STUDIO_LP|Maroon 5|Hands All Over
+Non-Stop-Pop FM|INXS|New Sensation|Kick|1987|STUDIO_LP||
+Non-Stop-Pop FM|Bobby Brown|On Our Own|Ghostbusters II (Soundtrack)|1989|CANONICAL_OST_COMP|Bobby Brown|Ghostbusters II
+Non-Stop-Pop FM|Naked Eyes|Promises, Promises|Burning Bridges|1983|STUDIO_LP||
+Non-Stop-Pop FM|Real Life|Send Me an Angel '89|Heartland|1983|STUDIO_LP||
+Non-Stop-Pop FM|Bronski Beat|Smalltown Boy|The Age of Consent|1984|STUDIO_LP||
+Non-Stop-Pop FM|Simply Red|Something Got Me Started (Hurley's House Mix)|Stars|1991|STUDIO_LP||
+Non-Stop-Pop FM|Morcheeba|Tape Loop|Who Can You Trust?|1996|STUDIO_LP||
+Non-Stop-Pop FM|Taylor Dayne|Tell It to My Heart|Tell It to My Heart|1988|STUDIO_LP||
+Non-Stop-Pop FM|Lorde|Tennis Court|Pure Heroine|2013|STUDIO_LP||
+Non-Stop-Pop FM|Moloko|The Time Is Now|Things to Make and Do|2000|STUDIO_LP||
+Non-Stop-Pop FM|The Blow Monkeys feat. Kym Mazelle|Wait|Choices|1989|CANONICAL_OST_COMP|The Blow Monkeys|Wait
+Radio Los Santos|YG|I'm a Real 1|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|YG|The Music of Grand Theft Auto V
+Radio Los Santos|100s|Life of a Mack|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|100s|The Music of Grand Theft Auto V
+Radio Los Santos|Ab-Soul feat. Kendrick Lamar|ILLuminate|Control System|2012|STUDIO_LP|Ab-Soul|Control System
+Radio Los Santos|A$AP Rocky feat. Aston Matthews & Joey Fatts|R-Cali|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|A$AP Rocky|The Music of Grand Theft Auto V
+Radio Los Santos|Marion Band$ feat. Nipsey Hussle|Hold Up|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Marion Band$|The Music of Grand Theft Auto V
+Radio Los Santos|BJ the Chicago Kid feat. Freddie Gibbs & Problem|Smokin' and Ridin'|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|BJ the Chicago Kid|The Music of Grand Theft Auto V
+Radio Los Santos|Kendrick Lamar|A.D.H.D|Section.80|2011|STUDIO_LP||
+Radio Los Santos|Jay Rock feat. Kendrick Lamar|Hood Gone Love It|Follow Me Home|2011|STUDIO_LP|Jay Rock|Follow Me Home
+Radio Los Santos|The Game feat. 2 Chainz & Rick Ross|Ali Bomaye|Jesus Piece|2012|STUDIO_LP|The Game|Jesus Piece
+Radio Los Santos|Freddie Gibbs|Still Livin'|Baby Face Killa|2012|STUDIO_LP||
+Radio Los Santos|DJ Esco feat. Future|How It Was|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Future|The Music of Grand Theft Auto V
+Radio Los Santos|Problem feat. Glasses Malone|Say That Then|The Separation|2013|STUDIO_LP|Problem|The Separation
+Radio Los Santos|Clyde Carson feat. The Team|Slow Down|S.T.S.A.|2012|SINGLE_EP|Clyde Carson|Slow Down
+Radio Los Santos|Gucci Mane feat. Ciara|Too Hood|Writing on the Wall 2|2011|STUDIO_LP|Gucci Mane|Too Hood
+Radio Los Santos|Gangrene|Bassheads|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Gangrene|The Music of Grand Theft Auto V
+Radio Los Santos|Danny Brown & Action Bronson|Bad News|Welcome to Los Santos|2015|CANONICAL_OST_COMP|Action Bronson|Welcome to Los Santos
+Radio Los Santos|G-Side feat. G-Mane|Relaxin'|The One... Cohesive|2011|STUDIO_LP|G-Side|The One Cohesive
+Radio Los Santos|A$AP Ferg|Work|Trap Lord|2013|STUDIO_LP||
+Radio Los Santos|Trouble feat. Gucci Mane|Everyday|Green Light|2011|STUDIO_LP|Trouble|Everyday
+Radio Los Santos|Kendrick Lamar|Swimming Pools (Drank)|good kid, m.A.A.d city|2012|STUDIO_LP||
+Radio Los Santos|Travis Scott feat. 2 Chainz & T.I.|Upper Echelon|Owl Pharaoh|2013|SINGLE_EP|Travis Scott|Upper Echelon
+Radio Los Santos|Danny Brown feat. A$AP Rocky & Zelooperz|Kush Coma|Old|2013|STUDIO_LP|Danny Brown|Old
+Radio Los Santos|Ace Hood feat. Future & Rick Ross|Bugatti|Trials & Tribulations|2013|STUDIO_LP|Ace Hood|Trials & Tribulations
+Radio Los Santos|Schoolboy Q feat. Kendrick Lamar|Collard Greens|Oxymoron|2014|STUDIO_LP|ScHoolboy Q|Oxymoron
+Radio Los Santos|Chuck Inglish feat. Ab-Soul & Mac Miller|Came Thru/Easily|Convertibles|2014|STUDIO_LP|Chuck Inglish|Convertibles
+Radio Los Santos|Young Scooter feat. Gucci Mane|Work|Street Lottery|2013|STUDIO_LP|Young Scooter|Street Lottery
+Radio Los Santos|Problem & IamSu feat. Bad Lucc & Sage the Gemini|Do It Big|Million Dollar Afro|2013|STUDIO_LP|Problem|Million Dollar Afro
+Radio Los Santos|Skeme|Millions|Ingleworld|2013|STUDIO_LP||
+Radio Los Santos|Ab-Soul feat. Schoolboy Q|Hunnid Stax|These Days...|2014|STUDIO_LP|Ab-Soul|These Days
+Radio Los Santos|Freddie Gibbs & Mike Dean|Sellin' Dope|Sellin' Dope (GTA V Exclusive)|2014|NO_ART||
+Radio Los Santos|Young Scooter feat. Trinidad James|I Can't Wait|Street Lottery|2013|STUDIO_LP|Young Scooter|Street Lottery
+Channel X|Adolescents|Amoeba|Adolescents|1981|STUDIO_LP||
+Channel X|Agent Orange|Bored of You|Living in Darkness|1981|STUDIO_LP||
+Channel X|Black Flag|My War|My War|1984|STUDIO_LP||
+Channel X|Circle Jerks|Rock House|Group Sex|1980|STUDIO_LP||
+Channel X|Descendents|Pervert|I Don't Want to Grow Up|1985|STUDIO_LP||
+Channel X|Fear|The Mouth Don't Stop (The Trouble with Women Is)|More Beer|1985|STUDIO_LP||
+Channel X|OFF!|What's Next?|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|OFF!|The Music of Grand Theft Auto V
+Channel X|Suicidal Tendencies|Subliminal|Suicidal Tendencies|1983|STUDIO_LP||
+Channel X|T.S.O.L.|Abolish Government/Silent Majority|T.S.O.L.|1981|SINGLE_EP|T.S.O.L.|T.S.O.L.
+Channel X|The Germs|Lexicon Devil|(GI)|1979|STUDIO_LP|Germs|(GI)
+Channel X|The Weirdos|Life of Crime|Weird World|1977|SINGLE_EP|The Weirdos|Weird World
+Channel X|Youth Brigade|Blown Away|Sound & Fury|1983|STUDIO_LP||
+Channel X|D.O.A.|The Enemy|Hardcore '81|1981|STUDIO_LP||
+Channel X|D.R.I.|Don't Need Society|Dealing with It!|1985|STUDIO_LP|D.R.I.|Dealing with It!
+Channel X|MDC|John Wayne Was a Nazi|Millions of Dead Cops|1982|STUDIO_LP||
+Channel X|Redd Kross|Linda Blair|Born Innocent|1982|STUDIO_LP||
+Channel X|The Zeros|Don't Push Me Around|Don't Push Me Around|1977|SINGLE_EP|The Zeros|Don't Push Me Around
+Channel X|X|Los Angeles|Los Angeles|1980|STUDIO_LP||
+Rebel Radio|Charlie Feathers|Can't Hardly Stand It|Can't Hardly Stand It|1956|SINGLE_EP|Charlie Feathers|Get with It
+Rebel Radio|Hank Thompson|It Don't Hurt Anymore|Songs for Rounders|1959|STUDIO_LP||
+Rebel Radio|Hasil Adkins|Get Outta My Car|Out to Hunch|1986|STUDIO_LP||
+Rebel Radio|Jerry Reed|You Took All the Ramblin' Out of Me|Hot a' Mighty!|1973|STUDIO_LP||
+Rebel Radio|Johnny Cash|The General Lee|The Dukes of Hazzard|1981|CANONICAL_OST_COMP|Johnny Cash|The General Lee
+Rebel Radio|Johnny Paycheck|It Won't Be Long (And I'll Be Hating You)|At Carnegie Hall|1966|STUDIO_LP|Johnny Paycheck|It Won't Be Long
+Rebel Radio|Ozark Mountain Daredevils|If You Wanna Get to Heaven|The Ozark Mountain Daredevils|1973|STUDIO_LP||
+Rebel Radio|Waylon Jennings|Are You Sure Hank Done It This Way|Dreaming My Dreams|1975|STUDIO_LP||
+Rebel Radio|Waylon Jennings|I Ain't Living Long Like This|What Goes Around Comes Around|1979|STUDIO_LP||
+Rebel Radio|Willie Nelson|Whiskey River|Shotgun Willie|1973|STUDIO_LP||
+Rebel Radio|C.W. McCall|Convoy|Black Bear Road|1975|STUDIO_LP||
+Rebel Radio|Charlie Feathers|Get With It|Get with It|1956|SINGLE_EP|Charlie Feathers|Get with It
+Rebel Radio|Homer and Jethro|She Made Toothpicks of the Timber of My Heart|Life Can Be Miserable|1959|STUDIO_LP|Homer & Jethro|She Made Toothpicks
+Rebel Radio|Marvin Jackson|Dippin' Snuff|Dippin' Snuff|1956|NO_ART||
+Rebel Radio|Ray Price|Crazy Arms|Talk to Your Heart|1958|STUDIO_LP||
+Rebel Radio|Tammy Wynette|D-I-V-O-R-C-E|D-I-V-O-R-C-E|1968|STUDIO_LP||
+Rebel Radio|The Highwaymen|Highwayman|Highwayman|1985|STUDIO_LP||
+Soulwax FM|Palmbomen|Stock (Soulwax Remix)|Night Flight Europa|2013|STUDIO_LP|Palmbomen|Stock
+Soulwax FM|Fatal Error|Fatal Error|The Sound of Belgium|1988|CANONICAL_OST_COMP|Fatal Error|The Sound of Belgium
+Soulwax FM|Supersempfft|Let's Beam Him Up|Roboterwerke|1979|STUDIO_LP|Supersempfft|Selected Werks
+Soulwax FM|Mim Suleiman|Mingi|Tungi|2010|STUDIO_LP||
+Soulwax FM|FKCLUB|The Strange Art (In Flagranti Remix)|The Strange Art|2013|SINGLE_EP|FKCLUB|The Strange Art
+Soulwax FM|Matias Aguayo|El Sucu Tucu|The Visitor|2013|STUDIO_LP||
+Soulwax FM|Daniel Avery|Naive Reception|Drone Logic|2013|STUDIO_LP|Daniel Avery|Drone Logic
+Soulwax FM|Joe Goddard feat. Valentina|Gabriel (Soulwax Remix)|Gabriel Remixes II|2012|SINGLE_EP|Joe Goddard|Gabriel Remixes II
+Soulwax FM|Daniel Malaso|Body Music (Original Mix)|In and Out|2012|STUDIO_LP|Daniel Maloso|In and Out
+Soulwax FM|Green Velvet & Harvard Bass|Lazer Beams|Lazer Beams|2012|SINGLE_EP|Green Velvet|Lazer Beams
+Soulwax FM|Zombie Nation|Tryouts|RGB|2012|STUDIO_LP||
+Soulwax FM|Tom Rowlands|Nothing but Pleasure|Through Me|2013|SINGLE_EP|Tom Rowlands|Through Me
+Soulwax FM|Jackson and His Computer Band|Arp #1|Glow|2013|STUDIO_LP||
+Soulwax FM|Goose|Synrise (Soulwax Remix)|Synrise (Soulwax Remix)|2012|SINGLE_EP|Goose|Synrise
+Soulwax FM|Transistorcake|Mr. Croissant Taker|Mr. Croissant Taker|2013|SINGLE_EP|Transistorcake|Mr. Croissant Taker
+Soulwax FM|Tiga|Plush (Jacques Lu Cont Remix)|Plush (Remixes)|2012|SINGLE_EP|Tiga|Plush
+Soulwax FM|The Hacker|Shockwave (Gesaffelstein Remix)|Shockwave|2012|SINGLE_EP|The Hacker|Shockwave
+Soulwax FM|Pulp|After You (Soulwax Remix)|After You|2013|SINGLE_EP|Pulp|After You
+East Los FM|Don Cheto|El Tatuado|El Hombre del Vozarrón|2005|STUDIO_LP||
+East Los FM|Fandango|Autos, Moda y Rock and Roll|Autos, Moda y Rock and Roll|1987|STUDIO_LP||
+East Los FM|Hechizeros Band|El Sonidito|El Sonidito|2008|STUDIO_LP||
+East Los FM|Jessy Bulbo|Maldito|Saga Mama|2006|STUDIO_LP||
+East Los FM|La Liga feat. Alika|Yo Tengo el Don|La Liga|2010|SINGLE_EP|La Liga|Yo Tengo el Don
+East Los FM|La Vida Bohème|Radio Capital|Nuestra|2010|STUDIO_LP||
+East Los FM|Los Ángeles Negros|El Rey y Yo|Y Volveré|1970|STUDIO_LP||
+East Los FM|Los Buitres de Culiacán Sinaloa|El Cocaíno|16 Éxitos|2012|STUDIO_LP|Los Buitres de Culiacán Sinaloa|El Cocaino
+East Los FM|Los Tigres del Norte|La Granja|La Granja|2009|STUDIO_LP||
+East Los FM|Maldita Vecindad|Pachuco|El Circo|1991|STUDIO_LP|Maldita Vecindad y los Hijos del 5to. Patio|El Circo
+East Los FM|Mexican Institute of Sound|Es-Toy|Político|2012|STUDIO_LP|Instituto Mexicano del Sonido|Politico
+East Los FM|Milkman|Fresco|Soy Milk|2013|SINGLE_EP|Milkman|Fresco
+East Los FM|Niña Dioz|Criminal Sound (El Hijo de la Cumbia Remix)|Indestructible|2011|STUDIO_LP|Niña Dioz|Criminal Sound
+East Los FM|She's a Tease|Fiebre de Jack|Millonaria|2010|STUDIO_LP||
+East Los FM|Sonora Dinamita|Se Me Perdió la Cadenita|La Sonora Dinamita|1978|STUDIO_LP|La Sonora Dinamita|Se Me Perdió la Cadenita
+West Coast Classics|2Pac|Ambitionz Az a Ridah|All Eyez on Me|1996|STUDIO_LP||
+West Coast Classics|Compton's Most Wanted|Late Night Hype|It's a Compton Thang|1990|STUDIO_LP||
+West Coast Classics|DJ Quik|Dollaz + Sense|Safe + Sound|1995|STUDIO_LP||
+West Coast Classics|Dr. Dre feat. Snoop Dogg|Still D.R.E.|2001|1999|STUDIO_LP|Dr. Dre|2001
+West Coast Classics|King Tee|Played Like a Piano|At Your Own Risk|1990|STUDIO_LP||
+West Coast Classics|Dr. Dre feat. Snoop Dogg, Kurupt & Nate Dogg|The Next Episode|2001|1999|STUDIO_LP|Dr. Dre|2001
+West Coast Classics|Ice Cube|You Know How We Do It|Lethal Injection|1993|STUDIO_LP||
+West Coast Classics|Kausion feat. Ice Cube|What You Wanna Do?|South Central Los Skanless|1995|STUDIO_LP|Kausion|South Central Los Skanless
+West Coast Classics|Kurupt|C-Walk|Kuruption!|1998|STUDIO_LP||
+West Coast Classics|Mack 10 & Tha Dogg Pound|Nothin' But the Cavi Hit|Rhyme & Reason (Soundtrack)|1997|CANONICAL_OST_COMP|Mack 10|Nothin' But the Cavi Hit
+West Coast Classics|MC Eiht|Straight Up Menace|Menace II Society (Soundtrack)|1993|CANONICAL_OST_COMP|MC Eiht|Menace II Society
+West Coast Classics|N.W.A|Appetite for Destruction|Niggaz4Life|1991|STUDIO_LP||
+West Coast Classics|N.W.A|Gangsta Gangsta|Straight Outta Compton|1988|STUDIO_LP||
+West Coast Classics|Tha Dogg Pound|What Would You Do?|Murder Was the Case (Soundtrack)|1994|CANONICAL_OST_COMP|Tha Dogg Pound|Murder Was the Case
+West Coast Classics|Snoop Dogg|Gin and Juice|Doggystyle|1993|STUDIO_LP||
+West Coast Classics|Geto Boys|Mind Playing Tricks on Me|We Can't Be Stopped|1991|STUDIO_LP||
+West Coast Classics|Too $hort|So You Want to Be a Gangster|Shorty the Pimp|1992|STUDIO_LP||
+West Coast Classics|Jayo Felony|Sherm Stick|Take a Ride|1994|STUDIO_LP||
+West Coast Classics|Warren G|This D.J.|Regulate...G Funk Era|1994|STUDIO_LP||
+West Coast Classics|CPO feat. MC Ren|Ballad of a Menace|To Hell and Black|1990|STUDIO_LP|CPO|To Hell and Black
+West Coast Classics|E-40 feat. The Click|Captain Save a Hoe|The Mail Man|1994|STUDIO_LP|E-40|The Mail Man
+West Coast Classics|The Conscious Daughters|We Roll Deep|Ear to the Street|1993|STUDIO_LP||
+West Coast Classics|Eazy-E feat. Ice Cube|No More ?'s|Eazy-Duz-It|1988|STUDIO_LP|Eazy-E|Eazy-Duz-It
+West Coast Classics|South Central Cartel|Servin' 'Em Heat|'N Gatz We Truss|1994|STUDIO_LP||
+West Coast Classics|The Lady of Rage feat. Snoop Dogg|Afro Puffs|Above the Rim (Soundtrack)|1994|CANONICAL_OST_COMP|The Lady of Rage|Above the Rim
+West Coast Classics|Westside Connection|Bow Down|Bow Down|1996|STUDIO_LP||
+West Coast Classics|Spice 1 feat. MC Eiht|The Murda Show|187 He Wrote|1993|STUDIO_LP|Spice 1|187 He Wrote
+West Coast Classics|Bone Thugs-n-Harmony|1st of Tha Month|E. 1999 Eternal|1995|STUDIO_LP||
+West Coast Classics|Luniz feat. Michael Marshall|I Got 5 on It|Operation Stackola|1995|STUDIO_LP|Luniz|Operation Stackola
+Blue Ark|Chronixx|Odd Ras|Odd Ras|2012|SINGLE_EP|Chronixx|Odd Ras
+Blue Ark|Dennis Brown|Money in My Pocket|Money in My Pocket|1979|STUDIO_LP||
+Blue Ark|Gregory Isaacs|Night Nurse|Night Nurse|1982|STUDIO_LP||
+Blue Ark|Half Pint|Crazy Girl|Half Pint|1997|STUDIO_LP||
+Blue Ark|Joe Gibbs & The Professionals|Chapter 3|African Dub All-Mighty Chapter 3|1978|STUDIO_LP|Joe Gibbs|Joe Gibbs Productions
+Blue Ark|Junior Delgado|Sons of Slaves|Taste of the Young Heart|1980|STUDIO_LP|Junior Delgado|A Live Injection
+Blue Ark|Konshens|Gun Shot a Fire|Gun Shot a Fire|2012|SINGLE_EP|Konshens|Gun Shot a Fire
+Blue Ark|Lee "Scratch" Perry & The Full Experience|Disco Devil|Lee "Scratch" Perry Presents the Full Experience|1977|STUDIO_LP|The Full Experience|Lee Scratch Perry Presents the Full Experience
+Blue Ark|The Upsetters|Grumblin' Dub|Police & Thieves|1976|STUDIO_LP||
+Blue Ark|Lee "Scratch" Perry|I Am a Madman|Battle of Armagideon (Millionaire Liquidator)|1986|STUDIO_LP||
+Blue Ark|Protoje|Kingston Be Wise|The 8 Year Affair|2013|STUDIO_LP||
+Blue Ark|Tommy Lee Sparta|Psycho|Grim Reaper|2012|STUDIO_LP||
+Blue Ark|Vybz Kartel feat. Popcaan|We Never Fear Dem|We Never Fear Dem|2011|SINGLE_EP|Vybz Kartel|We Never Fear Dem
+Blue Ark|Yellowman|Nobody Move, Nobody Get Hurt|Nobody Move, Nobody Get Hurt|1984|STUDIO_LP||
+Blue Ark|Busy Signal feat. Damian Marley|Kingston Town|Reggae Music Again|2012|STUDIO_LP|Busy Signal|Reggae Music Again
+Blue Ark|Danny Hensworth|Mr. Money Man|The Black Ark Years|1978|CANONICAL_OST_COMP|Danny Hensworth|The Black Ark Years
+Blue Ark|Demarco|Loyals (Royals Remix)|Loyals (Royals Remix)|2014|NO_ART||
+Blue Ark|I-Octane|Topic of the Day|Topic of the Day|2014|NO_ART||
+Blue Ark|Lee "Scratch" Perry|Money Come and Money Go|Revelation|2010|STUDIO_LP||
+Blue Ark|Lee "Scratch" Perry|Roast Fish & Cornbread|Return of the Super Ape|1978|STUDIO_LP||
+Blue Ark|Vybz Kartel|Addi Truth|Addi Truth|2014|SINGLE_EP|Vybz Kartel|Addi Truth
+Worldwide FM|Cashmere Cat|Mirror Maru|Mirror Maru|2012|SINGLE_EP|Cashmere Cat|Mirror Maru
+Worldwide FM|The Hics|Cold Air|Tangle|2013|SINGLE_EP|The Hics|Tangle
+Worldwide FM|inc.|The Place|No World|2013|STUDIO_LP||
+Worldwide FM|Trickski|Beginning|Unreality|2011|STUDIO_LP||
+Worldwide FM|Mala|Ghost|Mala in Cuba|2012|STUDIO_LP||
+Worldwide FM|Swindle|Forest Funk|Forest Funk|2012|SINGLE_EP|Swindle|Forest Funk
+Worldwide FM|Tom Browne|Throw Down|Browne Sugar|1979|STUDIO_LP||
+Worldwide FM|Donald Byrd|You and the Music|Places and Spaces|1975|STUDIO_LP||
+Worldwide FM|Candido|Thousand Finger Man|Dancin' & Prancin'|1979|STUDIO_LP|Candido|Thousand Finger Man
+Worldwide FM|Toro y Moi|Harm in Change|Anything in Return|2013|STUDIO_LP||
+Worldwide FM|Kyodai|Breaking|Breaking|2012|SINGLE_EP|Kyodai|Breaking
+Worldwide FM|Django Django|Waveforms|Django Django|2012|STUDIO_LP||
+Worldwide FM|The Gaslamp Killer|Nissim|Breakthrough|2012|STUDIO_LP||
+Worldwide FM|Owiny Sigoma Band|Harpoon Land|Power Punch|2013|STUDIO_LP||
+Worldwide FM|Guts|Brand New Revolution|Paradise for All|2011|STUDIO_LP||
+Worldwide FM|Yuna|Live Your Life (MELO-X Motherland God Mix)|Yuna|2012|STUDIO_LP||
+Worldwide FM|Kiko Navarro & Tuccillo feat. Amor|Lovery (Slow Cuban Vibe Mix)|Lovery|2012|SINGLE_EP|Tuccillo|Lovery
+Worldwide FM|Richard Spaven|1759 (Outro)|Spaven's 5ive|2010|STUDIO_LP||
+Worldwide FM|Hackman|Forgotten Notes|Forgotten Notes|2012|SINGLE_EP|Hackman|Forgotten Notes
+Worldwide FM|William Onyeabor|Body and Soul|World Psychedelic Classics 5: Who Is William Onyeabor?|2013|CANONICAL_OST_COMP|William Onyeabor|Who Is William Onyeabor
+Worldwide FM|Four Tet|Kool FM|Beautiful Rewind|2013|STUDIO_LP||
+Worldwide FM|Mount Kimbie|Made to Stray|Cold Spring Fault Less Youth|2013|STUDIO_LP||
+Worldwide FM|Anushka|World in a Room|Distorted Air|2013|SINGLE_EP|Anushka|Distorted Air
+Worldwide FM|Smokey Robinson|Why You Wanna See My Bad Side?|Love Breeze|1978|STUDIO_LP||
+Worldwide FM|Randy Crawford|Street Life|Jackie Brown (Soundtrack)|1979|CANONICAL_OST_COMP|Randy Crawford|Street Life
+Worldwide FM|Flume|What You Need|Flume|2012|STUDIO_LP||
+Worldwide FM|Earl Sweatshirt feat. Vince Staples & Casey Veggies|Hive|Doris|2013|STUDIO_LP|Earl Sweatshirt|Doris
+Worldwide FM|Portishead|Numb|Dummy|1994|STUDIO_LP||
+Worldwide FM|Jonwayne|Black Magic|Rap Album One|2013|STUDIO_LP||
+Worldwide FM|Roman GianArthur|I-69|I-69|2013|SINGLE_EP|Roman GianArthur|I-69
+Worldwide FM|LION BABE|Treat Me Like Fire|LION BABE|2014|SINGLE_EP|LION BABE|LION BABE
+Worldwide FM|DāM-FunK|Killdat|Toeachizown|2009|STUDIO_LP|Dam-Funk|Toeachizown
+Worldwide FM|CHVRCHES|Recover (Cid Rim Remix)|Recover|2013|SINGLE_EP|CHVRCHES|Recover
+Worldwide FM|Jimmy Edgar|Let Yrself Be|Majenta|2012|STUDIO_LP|Jimmy Edgar|Let Yrself Be
+Worldwide FM|Maga Bo feat. Rosângela Macedo & Marcelo Yuka|No Balanço da Canoa|Quilombo do Futuro|2012|STUDIO_LP|Maga Bo|Quilombo do Futuro
+Worldwide FM|Sinkane|Shark Week|Mean Love|2014|STUDIO_LP|Sinkane|Mean Love
+Worldwide FM|Clap! Clap!|Viarejo|Tayi Bebba|2014|STUDIO_LP|Clap! Clap!|Tayi Bebba
+Worldwide FM|Jamie Lidell|Runaway|Jamie Lidell|2013|STUDIO_LP||
+FlyLo FM|Flying Lotus feat. Niki Randa|Getting There|Until the Quiet Comes|2012|STUDIO_LP|Flying Lotus|Until the Quiet Comes
+FlyLo FM|Clams Casino|Crystals|Instrumental Relics|2013|STUDIO_LP||
+FlyLo FM|Flying Lotus|Crosswerved|FlyLo FM Exclusive|2013|NO_ART||
+FlyLo FM|Flying Lotus|Be Spin|FlyLo FM Exclusive|2013|NO_ART||
+FlyLo FM|Flying Lotus feat. Erykah Badu|See Thru to U|Until the Quiet Comes|2012|STUDIO_LP|Flying Lotus|Until the Quiet Comes
+FlyLo FM|Flying Lotus|The Diddler|FlyLo FM Exclusive|2013|NO_ART||
+FlyLo FM|Flying Lotus|Computer Face Rmx|FlyLo FM Exclusive|2013|NO_ART||
+FlyLo FM|Hudson Mohawke|100HM|B.B.H.E.|2013|STUDIO_LP||
+FlyLo FM|Flying Lotus feat. Niki Randa|The Kill|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Flying Lotus|The Music of Grand Theft Auto V
+FlyLo FM|Tyler, The Creator|Garbage|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Tyler, The Creator|The Music of Grand Theft Auto V
+FlyLo FM|Outkast|Elevators (Me & You)|ATLiens|1996|STUDIO_LP||
+FlyLo FM|Captain Murphy|Evil Grin|FlyLo FM Exclusive|2013|NO_ART||
+FlyLo FM|Flying Lotus|Catapult Man|FlyLo FM Exclusive|2013|NO_ART||
+FlyLo FM|Dabrye|Encoded Flow|Two/Three|2006|STUDIO_LP||
+FlyLo FM|Machinedrum|She Died There|Room(s)|2011|STUDIO_LP||
+FlyLo FM|DJ Rashad & Heavee|It's Wack|WFM|2013|SINGLE_EP|Heavee|WFM
+FlyLo FM|Thundercat|Oh Sheit It's X|Apocalypse|2013|STUDIO_LP||
+FlyLo FM|Flying Lotus|Stonecutters|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Flying Lotus|The Music of Grand Theft Auto V
+FlyLo FM|Shadow Child feat. Tymer|23|23|2012|SINGLE_EP|Shadow Child|23
+FlyLo FM|Kingdom|Stalker Ha|Dreama|2011|SINGLE_EP|Kingdom|Night Slugs Allstars
+FlyLo FM|Aphex Twin|Windowlicker|Windowlicker|1999|SINGLE_EP|Aphex Twin|Windowlicker
+FlyLo FM|Curtis Mayfield|Eddie You Should Know Better|Superfly|1972|CANONICAL_OST_COMP|Curtis Mayfield|Superfly
+FlyLo FM|Doris|You Never Come Closer|Did You Give the World Some Love Today Baby?|1970|STUDIO_LP||
+FlyLo FM|Alain Goraguer|Méditation des Enfants|La Planète Sauvage|1973|CANONICAL_OST_COMP|Alain Goraguer|La Planete Sauvage
+FlyLo FM|Flying Lotus feat. Krayzie Bone|Medication Medication|FlyLo FM Exclusive|2014|NO_ART||
+FlyLo FM|Alain Goraguer|Ten et Tiwa Dorment|La Planète Sauvage|1973|CANONICAL_OST_COMP|Alain Goraguer|La Planete Sauvage
+FlyLo FM|XXYYXX|What We Want|FlyLo FM Exclusive|2014|NO_ART||
+FlyLo FM|Lapalux|Make Money|Lustmore|2015|STUDIO_LP||
+FlyLo FM|The Gaslamp Killer|Shred You to Bits|Instrumentalepathy|2014|STUDIO_LP||
+FlyLo FM|Mono/Poly & Thundercat|B Adams|FlyLo FM Exclusive|2014|NO_ART||
+FlyLo FM|Flying Lotus|Osaka Trade|FlyLo FM Exclusive|2013|NO_ART||
+FlyLo FM|DOOM|Masquatch|FlyLo FM Exclusive|2014|NO_ART|MF DOOM|
+FlyLo FM|Flying Lotus|Early Mountain|FlyLo FM Exclusive|2014|NO_ART||
+FlyLo FM|Dimlite|Into Vogon Skulls|Abscission|2012|STUDIO_LP||
+FlyLo FM|KNOWER|F--- The Makeup, Skip The Shower|Louis Cole and Genevieve Artadi|2010|STUDIO_LP|KNOWER|Louis Cole and Genevieve Artadi
+FlyLo FM|Kaskade|4 AM (Araabmuzik Remix)|FlyLo FM Exclusive|2014|NO_ART||
+The Lowdown 91.1|Aaron Neville|Hercules|Hercules|1973|SINGLE_EP|Aaron Neville|Hercules
+The Lowdown 91.1|B.T. Express|Do It ('Til You're Satisfied)|Do It ('Til You're Satisfied)|1974|STUDIO_LP||
+The Lowdown 91.1|El Chicano|Viva Tirado|Viva Tirado|1970|STUDIO_LP||
+The Lowdown 91.1|George McCrae|I Get Lifted|Rock Your Baby|1974|STUDIO_LP||
+The Lowdown 91.1|Marlena Shaw|California Soul|The Spice of Life|1969|STUDIO_LP||
+The Lowdown 91.1|Smokey Robinson|Cruisin'|Where There's Smoke...|1979|STUDIO_LP||
+The Lowdown 91.1|The Delfonics|Ready or Not Here I Come (Can't Hide from Love)|La La Means I Love You|1968|STUDIO_LP||
+The Lowdown 91.1|The Five Stairsteps|O-o-h Child|Stairsteps|1970|STUDIO_LP||
+The Lowdown 91.1|The Soul Searchers|Ashley's Roachclip|Salt of the Earth|1974|STUDIO_LP||
+The Lowdown 91.1|The Trammps|Rubber Band|The Legendary Zing Album|1975|STUDIO_LP||
+The Lowdown 91.1|The Undisputed Truth|Smiling Faces Sometimes|The Undisputed Truth|1971|STUDIO_LP||
+The Lowdown 91.1|War|The Cisco Kid|The World Is a Ghetto|1972|STUDIO_LP||
+The Lowdown 91.1|Brass Construction|Changin'|Brass Construction|1975|STUDIO_LP||
+The Lowdown 91.1|Jackson Sisters|I Believe in Miracles|Jackson Sisters|1976|STUDIO_LP||
+The Lowdown 91.1|Johnny "Guitar" Watson|Superman Lover|Ain't That a Bitch|1976|STUDIO_LP||
+The Lowdown 91.1|Ohio Players|Climax|Pain|1971|STUDIO_LP||
+The Lowdown 91.1|Pleasure|Bouncy Lady|Dust Yourself Off|1975|STUDIO_LP||
+The Lowdown 91.1|The Chakachas|Stories|Jungle Fever|1972|STUDIO_LP||
+The Lowdown 91.1|The Delfonics|Funny Feeling|The Delfonics|1970|STUDIO_LP||
+The Lowdown 91.1|Eric Burdon & War|Magic Mountain|The Black-Man's Burdon|1970|STUDIO_LP|War|The Black-Man's Burdon
+Radio Mirror Park|Battle Tapes|Feel the Same|Sleepwalker|2012|SINGLE_EP|Battle Tapes|Feel the Same
+Radio Mirror Park|Dan Croll|From Nowhere (Baardsen Remix)|Sweet Disarray|2014|STUDIO_LP|Dan Croll|From Nowhere
+Radio Mirror Park|DJ Mehdi|Lucky Boy (Outlines Remix)|Lucky Boy|2006|STUDIO_LP||
+Radio Mirror Park|Feathers|Dark Matter|If All Now Here|2013|STUDIO_LP||
+Radio Mirror Park|Jai Paul|Jasmine (Demo Version)|Jasmine|2012|SINGLE_EP|Jai Paul|Jasmine
+Radio Mirror Park|Living Days|Little White Lie|Thrill Anybody?|2010|STUDIO_LP||
+Radio Mirror Park|Miami Horror|Sometimes|Illumination|2010|STUDIO_LP||
+Radio Mirror Park|Tony Castles|Heart in the Pipes (KAUF Remix)|Heart in the Pipes|2011|SINGLE_EP|Tony Castles|Heart in the Pipes
+Radio Mirror Park|Toro y Moi|So Many Details|Anything in Return|2013|STUDIO_LP||
+Radio Mirror Park|Twin Shadow|Shooting Holes|Forget|2010|STUDIO_LP||
+Radio Mirror Park|Twin Shadow|Old Love / New Love|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Twin Shadow|The Music of Grand Theft Auto V
+Radio Mirror Park|YACHT|Psychic City (Classixx Remix)|See Mystery Lights|2009|STUDIO_LP||
+Radio Mirror Park|Black Strobe|Boogie in Zero Gravity|Boogie in Zero Gravity|2012|SINGLE_EP|Black Strobe|Boogie in Zero Gravity
+Radio Mirror Park|Age of Consent|Colours|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Age of Consent|The Music of Grand Theft Auto V
+Radio Mirror Park|Favored Nations|The Set Up|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Favored Nations|The Music of Grand Theft Auto V
+Radio Mirror Park|Neon Indian|Change of Coast|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Neon Indian|The Music of Grand Theft Auto V
+Radio Mirror Park|Nite Jewel|Nowhere to Go|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Nite Jewel|The Music of Grand Theft Auto V
+Radio Mirror Park|Yeasayer|Don't Come Close|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Yeasayer|The Music of Grand Theft Auto V
+Radio Mirror Park|The Chain Gang of 1974|Sleepwalking|Daydream Forever|2014|STUDIO_LP|The Chain Gang of 1974|The Music of Grand Theft Auto V
+Radio Mirror Park|Poolside|Do You Believe|Pacific Standard Time|2012|STUDIO_LP||
+Radio Mirror Park|The C90s|Shine a Light (Flight Facilities Remix)|Shine a Light|2010|SINGLE_EP|The C90s|Shine a Light
+Radio Mirror Park|HEALTH|High Pressure Dave|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|HEALTH|The Music of Grand Theft Auto V
+Radio Mirror Park|The Ruby Suns|In Real Life|Christopher|2013|STUDIO_LP||
+Radio Mirror Park|Neon Indian|Polish Girl|Era Extraña|2011|STUDIO_LP||
+Radio Mirror Park|Mitzi|Truly Alive|Truly Alive|2013|STUDIO_LP||
+Radio Mirror Park|KAUF|When You're Out|As Much Again|2013|SINGLE_EP|Kauf|When You're Out
+Radio Mirror Park|Panama|Always|Always|2013|SINGLE_EP|Panama|Always
+Radio Mirror Park|Twin Shadow|Forget|Forget|2010|STUDIO_LP||
+Radio Mirror Park|!!! (Chk Chk Chk)|One Girl / One Boy|Thr!!!er|2013|STUDIO_LP|!!!|Thr!!!er
+Radio Mirror Park|SBTRKT feat. Roses Gabor|Pharaohs|SBTRKT|2011|STUDIO_LP|SBTRKT|SBTRKT
+Radio Mirror Park|Yeasayer|O.N.E.|Odd Blood|2010|STUDIO_LP||
+Radio Mirror Park|Toro y Moi|New Beat|Underneath the Pine|2011|STUDIO_LP||
+Radio Mirror Park|Niki & The Dove|The Drummer|Instinct|2012|STUDIO_LP||
+Radio Mirror Park|Little Dragon|Crystalfilm|Machine Dreams|2009|STUDIO_LP||
+Radio Mirror Park|Hot Chip|Flutes|In Our Heads|2012|STUDIO_LP||
+Radio Mirror Park|Dom|Living in America|Sun Bronzed Greek Gods|2010|SINGLE_EP|Dom|Sun Bronzed Greek Gods
+Radio Mirror Park|Holy Ghost!|Hold On|Holy Ghost!|2011|STUDIO_LP||
+Radio Mirror Park|Scenic|Mesmerised|Shockwaves|2013|SINGLE_EP|Scenic|Mesmerised
+Radio Mirror Park|Cut Copy|Strangers in the Wind|In Ghost Colours|2008|STUDIO_LP||
+Radio Mirror Park|Age of Consent|Heartbreak|Heartbreak|2012|SINGLE_EP|Age of Consent|Heartbreak
+Space 103.2|Bootsy's Rubber Band|I'd Rather Be with You|Stretchin' Out in Bootsy's Rubber Band|1976|STUDIO_LP||
+Space 103.2|D-Train|You're the One for Me|You're the One for Me|1982|STUDIO_LP||
+Space 103.2|Eddie Murphy|Party All the Time|How Could It Be|1985|STUDIO_LP||
+Space 103.2|Evelyn "Champagne" King|I'm in Love|I'm in Love|1981|STUDIO_LP||
+Space 103.2|Kano|Can't Hold Back (Your Loving)|New York Cake|1981|STUDIO_LP||
+Space 103.2|Kleeer|Tonight|Intimate Connection|1984|STUDIO_LP||
+Space 103.2|Bernard Wright|Haboglabotribin'|'Nard|1981|STUDIO_LP||
+Space 103.2|One Way|Cutie Pie|Who's Foolin' Who|1982|STUDIO_LP||
+Space 103.2|Rick James|Give It to Me Baby|Street Songs|1981|STUDIO_LP||
+Space 103.2|Sho Nuff|Funkasize You|From the Gut to the Butt|1978|STUDIO_LP||
+Space 103.2|Stevie Wonder|Skeletons|Characters|1987|STUDIO_LP||
+Space 103.2|Taana Gardner|Heartbeat (Club Version)|Heartbeat|1981|SINGLE_EP|Taana Gardner|Heartbeat
+Space 103.2|Zapp|Heartbreaker (Part I & Part II)|Zapp III|1983|STUDIO_LP|Zapp|Zapp III
+Space 103.2|Dazz Band|Joystick|Joystick|1983|STUDIO_LP||
+Space 103.2|Roger|Do It Roger|The Many Facets of Roger|1981|STUDIO_LP||
+Space 103.2|Imagination|Flashback|Body Talk|1981|STUDIO_LP||
+Space 103.2|Parliament|Mothership Connection (Star Child)|Mothership Connection|1975|STUDIO_LP||
+Space 103.2|The Fatback Band|Gotta Get My Hands on Some (Money)|XII|1979|STUDIO_LP||
+Space 103.2|Billy Ocean|Nights (Feel Like Gettin' Down)|Nights (Feel Like Gettin' Down)|1981|STUDIO_LP||
+Space 103.2|Parliament|Flash Light|Funkentelechy Vs. the Placebo Syndrome|1977|STUDIO_LP||
+Space 103.2|Central Line|Walking into Sunshine|Central Line|1981|STUDIO_LP||
+Space 103.2|Cameo|Back and Forth|Word Up!|1986|STUDIO_LP||
+Vinewood Boulevard Radio|Bass Drum of Death|Crawling After You|Bass Drum of Death|2013|STUDIO_LP||
+Vinewood Boulevard Radio|FIDLAR|Cocaine|FIDLAR|2013|STUDIO_LP||
+Vinewood Boulevard Radio|Hot Snakes|This Mystic Decade|Audit in Progress|2004|STUDIO_LP||
+Vinewood Boulevard Radio|Shark?|California Grrls|California Grrls|2013|SINGLE_EP|Shark?|California Grrls
+Vinewood Boulevard Radio|Moon Duo|Sleepwalker|Circles|2012|STUDIO_LP||
+Vinewood Boulevard Radio|Sam Flax|Fire Doesn't Burn Itself|Age Waves|2012|STUDIO_LP||
+Vinewood Boulevard Radio|The Black Angels|Black Grease|Passover|2006|STUDIO_LP||
+Vinewood Boulevard Radio|Wavves|Nine Is God|The Music of Grand Theft Auto V|2013|CANONICAL_OST_COMP|Wavves|The Music of Grand Theft Auto V
+Vinewood Boulevard Radio|METZ|Wet Blanket|METZ|2012|STUDIO_LP||
+Vinewood Boulevard Radio|Ceremony|Hysteria|Zoo|2012|STUDIO_LP||
+Vinewood Boulevard Radio|Ty Segall Band|Diddy Wah Diddy|Slaughterhouse|2012|STUDIO_LP||
+Vinewood Boulevard Radio|Thee Oh Sees|The Dream|Carrion Crawler / The Dream|2011|STUDIO_LP||
+Vinewood Boulevard Radio|The Men|Turn It Around|Open Your Heart|2012|STUDIO_LP||
+Vinewood Boulevard Radio|Bleached|Next Stop|Ride Your Heart|2013|STUDIO_LP||
+Vinewood Boulevard Radio|JEFF the Brotherhood|Sixpack|Hypnotic Nights|2012|STUDIO_LP||
+Vinewood Boulevard Radio|Coliseum|Used Blood|Sister Faith|2013|STUDIO_LP||
+Vinewood Boulevard Radio|The Soft Pack|Answer to Yourself|The Soft Pack|2010|STUDIO_LP||
+Vinewood Boulevard Radio|The Orwells|Who Needs You|Disgraceland|2014|STUDIO_LP||
+Vinewood Boulevard Radio|Nobunny|Gone for Good|First Blood|2010|STUDIO_LP||
+Vinewood Boulevard Radio|Mind Spiders|Fall in Line|Meltdown|2012|STUDIO_LP||
