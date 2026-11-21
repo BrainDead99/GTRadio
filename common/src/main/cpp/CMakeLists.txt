@@ -19,6 +19,7 @@ add_library(gtradio_at3 SHARED
 
 target_include_directories(gtradio_at3 PRIVATE ${AT3_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(gtradio_at3 PRIVATE -O2 -fPIC -Wno-deprecated-declarations -Wno-unused-parameter -Wno-unused-variable)
+target_link_options(gtradio_at3 PRIVATE "-Wl,-z,max-page-size=16384")
 
 find_library(log-lib log)
 target_link_libraries(gtradio_at3 ${log-lib})

@@ -18,8 +18,36 @@ jobs:
         cache: gradle
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
-    - name: Build Debug APK
-      run: ./gradlew :app:assembleDebug
+    - name: Build Debug APKs
+      run: ./gradlew :app:assembleDebug :automotive:assembleDebug
+    - name: Verify 16 KB ELF Alignment
+      run: |
+        unzip -p app/build/outputs/apk/debug/app-debug.apk lib/arm64-v8a/libgtradio_at3.so > /tmp/libgtradio_at3.so
+        echo "=== Program Headers (LOAD Segments) for arm64-v8a/libgtradio_at3.so ==="
+        readelf -W -l /tmp/libgtradio_at3.so
+        python3 -c '
+        import subprocess, sys
+        output = subprocess.check_output(["readelf", "-W", "-l", "/tmp/libgtradio_at3.so"]).decode()
+        lines = output.splitlines()
+        alignments = []
+        for i, line in enumerate(lines):
+            if line.strip().startswith("LOAD"):
+                tokens = line.strip().split()
+                if len(tokens) >= 7:
+                    alignments.append((line, tokens[-1]))
+                elif i + 1 < len(lines):
+                    next_tokens = lines[i + 1].strip().split()
+                    alignments.append((line + " " + lines[i+1].strip(), next_tokens[-1]))
+        if not alignments:
+            print("ERROR: No LOAD segments found in libgtradio_at3.so!", file=sys.stderr)
+            sys.exit(1)
+        for seg, align in alignments:
+            print(f"Segment: {seg} | Align: {align}")
+            if align not in ("0x4000", "0x10000"):
+                print(f"ERROR: Unexpected alignment {align} in segment: {seg}", file=sys.stderr)
+                sys.exit(1)
+        print(f"SUCCESS: Verified 16 KB ELF alignment (0x4000) across all {len(alignments)} LOAD segments!")
+        '
     - name: Upload Custom GTRadio APK
       uses: actions/upload-artifact@v4
       with:
