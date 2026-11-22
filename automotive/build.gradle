@@ -1,13 +1,13 @@
 plugins {
-    id 'com.android.application'
-    id 'kotlin-android'
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
 }
 
 android {
     compileSdk 36
 
     defaultConfig {
-        applicationId 'com.sc.gtradio.automotive'
+        applicationId 'com.sc.automotive'
         minSdk 28
         targetSdk 36
         versionCode 34010102  //Scheme (all two-digit numbers): <api_version><app_major_version><app_minor_version><app_patch_version>
@@ -33,12 +33,11 @@ android {
 }
 
 dependencies {
-
-    implementation 'androidx.core:core-ktx:1.17.0'
-    implementation 'androidx.appcompat:appcompat:1.7.1'
-    implementation "androidx.media3:media3-exoplayer:$media3_version"
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.appcompat
+    implementation libs.media3.exoplayer
     implementation project(path: ':common')
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.2'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
+    testImplementation libs.junit
+    androidTestImplementation libs.androidx.test.ext.junit
+    androidTestImplementation libs.androidx.test.espresso.core
 }

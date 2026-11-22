@@ -9,48 +9,114 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
+
     - name: Set up JDK 17
-      uses: actions/setup-java@v4
+      uses: actions/setup-java@v6
       with:
         java-version: '17'
         distribution: 'temurin'
         cache: gradle
+
     - name: Grant execute permission for gradlew
       run: chmod +x gradlew
-    - name: Build Debug APKs
-      run: ./gradlew :app:assembleDebug :automotive:assembleDebug
-    - name: Verify 16 KB ELF Alignment
+
+    - name: Prepare Release Keystore (if secrets configured)
+      env:
+        KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
       run: |
-        unzip -p app/build/outputs/apk/debug/app-debug.apk lib/arm64-v8a/libgtradio_at3.so > /tmp/libgtradio_at3.so
-        echo "=== Program Headers (LOAD Segments) for arm64-v8a/libgtradio_at3.so ==="
-        readelf -W -l /tmp/libgtradio_at3.so
+        if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+          echo "Decoding release keystore from secrets..."
+          echo "$KEYSTORE_BASE64" | base64 -d > /tmp/release.keystore
+          echo "KEYSTORE_FILE=/tmp/release.keystore" >> $GITHUB_ENV
+          echo "KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> $GITHUB_ENV
+          echo "KEY_ALIAS=$KEY_ALIAS" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=$KEY_PASSWORD" >> $GITHUB_ENV
+          echo "Release keystore configured for signing."
+        else
+          echo "Release keystore secrets not configured or incomplete; proceeding with unsigned release build."
+        fi
+
+    - name: Build Debug and Release APKs
+      run: ./gradlew :app:assembleDebug :automotive:assembleDebug :app:assembleRelease
+
+    - name: Verify 16 KB ELF Alignment (Debug and Release APKs)
+      run: |
         python3 -c '
-        import subprocess, sys
-        output = subprocess.check_output(["readelf", "-W", "-l", "/tmp/libgtradio_at3.so"]).decode()
-        lines = output.splitlines()
-        alignments = []
-        for i, line in enumerate(lines):
-            if line.strip().startswith("LOAD"):
-                tokens = line.strip().split()
-                if len(tokens) >= 7:
-                    alignments.append((line, tokens[-1]))
-                elif i + 1 < len(lines):
-                    next_tokens = lines[i + 1].strip().split()
-                    alignments.append((line + " " + lines[i+1].strip(), next_tokens[-1]))
-        if not alignments:
-            print("ERROR: No LOAD segments found in libgtradio_at3.so!", file=sys.stderr)
-            sys.exit(1)
-        for seg, align in alignments:
-            print(f"Segment: {seg} | Align: {align}")
-            if align not in ("0x4000", "0x10000"):
-                print(f"ERROR: Unexpected alignment {align} in segment: {seg}", file=sys.stderr)
+        import os, glob, subprocess, sys, zipfile
+
+        apks = [
+            ("Debug", glob.glob("app/build/outputs/apk/debug/app-debug*.apk")),
+            ("Release", glob.glob("app/build/outputs/apk/release/app-release*.apk"))
+        ]
+
+        for build_type, found_apks in apks:
+            if not found_apks:
+                print(f"ERROR: No {build_type} APK found!", file=sys.stderr)
                 sys.exit(1)
-        print(f"SUCCESS: Verified 16 KB ELF alignment (0x4000) across all {len(alignments)} LOAD segments!")
+            apk_path = found_apks[0]
+            print(f"\n==========================================")
+            print(f"Checking 16 KB ELF alignment for {build_type} APK: {apk_path}")
+            print(f"==========================================")
+
+            with zipfile.ZipFile(apk_path, "r") as z:
+                so_entry = "lib/arm64-v8a/libgtradio_at3.so"
+                if so_entry not in z.namelist():
+                    print(f"ERROR: {so_entry} not found in {apk_path}!", file=sys.stderr)
+                    sys.exit(1)
+                so_data = z.read(so_entry)
+
+            temp_so = f"/tmp/libgtradio_at3_{build_type.lower()}.so"
+            with open(temp_so, "wb") as f:
+                f.write(so_data)
+
+            output = subprocess.check_output(["readelf", "-W", "-l", temp_so]).decode()
+            print(output)
+
+            lines = output.splitlines()
+            alignments = []
+            for i, line in enumerate(lines):
+                if line.strip().startswith("LOAD"):
+                    tokens = line.strip().split()
+                    if len(tokens) >= 7:
+                        alignments.append((line, tokens[-1]))
+                    elif i + 1 < len(lines):
+                        next_tokens = lines[i + 1].strip().split()
+                        alignments.append((line + " " + lines[i + 1].strip(), next_tokens[-1]))
+
+            if not alignments:
+                print(f"ERROR: No LOAD segments found in {temp_so}!", file=sys.stderr)
+                sys.exit(1)
+
+            for seg, align in alignments:
+                print(f"Segment: {seg} | Align: {align}")
+                if align not in ("0x4000", "0x10000"):
+                    print(f"ERROR: Unexpected alignment {align} in {build_type} APK segment: {seg}", file=sys.stderr)
+                    sys.exit(1)
+
+            print(f"SUCCESS: Verified 16 KB ELF alignment across all {len(alignments)} LOAD segments in {build_type} APK!")
         '
-    - name: Upload Custom GTRadio APK
-      uses: actions/upload-artifact@v4
+
+    - name: Upload Debug APK
+      uses: actions/upload-artifact@v7
       with:
-        name: GTRadio-Custom-APK
+        name: GTRadio-Debug-APK
         path: app/build/outputs/apk/debug/app-debug.apk
+        retention-days: 14
+
+    - name: Upload Automotive APK
+      uses: actions/upload-artifact@v7
+      with:
+        name: GTRadio-Automotive-APK
+        path: automotive/build/outputs/apk/debug/automotive-debug.apk
+        retention-days: 14
+
+    - name: Upload Release APK
+      uses: actions/upload-artifact@v7
+      with:
+        name: GTRadio-Release-APK
+        path: app/build/outputs/apk/release/app-release*.apk
         retention-days: 14

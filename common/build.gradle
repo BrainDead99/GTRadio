@@ -1,6 +1,6 @@
 plugins {
-    id 'com.android.library'
-    id 'kotlin-android'
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
 }
 
 android {
@@ -43,21 +43,21 @@ android {
 }
 
 dependencies {
-    api "androidx.media3:media3-session:$media3_version"
-    api "androidx.media3:media3-common:$media3_version"
-    api "androidx.documentfile:documentfile:1.1.0"
+    api libs.media3.session
+    api libs.media3.common
+    api libs.androidx.documentfile
 
-    implementation "androidx.preference:preference-ktx:1.2.1"
-    implementation 'androidx.core:core-ktx:1.17.0'
-    implementation 'androidx.appcompat:appcompat:1.7.1'
-    implementation 'com.google.android.material:material:1.13.0'
-    implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.10.0'
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2'
-    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
-    implementation "androidx.media3:media3-exoplayer:$media3_version"
-    implementation "androidx.media3:media3-ui:$media3_version"
-    implementation "androidx.media3:media3-common-ktx:$media3_version"
-    testImplementation 'junit:junit:4.13.2'
-    androidTestImplementation 'androidx.test.ext:junit:1.1.2'
-    androidTestImplementation 'androidx.test.espresso:espresso-core:3.3.0'
+    implementation libs.androidx.preference.ktx
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.appcompat
+    implementation libs.material
+    implementation libs.androidx.lifecycle.runtime.ktx
+    implementation libs.kotlinx.coroutines.core
+    implementation libs.kotlinx.coroutines.android
+    implementation libs.media3.exoplayer
+    implementation libs.media3.ui
+    implementation libs.media3.common.ktx
+    testImplementation libs.junit
+    androidTestImplementation libs.androidx.test.ext.junit
+    androidTestImplementation libs.androidx.test.espresso.core
 }

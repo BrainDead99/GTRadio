@@ -3,6 +3,9 @@ project(gtradio_at3)
 
 set(AT3_DIR ${CMAKE_CURRENT_SOURCE_DIR}/at3_standalone)
 
+# Ensure CMAKE_CXX_FLAGS_RELEASE includes -O3 optimization
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+
 add_library(gtradio_at3 SHARED
     at3_jni.cpp
     minimp3_jni.cpp
@@ -18,7 +21,14 @@ add_library(gtradio_at3 SHARED
 )
 
 target_include_directories(gtradio_at3 PRIVATE ${AT3_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_options(gtradio_at3 PRIVATE -O2 -fPIC -Wno-deprecated-declarations -Wno-unused-parameter -Wno-unused-variable)
+target_compile_options(gtradio_at3 PRIVATE
+    $<$<CONFIG:Release>:-O3>
+    $<$<NOT:$<CONFIG:Release>>:-O2>
+    -fPIC
+    -Wno-deprecated-declarations
+    -Wno-unused-parameter
+    -Wno-unused-variable
+)
 target_link_options(gtradio_at3 PRIVATE "-Wl,-z,max-page-size=16384")
 
 find_library(log-lib log)
