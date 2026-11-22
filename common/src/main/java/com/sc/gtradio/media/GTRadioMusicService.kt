@@ -18,8 +18,12 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -82,8 +86,35 @@ open class GTRadioMusicService : MediaLibraryService() {
         .build()
     private val playerListener = PlayerEventListener()
 
+    val radioAudioProcessor by lazy { RadioAudioProcessor(applicationContext) }
+
     private val exoPlayer: ExoPlayer by lazy {
-        ExoPlayer.Builder(this)
+        val renderersFactory = object : DefaultRenderersFactory(this) {
+            override fun buildAudioSink(
+                context: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean
+            ): AudioSink? {
+                return DefaultAudioSink.Builder(context)
+                    .setEnableFloatOutput(enableFloatOutput)
+                    .setEnableAudioTrackPlaybackParams(enableAudioTrackPlaybackParams)
+                    .setAudioProcessors(arrayOf(radioAudioProcessor))
+                    .build()
+            }
+        }
+
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(
+                /* minBufferMs = */ 2_500,
+                /* maxBufferMs = */ 10_000,
+                /* bufferForPlaybackMs = */ 500,
+                /* bufferForPlaybackAfterRebufferMs = */ 1_000
+            )
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        ExoPlayer.Builder(this, renderersFactory)
+            .setLoadControl(loadControl)
             .setAudioAttributes(gtrAudioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
@@ -132,6 +163,9 @@ open class GTRadioMusicService : MediaLibraryService() {
                             val newValue = prefs.getBoolean(key, false)
                             this@GTRadioMusicService.activeStation?.weatherChatterEnabled = newValue
                         }
+                    }
+                    "loudness_normalization_enabled", "car_stereo_eq_enabled" -> {
+                        radioAudioProcessor.updateSettings(prefs)
                     }
                     resources.getString(R.string.news_reports_preference_key) -> {
                         if (this@GTRadioMusicService.activeStation != null) {

@@ -43,6 +43,20 @@
         app:title="@string/playback_header">
         <SwitchPreferenceCompat
             android:defaultValue="true"
+            android:key="loudness_normalization_enabled"
+            app:iconSpaceReserved="false"
+            android:summary="Automatically balances volume levels across radio generations, songs, and commercials."
+            android:title="Cross-Game Loudness Normalization" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="false"
+            android:key="car_stereo_eq_enabled"
+            app:iconSpaceReserved="false"
+            android:summary="Applies a subtle dashboard FM radio equalizer profile for classic in-car tone."
+            android:title="Car Stereo EQ" />
+
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
             android:key="atmospheric_time_weather_cycle_enabled"
             app:iconSpaceReserved="false"
             android:summary="@string/atmospheric_time_weather_cycle_summary"

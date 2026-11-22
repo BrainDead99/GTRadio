@@ -15,6 +15,8 @@ import android.util.LruCache
 import androidx.documentfile.provider.DocumentFile
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -50,8 +52,25 @@ object DynamicThemeManager {
     private val iconCache = object : LruCache<String, Bitmap>(4 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
+    private val wallpaperCacheMaxKb = minOf(16 * 1024, (Runtime.getRuntime().maxMemory() / 1024 / 8).toInt())
+    private val wallpaperCache = object : LruCache<String, Bitmap>(wallpaperCacheMaxKb) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+
+    fun getCachedWallpaper(key: String): Bitmap? = synchronized(wallpaperCache) {
+        val b = wallpaperCache.get(key)
+        if (b != null && !b.isRecycled) b else null
+    }
+
+    fun putCachedWallpaper(key: String, bitmap: Bitmap) {
+        synchronized(wallpaperCache) {
+            wallpaperCache.put(key, bitmap)
+        }
+    }
+
     private val scanLock = Any()
     private var scannedPacks: List<DynamicThemePack>? = null
+    private var lastScannedThemeUri: String? = null
     private var lastThemeUriString: String? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -143,7 +162,11 @@ object DynamicThemeManager {
         synchronized(iconCache) {
             iconCache.evictAll()
         }
+        synchronized(wallpaperCache) {
+            wallpaperCache.evictAll()
+        }
         scannedPacks = null
+        lastScannedThemeUri = null
     }
 
     fun refreshIfNeeded(context: Context, themeDirUriStr: String? = null) {
@@ -155,7 +178,7 @@ object DynamicThemeManager {
                     if (doc != null && doc.isDirectory && doc.canRead()) doc else null
                 } catch (_: Exception) { null }
             } else null
-            val packs = scanAllThemePacks(context, rootDoc)
+            val packs = scanAllThemePacks(context, rootDoc, forceRefresh = false)
             synchronized(packCache) {
                 scannedPacks = packs
                 for (pack in packs) {
@@ -176,7 +199,7 @@ object DynamicThemeManager {
         invalidateCache()
         if (context != null) {
             try {
-                scannedPacks = scanAllThemePacks(context, null)
+                scannedPacks = scanAllThemePacks(context, null, forceRefresh = true)
             } catch (_: Exception) {}
         }
     }
@@ -296,12 +319,35 @@ object DynamicThemeManager {
         return false
     }
 
-    private fun scanAllThemePacks(context: Context, libraryRootDoc: DocumentFile?): List<DynamicThemePack> = synchronized(scanLock) {
-        scannedPacks?.let { return it }
-        val results = ArrayList<DynamicThemePack>()
-        val seenNames = HashSet<String>()
-        val root = resolveDynamicThemeRoot(context, libraryRootDoc) ?: return results
+    fun scanAllThemePacks(
+        context: Context,
+        libraryRootDoc: DocumentFile?,
+        forceRefresh: Boolean = false
+    ): List<DynamicThemePack> = synchronized(scanLock) {
+        val root = resolveDynamicThemeRoot(context, libraryRootDoc)
+        val currentUriStr = root?.uri?.toString() ?: ""
 
+        if (!forceRefresh && scannedPacks != null && currentUriStr.isNotBlank() && currentUriStr == lastScannedThemeUri) {
+            return scannedPacks!!
+        }
+
+        if (forceRefresh) {
+            scannedPacks = null
+            synchronized(packCache) {
+                packCache.clear()
+            }
+        } else if (scannedPacks != null && currentUriStr == lastScannedThemeUri) {
+            return scannedPacks!!
+        }
+
+        val results = ArrayList<DynamicThemePack>()
+        if (root == null) {
+            scannedPacks = results
+            lastScannedThemeUri = currentUriStr
+            return results
+        }
+
+        val seenNames = HashSet<String>()
         val children = runCatching { root.listSimpleFiles(context) }.getOrElse { emptyArray() }
         for (dir in children) {
             if (!dir.isDirectory) continue
@@ -317,6 +363,7 @@ object DynamicThemeManager {
             }
         }
         scannedPacks = results
+        lastScannedThemeUri = currentUriStr
         results
     }
 
@@ -600,6 +647,55 @@ object DynamicThemeManager {
                 bmp
             }
         } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun loadDownsampledBackground(
+        context: Context,
+        uri: Uri?,
+        reqWidth: Int,
+        reqHeight: Int
+    ): Bitmap? = withContext(Dispatchers.IO) {
+        if (uri == null) return@withContext null
+        val cacheKey = "${uri}_${reqWidth}x${reqHeight}"
+        getCachedWallpaper(cacheKey)?.let { return@withContext it }
+
+        try {
+            // Pass 1: Decode image dimensions only
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, options)
+            }
+
+            val rawWidth = options.outWidth
+            val rawHeight = options.outHeight
+            if (rawWidth <= 0 || rawHeight <= 0) return@withContext null
+
+            // Power-of-2 inSampleSize calculation
+            var inSampleSize = 1
+            while ((rawWidth / (inSampleSize * 2)) >= reqWidth && (rawHeight / (inSampleSize * 2)) >= reqHeight) {
+                inSampleSize *= 2
+            }
+
+            // Pass 2: Decode downsampled with RGB_565 config for opaque wallpaper efficiency
+            val decodeOptions = BitmapFactory.Options().apply {
+                this.inSampleSize = inSampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565
+                inDither = true
+            }
+            val bitmap = context.contentResolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, decodeOptions)
+            }
+
+            if (bitmap != null) {
+                putCachedWallpaper(cacheKey, bitmap)
+            }
+            bitmap
+        } catch (e: Exception) {
+            GTRadioLogger.log("DynamicThemeManager: Error loading wallpaper from $uri", e)
             null
         }
     }

@@ -13,6 +13,10 @@ import android.view.View
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updatePadding
 import androidx.navigation.findNavController
 import androidx.navigation.ui.AppBarConfiguration
 import androidx.navigation.ui.navigateUp
@@ -46,11 +50,17 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
 
         volumeControlStream = AudioManager.STREAM_MUSIC
-        defaultStatusBarColor = window.statusBarColor
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
+
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            binding.appBarLayout.updatePadding(top = systemBars.top)
+            insets
+        }
 
         val navController = findNavController(R.id.nav_host_fragment_content_main)
         appBarConfiguration = AppBarConfiguration(navController.graph)
@@ -65,20 +75,15 @@ class MainActivity : AppCompatActivity() {
 
     fun setFullscreenThemeMode(enabled: Boolean) {
         if (!::binding.isInitialized) return
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
         if (enabled) {
             supportActionBar?.hide()
-            window.statusBarColor = Color.BLACK
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                window.decorView.systemUiVisibility =
-                    window.decorView.systemUiVisibility and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
-            }
+            binding.appBarLayout.visibility = View.GONE
+            insetsController.isAppearanceLightStatusBars = false
         } else {
+            binding.appBarLayout.visibility = View.VISIBLE
             supportActionBar?.show()
-            window.statusBarColor = defaultStatusBarColor
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                window.decorView.systemUiVisibility =
-                    window.decorView.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-            }
+            insetsController.isAppearanceLightStatusBars = true
         }
     }
 

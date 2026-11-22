@@ -90,6 +90,24 @@ class Rpf7Archive(
         private const val MAX_CACHE_BYTES = 100L * 1024L * 1024L // 100 MB cap
         private const val TARGET_CACHE_BYTES = 65L * 1024L * 1024L // Evict down to 65 MB
 
+        private val pinnedFileNames = java.util.Collections.synchronizedSet(HashSet<String>())
+
+        fun pinFile(fileNameOrUri: String) {
+            val name = fileNameOrUri.substringAfterLast('/')
+            pinnedFileNames.add(name)
+        }
+
+        fun unpinFile(fileNameOrUri: String) {
+            val name = fileNameOrUri.substringAfterLast('/')
+            pinnedFileNames.remove(name)
+        }
+
+        fun clearPinnedFiles() {
+            pinnedFileNames.clear()
+        }
+
+        fun isPinned(fileName: String): Boolean = pinnedFileNames.contains(fileName)
+
         private val prefetchExecutor = Executors.newSingleThreadExecutor()
         private val decodeLock = Any()
 
@@ -1216,8 +1234,8 @@ class Rpf7Archive(
             for (f in sorted) {
                 if (totalBytes <= TARGET_CACHE_BYTES) break
                 val ageMs = now - f.lastModified()
-                // Never delete active file or files modified within the last 15 seconds
-                if (f.name != currentSafeFileName && ageMs > 15_000L) {
+                // Never delete active file, pinned playing/queued files, or files modified within the last 15 seconds
+                if (f.name != currentSafeFileName && !isPinned(f.name) && ageMs > 15_000L) {
                     val len = f.length()
                     if (f.delete()) {
                         totalBytes -= len

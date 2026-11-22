@@ -57,7 +57,7 @@ object BroadcastAtmosphereClock {
             getLocalTimeOfDay(era)
         }
         GTRadioLogger.logVerbose("ATMOS") {
-            "[ATMOS] getTimeOfDay: era=$era, mode=${if (enabled) "IN_GAME_CYCLE" else "LOCAL_CLOCK"}, bucket=$bucket"
+            "getTimeOfDay: era=$era, mode=${if (enabled) "IN_GAME_CYCLE" else "LOCAL_CLOCK"}, bucket=$bucket"
         }
         return bucket
     }
@@ -70,7 +70,7 @@ object BroadcastAtmosphereClock {
             getLocalWeather(era, nowMs)
         }
         GTRadioLogger.logVerbose("ATMOS") {
-            "[ATMOS] getWeather: era=$era, mode=${if (enabled) "IN_GAME_CYCLE" else "LOCAL_CLOCK"}, weather=$weather"
+            "getWeather: era=$era, mode=${if (enabled) "IN_GAME_CYCLE" else "LOCAL_CLOCK"}, weather=$weather"
         }
         return weather
     }

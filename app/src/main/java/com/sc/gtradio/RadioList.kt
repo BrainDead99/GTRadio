@@ -19,8 +19,13 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Observer
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.recyclerview.widget.DiffUtil
@@ -110,31 +115,54 @@ class RadioList : Fragment() {
         updateDynamicThemePlaybackUi()
     }
 
-    private val bgCycleRunnable = object : Runnable {
-        override fun run() {
-            val pack = activeThemePack ?: return
-            if (_binding == null) return
-            val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-            val bgList = if (isLandscape && pack.landscapeBgUris.isNotEmpty()) pack.landscapeBgUris else pack.portraitBgUris
-            if (bgList.size > 1) {
-                bgIndex = (bgIndex + 1) % bgList.size
-                val nextBmp = DynamicThemeManager.loadBitmap(requireContext(), bgList[bgIndex], 1440)
-                if (nextBmp != null) {
-                    val fadeDur = pack.bgFadeMs
-                    if (showingBgA) {
-                        binding.themeBgB.setImageBitmap(nextBmp)
-                        binding.themeBgB.animate().alpha(1f).setDuration(fadeDur).start()
-                        binding.themeBgA.animate().alpha(0f).setDuration(fadeDur).start()
-                    } else {
-                        binding.themeBgA.setImageBitmap(nextBmp)
-                        binding.themeBgA.animate().alpha(1f).setDuration(fadeDur).start()
-                        binding.themeBgB.animate().alpha(0f).setDuration(fadeDur).start()
+    private val bgCycleRunnable = Runnable {
+        cycleBackground()
+    }
+
+    private fun cycleBackground() {
+        val pack = activeThemePack ?: return
+        if (_binding == null) return
+        val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+        val bgList = if (isLandscape && pack.landscapeBgUris.isNotEmpty()) pack.landscapeBgUris else pack.portraitBgUris
+        if (bgList.size > 1) {
+            bgIndex = (bgIndex + 1) % bgList.size
+            val nextUri = bgList[bgIndex]
+            val reqW = resources.displayMetrics.widthPixels.coerceAtLeast(1080)
+            val reqH = resources.displayMetrics.heightPixels.coerceAtLeast(1080)
+            val cacheKey = "${nextUri}_${reqW}x${reqH}"
+            val cachedBmp = DynamicThemeManager.getCachedWallpaper(cacheKey)
+            if (cachedBmp != null) {
+                applyCrossfadeBg(cachedBmp, pack.bgFadeMs)
+                bgHandler.postDelayed(bgCycleRunnable, pack.bgIntervalMs)
+            } else {
+                val ctx = context?.applicationContext
+                if (ctx != null) {
+                    viewLifecycleOwner.lifecycleScope.launch {
+                        val nextBmp = DynamicThemeManager.loadDownsampledBackground(ctx, nextUri, reqW, reqH)
+                        if (_binding != null && nextBmp != null) {
+                            applyCrossfadeBg(nextBmp, pack.bgFadeMs)
+                        }
+                        bgHandler.postDelayed(bgCycleRunnable, pack.bgIntervalMs)
                     }
-                    showingBgA = !showingBgA
+                } else {
+                    bgHandler.postDelayed(bgCycleRunnable, pack.bgIntervalMs)
                 }
-                bgHandler.postDelayed(this, pack.bgIntervalMs)
             }
         }
+    }
+
+    private fun applyCrossfadeBg(nextBmp: Bitmap, fadeDur: Long) {
+        if (_binding == null) return
+        if (showingBgA) {
+            binding.themeBgB.setImageBitmap(nextBmp)
+            binding.themeBgB.animate().alpha(1f).setDuration(fadeDur).start()
+            binding.themeBgA.animate().alpha(0f).setDuration(fadeDur).start()
+        } else {
+            binding.themeBgA.setImageBitmap(nextBmp)
+            binding.themeBgA.animate().alpha(1f).setDuration(fadeDur).start()
+            binding.themeBgB.animate().alpha(0f).setDuration(fadeDur).start()
+        }
+        showingBgA = !showingBgA
     }
 
     private val subscriptionCallback = object : SubscriptionCallback() {
@@ -340,10 +368,9 @@ class RadioList : Fragment() {
         stationGroupId = arguments?.getString("stationGroupId") ?: ""
         groupName = arguments?.getString("groupName") ?: ""
         if (musicServiceConnection == null) {
-            musicServiceConnection = InjectorUtils.provideMusicServiceConnection(requireContext()).also {
-                it.subscribe(stationGroupId, subscriptionCallback)
-            }
+            musicServiceConnection = InjectorUtils.provideMusicServiceConnection(requireContext())
         }
+        musicServiceConnection?.subscribe(stationGroupId, subscriptionCallback)
         _binding = FragmentRadiolistBinding.inflate(inflater, container, false)
         return binding.root
     }
@@ -354,11 +381,26 @@ class RadioList : Fragment() {
         binding.stationList.layoutManager = LinearLayoutManager(context)
         binding.stationList.adapter = listAdapter
 
+        ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            binding.root.findViewById<View>(R.id.nowPlaying)?.updatePadding(bottom = systemBars.bottom)
+            binding.themeHeaderTitle.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                topMargin = (36 * resources.displayMetrics.density).roundToInt() + systemBars.top
+            }
+            binding.themeControlsBlock.updatePadding(bottom = systemBars.bottom)
+            binding.themeStripControlsBlock.updatePadding(bottom = systemBars.bottom)
+            insets
+        }
+
         val targetName = if (groupName.isNotBlank()) groupName else stationGroupId
         val cachedPack = if (DynamicThemeManager.isDynamicThemeEnabled(requireContext())) {
             DynamicThemeManager.getCachedThemeForSeries(targetName)
         } else null
-        if (cachedPack?.hasFullThemeUi == true) {
+
+        if (loadedStations.isNotEmpty()) {
+            listAdapter.submitList(loadedStations)
+            setupDynamicThemeIfAvailable(loadedStations)
+        } else if (cachedPack?.hasFullThemeUi == true) {
             applyDynamicThemeShell(cachedPack)
         }
 
@@ -465,7 +507,9 @@ class RadioList : Fragment() {
 
     private fun setupDynamicThemeIfAvailable(children: List<MediaItem>) {
         if (_binding == null) return
-        val seriesName = children.firstOrNull()?.mediaMetadata?.subtitle?.toString() ?: children.firstOrNull()?.mediaMetadata?.groupName ?: ""
+        val seriesName = children.firstOrNull()?.mediaMetadata?.subtitle?.toString()
+            ?: children.firstOrNull()?.mediaMetadata?.groupName
+            ?: groupName.ifBlank { stationGroupId }
         if (seriesName.isBlank() || !DynamicThemeManager.isDynamicThemeEnabled(requireContext())) {
             applyDynamicTheme(null, children)
             return
@@ -473,11 +517,7 @@ class RadioList : Fragment() {
 
         val cachedPack = DynamicThemeManager.getCachedThemeForSeries(seriesName)
         if (cachedPack != null) {
-            if (cachedPack.hasFullThemeUi) {
-                applyDynamicTheme(cachedPack, children)
-            } else {
-                applyDynamicTheme(null, children)
-            }
+            applyDynamicTheme(if (cachedPack.hasFullThemeUi) cachedPack else null, children)
         } else {
             val ctx = context?.applicationContext ?: return
             viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
@@ -486,7 +526,9 @@ class RadioList : Fragment() {
                     val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
                     val bgList = if (isLandscape && pack.landscapeBgUris.isNotEmpty()) pack.landscapeBgUris else pack.portraitBgUris
                     if (bgList.isNotEmpty()) {
-                        DynamicThemeManager.loadBitmap(ctx, bgList[0], 1440)
+                        val reqW = resources.displayMetrics.widthPixels.coerceAtLeast(1080)
+                        val reqH = resources.displayMetrics.heightPixels.coerceAtLeast(1080)
+                        DynamicThemeManager.loadDownsampledBackground(ctx, bgList[0], reqW, reqH)
                     }
                     for (item in children) {
                         val stTitle = item.mediaMetadata.title?.toString() ?: ""
@@ -498,11 +540,7 @@ class RadioList : Fragment() {
                 }
                 withContext(Dispatchers.Main.immediate) {
                     if (_binding != null && isAdded) {
-                        if (pack != null && pack.hasFullThemeUi) {
-                            applyDynamicTheme(pack, children)
-                        } else {
-                            applyDynamicTheme(null, children)
-                        }
+                        applyDynamicTheme(if (pack?.hasFullThemeUi == true) pack else null, loadedStations.ifEmpty { children })
                     }
                 }
             }
@@ -512,9 +550,11 @@ class RadioList : Fragment() {
     private fun applyDynamicThemeShell(pack: DynamicThemePack) {
         if (_binding == null) return
         activeThemePack = pack
-        binding.defaultRadioContainer.visibility = View.GONE
-        binding.dynamicThemeRoot.visibility = View.VISIBLE
-        (activity as? MainActivity)?.setFullscreenThemeMode(true)
+        if (loadedStations.isNotEmpty()) {
+            binding.defaultRadioContainer.visibility = View.GONE
+            binding.dynamicThemeRoot.visibility = View.VISIBLE
+            (activity as? MainActivity)?.setFullscreenThemeMode(true)
+        }
 
         val stripMode = isStripLayout(pack)
         binding.themeControlsBlock.visibility = if (stripMode) View.GONE else View.VISIBLE
@@ -572,8 +612,21 @@ class RadioList : Fragment() {
             showingBgA = true
             binding.themeBgA.alpha = 1f
             binding.themeBgB.alpha = 0f
-            DynamicThemeManager.loadBitmap(requireContext(), bgList[0], 1440)?.let {
-                binding.themeBgA.setImageBitmap(it)
+            val uri = bgList[0]
+            val reqW = resources.displayMetrics.widthPixels.coerceAtLeast(1080)
+            val reqH = resources.displayMetrics.heightPixels.coerceAtLeast(1080)
+            val cacheKey = "${uri}_${reqW}x${reqH}"
+            val cachedBmp = DynamicThemeManager.getCachedWallpaper(cacheKey)
+            if (cachedBmp != null) {
+                binding.themeBgA.setImageBitmap(cachedBmp)
+            } else {
+                val ctx = requireContext().applicationContext
+                viewLifecycleOwner.lifecycleScope.launch {
+                    val bmp = DynamicThemeManager.loadDownsampledBackground(ctx, uri, reqW, reqH)
+                    if (_binding != null && bmp != null && bgIndex == 0 && showingBgA) {
+                        binding.themeBgA.setImageBitmap(bmp)
+                    }
+                }
             }
             if (bgList.size > 1) {
                 bgHandler.postDelayed(bgCycleRunnable, pack.bgIntervalMs)
@@ -589,8 +642,15 @@ class RadioList : Fragment() {
             binding.dynamicThemeRoot.visibility = View.GONE
             binding.defaultRadioContainer.visibility = View.VISIBLE
             (activity as? MainActivity)?.setFullscreenThemeMode(false)
+            listAdapter.submitList(children)
             return
         }
+
+        applyDynamicThemeShell(pack)
+        if (children.isEmpty()) return
+        binding.defaultRadioContainer.visibility = View.GONE
+        binding.dynamicThemeRoot.visibility = View.VISIBLE
+        (activity as? MainActivity)?.setFullscreenThemeMode(true)
 
         applyDynamicThemeShell(pack)
 

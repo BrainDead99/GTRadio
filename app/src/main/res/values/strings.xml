@@ -25,7 +25,7 @@
     <string name="ads_enabled_summary">Note: This setting only affects gen 2 and 3 stations.</string>
 
     <string name="weather_chatter_enabled_title">Play Weather-Specific DJ Chatter and Weather Reports</string>
-    <string name="weather_chatter_summary">Note: The weather-specific DJ chatter and weather reports do not currently check active weather conditions.</string>
+    <string name="weather_chatter_summary">Plays weather-matched DJ commentary and weather forecasts based on the active atmospheric cycle or local clock.</string>
 
     <string name="news_reports_enabled_title">Play News Reports</string>
     <string name="news_reports_summary">Note: This setting only affects gen 3 stations.</string>

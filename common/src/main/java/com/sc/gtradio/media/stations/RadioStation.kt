@@ -3,6 +3,10 @@ package com.sc.gtradio.media.stations
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.RectF
 import android.net.Uri
 import android.os.Bundle
 import androidx.media3.common.MediaItem
@@ -32,6 +36,39 @@ interface RadioStation {
 
 object StationDispatchers {
     val ioDispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(4)
+}
+
+private var neutralRadioPlaceholderJpegBytes: ByteArray? = null
+
+fun getNeutralRadioPlaceholderJpeg(): ByteArray {
+    neutralRadioPlaceholderJpegBytes?.let { return it }
+    val size = 96
+    val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+    val canvas = Canvas(bmp)
+    canvas.drawColor(Color.parseColor("#222226"))
+    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#88888E")
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+    // Radio chassis
+    val radioRect = RectF(16f, 32f, 80f, 76f)
+    canvas.drawRoundRect(radioRect, 6f, 6f, paint)
+    // Speaker circle
+    canvas.drawCircle(36f, 54f, 13f, paint)
+    // Antenna
+    canvas.drawLine(24f, 32f, 64f, 16f, paint)
+    // Knobs / buttons
+    paint.style = Paint.Style.FILL
+    canvas.drawCircle(64f, 46f, 4f, paint)
+    canvas.drawCircle(64f, 62f, 4f, paint)
+
+    val baos = ByteArrayOutputStream()
+    bmp.compress(Bitmap.CompressFormat.JPEG, 75, baos)
+    val bytes = baos.toByteArray()
+    bmp.recycle()
+    neutralRadioPlaceholderJpegBytes = bytes
+    return bytes
 }
 
 fun compressArtworkToJpeg(bitmap: Bitmap?, maxDim: Int = 300, quality: Int = 85): ByteArray? {
@@ -88,12 +125,8 @@ fun buildStationMediaMetadata(
         .setIsPlayable(true)
         .setIsBrowsable(false)
 
-    val artBytes = compressArtworkToJpeg(art)
-    if (artBytes != null) {
-        b.setArtworkData(artBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
-    } else {
-        b.setArtworkData(null, null)
-    }
+    val artBytes = compressArtworkToJpeg(art) ?: getNeutralRadioPlaceholderJpeg()
+    b.setArtworkData(artBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
 
     val finalExtras = Bundle(extras ?: Bundle())
     finalExtras.putString("media_id", mediaId)

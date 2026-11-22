@@ -68,6 +68,17 @@ class NowPlayingFragment : Fragment() {
         binding.stationAlbum.visibility = View.GONE
     }
 
+    override fun onResume() {
+        super.onResume()
+        val conn = musicServiceConnection
+        if (conn != null && _binding != null) {
+            val state = conn.playbackState.value ?: EMPTY_PLAYBACK_STATE
+            val meta = conn.nowPlaying.value ?: NOTHING_PLAYING
+            playbackState = state
+            updateState(state, meta)
+        }
+    }
+
     override fun onDestroyView() {
         super.onDestroyView()
         _binding = null
