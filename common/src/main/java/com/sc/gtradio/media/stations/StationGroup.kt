@@ -22,7 +22,7 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 class StationGroup private constructor(
-    val folderDoc: DocumentFile?,
+    val folderDoc: DocumentFile,
     private val context: Context,
     private val skipScan: Boolean
 ) {
@@ -225,7 +225,8 @@ class StationGroup private constructor(
                     DocumentFile.fromTreeUri(context, Uri.parse(desc.folderUri))
                 } catch (_: Exception) { null }
             } else null
-            val group = StationGroup(doc, context, skipScan = true)
+            val resolvedDoc = doc ?: DocumentFile.fromFile(context.filesDir)
+            val group = StationGroup(resolvedDoc, context, skipScan = true)
             group.generation = desc.generation
             group.groupName = desc.groupName
             group.mediaId = desc.groupId
@@ -1018,7 +1019,7 @@ init {
         for ((code, _) in rawStreamUris) {
             if (code == "ADVERTS") continue
             val stName = Gen2MetadataRepository.defaultStations[code]?.first ?: code
-            val mediaId = "${folderDoc?.uri}#SA_RAW#$code"
+            val mediaId = "${folderDoc.uri}#SA_RAW#$code"
 
             val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stName) }
@@ -1153,14 +1154,14 @@ init {
             }
         }
         val shared = HashMap<String, String>()
-        rpf3ExtraTracksArchive?.rpfUri?.let { shared["extra_tracks"] = it.toString() }
-        rpf3Ep1SfxArchive?.rpfUri?.let { shared["ep1_sfx"] = it.toString() }
-        rpf3Ep2SfxArchive?.rpfUri?.let { shared["ep2_sfx"] = it.toString() }
-        rpf3AdvertsArchive?.rpfUri?.let { shared["adverts"] = it.toString() }
-        rpf3NewsArchive?.rpfUri?.let { shared["news"] = it.toString() }
-        rpf3WeatherArchive?.rpfUri?.let { shared["weather"] = it.toString() }
-        rpf7AdvertsArchive?.rpfUri?.let { shared["adverts"] = it.toString() }
-        rpf7NewsArchive?.rpfUri?.let { shared["news"] = it.toString() }
+        rpf3ExtraTracksArchive?.sourceUri?.let { shared["extra_tracks"] = it.toString() }
+        rpf3Ep1SfxArchive?.sourceUri?.let { shared["ep1_sfx"] = it.toString() }
+        rpf3Ep2SfxArchive?.sourceUri?.let { shared["ep2_sfx"] = it.toString() }
+        rpf3AdvertsArchive?.sourceUri?.let { shared["adverts"] = it.toString() }
+        rpf3NewsArchive?.sourceUri?.let { shared["news"] = it.toString() }
+        rpf3WeatherArchive?.sourceUri?.let { shared["weather"] = it.toString() }
+        rpf7AdvertsArchive?.sourceUri?.let { shared["adverts"] = it.toString() }
+        rpf7NewsArchive?.sourceUri?.let { shared["news"] = it.toString() }
 
         val cachedStations = stationList.map { st ->
             val meta = st.mediaMetadata
@@ -1175,12 +1176,12 @@ init {
             var rpf = ""
             if (isRpf3Group) {
                 val a = rpf3StationArchives[st.mediaId]
-                fUri = a?.rpfUri?.toString() ?: ""
+                fUri = a?.sourceUri?.toString() ?: ""
                 rpf = a?.rpfName ?: ""
                 archKey = rpf3StationKeys[st.mediaId] ?: ""
             } else if (isRpf7Group) {
                 val a = rpf7StationArchives[st.mediaId]
-                fUri = a?.rpfUri?.toString() ?: ""
+                fUri = a?.sourceUri?.toString() ?: ""
                 rpf = a?.rpfName ?: ""
                 archKey = rpf7StationKeys[st.mediaId] ?: ""
             } else if (isGen1RawGroup) {
@@ -1208,7 +1209,7 @@ init {
         return LibraryIndexCache.CachedGroupDescriptor(
             groupId = mediaItem.mediaId,
             groupName = groupName,
-            folderUri = folderDoc?.uri?.toString() ?: "",
+            folderUri = folderDoc.uri.toString(),
             formatType = format,
             generation = generation,
             gameCode = gen1GameCode,
