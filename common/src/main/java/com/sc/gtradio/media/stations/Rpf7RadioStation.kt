@@ -18,6 +18,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
+import kotlinx.coroutines.*
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -69,7 +70,7 @@ data class Rpf7ClipRef(
 
     private val stationTitle: String = stationName
     private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: "GTA V").toString()
-    private val stationLogo: Bitmap? = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
+    private val stationLogo: Bitmap? by lazy { mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) ?: DynamicThemeManager.loadBitmap(context, it, 512) } }
     private val mainHandler = Handler(Looper.getMainLooper())
     private val rng = Random()
 
@@ -98,9 +99,11 @@ data class Rpf7ClipRef(
     private val newsQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
     private val songQueue = RandomizedDualHeadQueue<Rpf7SongItem>(emptyList(), rng)
     private val allSongItems = ArrayList<Rpf7SongItem>()
+    private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var activeDecodeJob: Job? = null
+    private var activeCleanJob: Job? = null
+    private var activePollerJob: Job? = null
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
-    private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
-    private val decodeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -483,9 +486,13 @@ data class Rpf7ClipRef(
     override fun stop() {
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: stop() called (gen=$gen)")
+        activeDecodeJob?.cancel()
+        activeDecodeJob = null
+        activeCleanJob?.cancel()
+        activeCleanJob = null
+        stopMixPoller()
         if (!isStationActive) return
         isStationActive = false
-        stopMixPoller()
         if (_playing) {
             lastStoppedTimeMs = System.currentTimeMillis()
             stoppedWindowIndex = player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
@@ -498,6 +505,11 @@ data class Rpf7ClipRef(
             activeListener = null
         }
         player.stopInternal()
+    }
+
+    override fun release() {
+        stop()
+        stationScope.cancel()
     }
 
     private fun areSegmentFilesValid(uris: List<Uri>): Boolean {
@@ -519,8 +531,9 @@ data class Rpf7ClipRef(
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
-        decodeExecutor.submit {
-            if (!_playing || playGeneration.get() != currentGen) return@submit
+        activeDecodeJob?.cancel()
+        activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            if (!_playing || playGeneration.get() != currentGen) return@launch
             ensureStationIndexed()
             if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
                 val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
@@ -528,7 +541,7 @@ data class Rpf7ClipRef(
             } else {
                 pickNextSegment()
                 if (currentSegmentUris.isNotEmpty()) {
-                    if (!_playing || playGeneration.get() != currentGen) return@submit
+                    if (!_playing || playGeneration.get() != currentGen) return@launch
                     val lastIdx = currentSegmentUris.size - 1
                     val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
                     val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
@@ -603,11 +616,11 @@ data class Rpf7ClipRef(
                     currentMultiChunksPlayedInRow += 1
                     currentSegmentUris = listOf(nextUri)
 
-                    // Background prefetch subsequent chunk strictly inside decodeExecutor guarded by playGeneration
+                    // Background prefetch subsequent chunk strictly inside stationScope guarded by playGeneration
                     if (currentMultiChunkNextBlock < currentMultiChunkTotalBlocks) {
                         val gen = playGeneration.get()
-                        decodeExecutor.submit {
-                            if (!_playing || playGeneration.get() != gen) return@submit
+                        stationScope.launch(StationDispatchers.ioDispatcher) {
+                            if (!_playing || playGeneration.get() != gen) return@launch
                             item.archive.prefetchBlockChunk(
                                 item.trackName,
                                 currentMultiChunkNextBlock,
@@ -626,10 +639,11 @@ data class Rpf7ClipRef(
     private fun playNext() {
         val currentGen = playGeneration.get()
         if (!_playing) return
-        decodeExecutor.submit {
-            if (!_playing || playGeneration.get() != currentGen) return@submit
+        activeDecodeJob?.cancel()
+        activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            if (!_playing || playGeneration.get() != currentGen) return@launch
             if (advanceMultiChunkOrPickNext()) {
-                if (!_playing || playGeneration.get() != currentGen) return@submit
+                if (!_playing || playGeneration.get() != currentGen) return@launch
                 startPlayback(currentSegmentUris, 0, 0L, currentGen)
             }
         }
@@ -819,10 +833,10 @@ data class Rpf7ClipRef(
                 stopMixPoller()
             }
 
-            // Prefetch next chunk strictly inside decodeExecutor guarded by playGeneration
+            // Prefetch next chunk strictly inside stationScope guarded by playGeneration
             val gen = playGeneration.get()
-            decodeExecutor.submit {
-                if (!_playing || playGeneration.get() != gen) return@submit
+            stationScope.launch(StationDispatchers.ioDispatcher) {
+                if (!_playing || playGeneration.get() != gen) return@launch
                 item.archive.prefetchBlockChunk(
                     item.trackName,
                     currentMultiChunkNextBlock,
@@ -935,25 +949,18 @@ data class Rpf7ClipRef(
     }
 
     private fun startMixPoller(expectedGen: Int = playGeneration.get()) {
-        mixPollerRunnable?.let { mainHandler.removeCallbacks(it) }
-        val runnable = object : Runnable {
-            override fun run() {
-                if (!_playing || playGeneration.get() != expectedGen || activeMixMarkers.isEmpty()) {
-                    return
-                }
+        stopMixPoller()
+        activePollerJob = stationScope.launch {
+            while (isActive && _playing && playGeneration.get() == expectedGen && activeMixMarkers.isNotEmpty()) {
                 updateMixTrackMetadata()
-                mainHandler.postDelayed(this, 1000L)
+                delay(1000L)
             }
         }
-        mixPollerRunnable = runnable
-        mainHandler.post(runnable)
     }
 
     private fun stopMixPoller() {
-        mixPollerRunnable?.let {
-            mainHandler.removeCallbacks(it)
-            mixPollerRunnable = null
-        }
+        activePollerJob?.cancel()
+        activePollerJob = null
         activeMixMarkers = emptyList()
         activeMixChunkStartSample = 0L
         lastDisplayedMixTrackId = -1
@@ -1096,24 +1103,25 @@ data class Rpf7ClipRef(
         val title = meta.title
         val artist = meta.artist
 
-        cleanPlayExecutor.submit {
+        activeCleanJob?.cancel()
+        activeCleanJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
                 val album = Rpf7MetadataRepository.getCachedAlbumName(context, artist, title) ?: stationTitle
-                mainHandler.post {
+                withContext(Dispatchers.Main.immediate) {
                     if (token == cleanPlayGeneration.get()) {
                         onMetadataReady(title, artist, album, 2021)
                     }
                 }
                 val uri = targetItem.archive.materializeFullAudioUri(targetItem.trackName)
-                if (token != cleanPlayGeneration.get()) return@submit
+                if (token != cleanPlayGeneration.get()) return@launch
                 if (uri == null) {
                     GTRadioLogger.log("Rpf7RadioStation: Failed to materialize clean track audio for '${targetItem.trackName}'")
-                    mainHandler.post { onTrackFinished() }
-                    return@submit
+                    withContext(Dispatchers.Main.immediate) { onTrackFinished() }
+                    return@launch
                 }
                 val dur = readAudioDurationMs(context, uri)
-                mainHandler.post {
-                    if (token != cleanPlayGeneration.get()) return@post
+                withContext(Dispatchers.Main.immediate) {
+                    if (token != cleanPlayGeneration.get()) return@withContext
                     player.playCleanQueue(listOf(uri), listOf(dur)) {
                         if (token == cleanPlayGeneration.get()) {
                             onTrackFinished()
@@ -1121,14 +1129,18 @@ data class Rpf7ClipRef(
                     }
                 }
             } catch (e: Exception) {
-                GTRadioLogger.log("Rpf7RadioStation: Error materializing clean track", e)
-                mainHandler.post { onTrackFinished() }
+                if (e !is CancellationException) {
+                    GTRadioLogger.log("Rpf7RadioStation: Error materializing clean track", e)
+                }
+                withContext(Dispatchers.Main.immediate) { onTrackFinished() }
             }
         }
     }
 
     override fun stopCleanTrackPlayback() {
         cleanPlayGeneration.incrementAndGet()
+        activeCleanJob?.cancel()
+        activeCleanJob = null
         player.stopCleanQueue()
     }
 }

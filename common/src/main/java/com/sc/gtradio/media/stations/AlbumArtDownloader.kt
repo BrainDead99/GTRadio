@@ -409,6 +409,13 @@ object AlbumArtDownloader {
         return ALT_CACHE_KEY_REGEX.replace(raw, "_").take(80)
     }
 
+    fun getMemoryCachedAlbumArt(artist: String, songTitle: String): Bitmap? {
+        val key = cacheKey(artist, songTitle)
+        synchronized(memoryArtCache) {
+            return memoryArtCache.get(key)
+        }
+    }
+
     fun getCachedAlbumArt(context: Context, artist: String, songTitle: String): Bitmap? {
         val key = cacheKey(artist, songTitle)
         synchronized(memoryArtCache) {

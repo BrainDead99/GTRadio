@@ -6,8 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -15,6 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.documentfile.provider.DocumentFile
+import androidx.lifecycle.lifecycleScope
 import androidx.preference.Preference
 import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
@@ -27,8 +26,10 @@ import com.sc.gtradio.media.stations.Rpf7MetadataRepository
 import com.sc.gtradio.media.stations.ImportResult
 import com.sc.gtradio.media.stations.AlbumArtDownloader
 import com.sc.gtradio.media.stations.Gen2MetadataRepository
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
-import java.util.concurrent.Executors
 
 class SettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,7 +46,6 @@ class SettingsActivity : AppCompatActivity() {
 
     class SettingsFragment : PreferenceFragmentCompat() {
         private var isScanning = false
-        private val mainHandler = Handler(Looper.getMainLooper())
 
         private val contract = object : ActivityResultContracts.OpenDocumentTree() {
             override fun createIntent(context: Context, input: Uri?): Intent {
@@ -72,9 +72,9 @@ class SettingsActivity : AppCompatActivity() {
             }
             val ctx = context?.applicationContext
             if (ctx != null) {
-                Executors.newSingleThreadExecutor().submit {
+                lifecycleScope.launch(Dispatchers.IO) {
                     DynamicThemeManager.forceRescan(ctx)
-                    mainHandler.post {
+                    withContext(Dispatchers.Main.immediate) {
                         val pathPref = findPreference<Preference>(getString(R.string.radio_folders_uri_key))
                         pathPref?.summary = result.toString()
                     }
@@ -97,9 +97,9 @@ class SettingsActivity : AppCompatActivity() {
             }
             val ctx = context?.applicationContext
             if (ctx != null) {
-                Executors.newSingleThreadExecutor().submit {
+                lifecycleScope.launch(Dispatchers.IO) {
                     DynamicThemeManager.forceRescan(ctx)
-                    mainHandler.post {
+                    withContext(Dispatchers.Main.immediate) {
                         val themePathPref = findPreference<Preference>(getString(R.string.dynamic_theme_uri_key))
                         themePathPref?.summary = result.toString()
                     }
@@ -135,7 +135,7 @@ class SettingsActivity : AppCompatActivity() {
             val keyPref = findPreference<Preference>("game_key_folder_uri")
             keyPref?.summary = "Scanning for GTA IV / EFLC & GTA V keys..."
 
-            Executors.newSingleThreadExecutor().submit {
+            lifecycleScope.launch(Dispatchers.IO) {
                 val rootDoc = DocumentFile.fromTreeUri(ctx, result)
                 val foldersToScan = ArrayList<DocumentFile>()
                 if (rootDoc != null && rootDoc.isDirectory) {
@@ -183,7 +183,7 @@ class SettingsActivity : AppCompatActivity() {
                     }
                 }
 
-                mainHandler.post {
+                withContext(Dispatchers.Main.immediate) {
                     val folderName = rootDoc?.name ?: result.lastPathSegment
                     keyPref?.summary = buildKeyStatusSummary(ctx, folderName)
 
@@ -269,10 +269,10 @@ class SettingsActivity : AppCompatActivity() {
                                 val sPref = findPreference<Preference>(getString(R.string.scan_album_art_key))
                                 sPref?.title = getString(R.string.scan_album_art_title)
                                 sPref?.summary = "Scan cancelled due to cache clear."
-                                Executors.newSingleThreadExecutor().submit {
+                                lifecycleScope.launch(Dispatchers.IO) {
                                     val (_, delBytes) = AlbumArtDownloader.clearAlbumArtCache(ctx)
                                     val freedMb = String.format(Locale.US, "%.2f MB", delBytes / (1024.0 * 1024.0))
-                                    mainHandler.post {
+                                    withContext(Dispatchers.Main.immediate) {
                                         updateClearArtSummary(pref)
                                         Toast.makeText(ctx, "Album art cache cleared ($freedMb freed).", Toast.LENGTH_SHORT).show()
                                     }
@@ -359,7 +359,7 @@ class SettingsActivity : AppCompatActivity() {
             scanPref.title = "Cancel Album Art Scan"
             scanPref.summary = "Preparing tracklists... tap to cancel"
 
-            Executors.newSingleThreadExecutor().submit {
+            lifecycleScope.launch(Dispatchers.IO) {
                 try {
                     Gen2MetadataRepository.ensureLoaded(ctx)
                     Rpf3MetadataRepository.ensureLoaded(ctx)
@@ -399,7 +399,7 @@ class SettingsActivity : AppCompatActivity() {
                         }
                         done++
                         val cur = done
-                        mainHandler.post {
+                        withContext(Dispatchers.Main.immediate) {
                             if (isScanning) {
                                 scanPref.summary = "Scanning ($cur / $total): ${item.artist} - ${item.title} (tap to cancel)"
                             }
@@ -417,7 +417,7 @@ class SettingsActivity : AppCompatActivity() {
                     }
                     val finalOk = okCount
                     val wasCancelled = cancelled || AlbumArtDownloader.isBulkScanCancelled()
-                    mainHandler.post {
+                    withContext(Dispatchers.Main.immediate) {
                         isScanning = false
                         AlbumArtDownloader.setBulkScanRunning(false)
                         scanPref.title = getString(R.string.scan_album_art_title)
@@ -433,7 +433,7 @@ class SettingsActivity : AppCompatActivity() {
                     }
                 } catch (e: Exception) {
                     GTRadioLogger.log("AlbumArtScan: Error during bulk scan", e)
-                    mainHandler.post {
+                    withContext(Dispatchers.Main.immediate) {
                         isScanning = false
                         AlbumArtDownloader.setBulkScanRunning(false)
                         scanPref.title = getString(R.string.scan_album_art_title)

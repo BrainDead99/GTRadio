@@ -21,6 +21,7 @@ import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import com.sc.gtradio.common.GTRadioLogger
+import kotlinx.coroutines.*
 import java.util.*
 
 @UnstableApi class Gen2RadioStation(
@@ -37,7 +38,8 @@ import java.util.*
 
     private val allSongs = ArrayList<Song>()
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
-    private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var activeCleanJob: Job? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override var newsReportsEnabled: Boolean = false
@@ -54,7 +56,7 @@ import java.util.*
 
     private val stationTitle: String = (mediaItem.mediaMetadata.title ?: "").toString()
     private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: "").toString()
-    private val stationLogo: Bitmap? = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
+    private val stationLogo: Bitmap? by lazy { mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) ?: DynamicThemeManager.loadBitmap(context, it, 512) } }
     private val isWctr: Boolean = stationTitle.uppercase().contains("WCTR")
 
     private var _currentMetadata: MediaMetadata = buildStationMetadata(
@@ -392,6 +394,8 @@ import java.util.*
 
     override fun stop() {
         GTRadioLogger.log("Gen2RadioStation[$stationTitle]: stop() called")
+        activeCleanJob?.cancel()
+        activeCleanJob = null
         if (!isStationActive) return
         isStationActive = false
         _playing = false
@@ -403,6 +407,11 @@ import java.util.*
             activeListener = null
         }
         player.stopInternal()
+    }
+
+    override fun release() {
+        stop()
+        stationScope.cancel()
     }
 
     override fun play() {
@@ -680,10 +689,11 @@ import java.util.*
         val song = allSongs.find { it.folderName == trackId || it.cleanTitle.equals(trackId, ignoreCase = true) } ?: return
         val token = cleanPlayGeneration.incrementAndGet()
 
-        cleanPlayExecutor.submit {
+        activeCleanJob?.cancel()
+        activeCleanJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
                 val album = Gen2MetadataRepository.getCachedAlbumName(context, song.cleanArtist, song.cleanTitle) ?: groupTitle
-                mainHandler.post {
+                withContext(Dispatchers.Main.immediate) {
                     if (token == cleanPlayGeneration.get()) {
                         onMetadataReady(song.cleanTitle, song.cleanArtist, album, 2004)
                     }
@@ -691,7 +701,7 @@ import java.util.*
                 val uris = listOfNotNull(song.mainIntroUri, song.mainSongUri, song.mainOutroUri)
                 if (uris.isNotEmpty()) {
                     val durations = uris.map { readAudioDurationMs(context, it) }
-                    mainHandler.post {
+                    withContext(Dispatchers.Main.immediate) {
                         if (token == cleanPlayGeneration.get()) {
                             player.playCleanQueue(uris, durations) {
                                 if (token == cleanPlayGeneration.get()) {
@@ -701,21 +711,27 @@ import java.util.*
                         }
                     }
                 } else {
-                    mainHandler.post {
+                    withContext(Dispatchers.Main.immediate) {
                         if (token == cleanPlayGeneration.get()) {
                             onTrackFinished()
                         }
                     }
                 }
             } catch (e: Exception) {
-                GTRadioLogger.log("Gen2RadioStation: Error playing clean track", e)
-                mainHandler.post { onTrackFinished() }
+                if (e !is CancellationException) {
+                    GTRadioLogger.log("Gen2RadioStation: Error playing clean track", e)
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    onTrackFinished()
+                }
             }
         }
     }
 
     override fun stopCleanTrackPlayback() {
         cleanPlayGeneration.incrementAndGet()
+        activeCleanJob?.cancel()
+        activeCleanJob = null
         player.stopCleanQueue()
     }
 

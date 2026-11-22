@@ -4,8 +4,6 @@ import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -16,10 +14,12 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
+import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Random
+import java.util.concurrent.atomic.AtomicInteger
 
 @UnstableApi
 class Gen1RawRadioStation(
@@ -42,9 +42,16 @@ class Gen1RawRadioStation(
 
     private val stationTitle: String = stationName
     private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: if (isXorAdf) "GTA Vice City" else "GTA III").toString()
-    private val stationLogo: Bitmap? = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
+    private val stationLogo: Bitmap? by lazy {
+        mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) ?: DynamicThemeManager.loadBitmap(context, it, 512) }
+    }
     private val gameCode: Int = if (isXorAdf) 1 else 2
     private val rng = Random()
+
+    private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var activePrepareJob: Job? = null
+    private var activePollerJob: Job? = null
+    private val playGeneration = AtomicInteger(0)
 
     private var _playing = false
     private var activeCueKey: String = "__INIT__"
@@ -53,15 +60,6 @@ class Gen1RawRadioStation(
         get() = _currentMetadata
 
     private var cachedDurationMs: Long = -1L
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    private val metadataTickRunnable = object : Runnable {
-        override fun run() {
-            if (!_playing) return
-            updateDynamicMetadataFromPosition()
-            mainHandler.postDelayed(this, 1000L)
-        }
-    }
 
     private fun isMetadataEnabled(): Boolean {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -112,8 +110,12 @@ class Gen1RawRadioStation(
                 val expectedKey = newKey
                 Gen1MetadataRepository.fetchAlbumArtAsync(cue.artist, cue.title, maxYear) { fetchedBmp ->
                     if (_playing && activeCueKey == expectedKey && fetchedBmp != null) {
-                        _currentMetadata = buildMetadata(cue, fetchedBmp)
-                        onMetadataChanged?.invoke(_currentMetadata)
+                        stationScope.launch(Dispatchers.Main.immediate) {
+                            if (_playing && activeCueKey == expectedKey) {
+                                _currentMetadata = buildMetadata(cue, fetchedBmp)
+                                onMetadataChanged?.invoke(_currentMetadata)
+                            }
+                        }
                     }
                 }
             }
@@ -205,34 +207,35 @@ class Gen1RawRadioStation(
         if (!isStationActive) return
         isStationActive = false
         _playing = false
+        playGeneration.incrementAndGet()
+        activePrepareJob?.cancel()
+        activePrepareJob = null
+        activePollerJob?.cancel()
+        activePollerJob = null
         lastStoppedTimeMs = System.currentTimeMillis()
         stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
-        mainHandler.removeCallbacks(metadataTickRunnable)
         player.stopInternal()
     }
 
+    override fun release() {
+        stop()
+        stationScope.cancel()
+    }
+
     override fun play() {
-        GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: play() called (file=$fileName, isXorAdf=$isXorAdf)")
+        val token = playGeneration.incrementAndGet()
+        GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: play() called (file=$fileName, isXorAdf=$isXorAdf, token=$token)")
         isStationActive = true
         _playing = true
         activeCueKey = "__INIT__"
-        mainHandler.removeCallbacks(metadataTickRunnable)
+        activePrepareJob?.cancel()
+        activePrepareJob = null
+        activePollerJob?.cancel()
+        activePollerJob = null
 
         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_ONE
         player.playWhenReady = false
-
-        val durMs = estimateDurationMs()
-        val liveOffsetMs = if (durMs > 0L) {
-            if (lastStoppedTimeMs > 0L) {
-                val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-                (stoppedPositionMs + elapsedMs) % durMs
-            } else {
-                (System.currentTimeMillis() % durMs).coerceIn(0L, (durMs - 5_000L).coerceAtLeast(0L))
-            }
-        } else {
-            0L
-        }
 
         val dataSourceFactory = AdfXorDataSource.Factory(
             context = context,
@@ -252,13 +255,44 @@ class Gen1RawRadioStation(
             .createMediaSource(mediaItemBuilder.build())
 
         player.setMediaSource(mediaSource)
-        if (liveOffsetMs > 0L) {
-            player.exoPlayer.seekTo(0, liveOffsetMs)
-        }
         player.prepare()
         player.playInternal()
 
-        updateDynamicMetadataFromPosition()
-        mainHandler.postDelayed(metadataTickRunnable, 1000L)
+        activePrepareJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            val durMs = estimateDurationMs()
+            if (token != playGeneration.get() || !isActive || !_playing) return@launch
+            val liveOffsetMs = if (durMs > 0L) {
+                if (lastStoppedTimeMs > 0L) {
+                    val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+                    (stoppedPositionMs + elapsedMs) % durMs
+                } else {
+                    (System.currentTimeMillis() % durMs).coerceIn(0L, (durMs - 5_000L).coerceAtLeast(0L))
+                }
+            } else {
+                0L
+            }
+
+            withContext(Dispatchers.Main.immediate) {
+                if (token == playGeneration.get() && _playing) {
+                    if (liveOffsetMs > 0L) {
+                        player.exoPlayer.seekTo(0, liveOffsetMs)
+                    }
+                    updateDynamicMetadataFromPosition()
+                    startPoller(token)
+                }
+            }
+        }
+    }
+
+    private fun startPoller(token: Int) {
+        activePollerJob?.cancel()
+        activePollerJob = stationScope.launch {
+            while (isActive && _playing && token == playGeneration.get()) {
+                delay(1000L)
+                if (token == playGeneration.get() && _playing) {
+                    updateDynamicMetadataFromPosition()
+                }
+            }
+        }
     }
 }

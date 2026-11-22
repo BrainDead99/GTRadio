@@ -2,8 +2,6 @@ package com.sc.gtradio
 
 import android.graphics.Color
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.view.LayoutInflater
 import android.view.MenuItem
@@ -13,6 +11,7 @@ import android.widget.SeekBar
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Observer
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -23,8 +22,13 @@ import com.sc.gtradio.media.*
 import com.sc.gtradio.media.stations.AlbumArtDownloader
 import com.sc.gtradio.media.stations.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
-import java.util.concurrent.Executors
 
 class TracklistActivity : AppCompatActivity() {
 
@@ -36,8 +40,7 @@ class TracklistActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityTracklistBinding
     private lateinit var musicServiceConnection: MusicServiceConnection
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val artExecutor = Executors.newSingleThreadExecutor()
+    private var tickerJob: Job? = null
 
     private var currentLevel = NavLevel.SERIES
     private var currentGroupId: String? = null
@@ -56,31 +59,6 @@ class TracklistActivity : AppCompatActivity() {
     private var lastSeekRequestTimeMs: Long = 0L
 
     private fun Int.dpToPx(): Int = (this * resources.displayMetrics.density).toInt()
-
-    private val tickerRunnable = object : Runnable {
-        override fun run() {
-            val now = SystemClock.elapsedRealtime()
-            val isSeekingOrSettling = isUserSeeking || (now - lastSeekRequestTimeMs < 800L)
-            if (isActivityResumed && currentPlaybackState.isPlaying && !isSeekingOrSettling) {
-                val durationMs = musicServiceConnection.durationMs()
-                if (durationMs > 0L) {
-                    if (binding.scrubSeekBar.max != durationMs.toInt()) {
-                        binding.scrubSeekBar.max = durationMs.toInt()
-                    }
-                    binding.scrubSeekBar.isEnabled = true
-                    binding.totalTimeText.text = formatDurationMs(durationMs)
-                }
-
-                val currentPos = musicServiceConnection.currentPositionMs()
-                val clampedPos = if (durationMs > 0L) currentPos.coerceIn(0L, durationMs) else currentPos.coerceAtLeast(0L)
-                binding.scrubSeekBar.progress = clampedPos.toInt()
-                binding.elapsedTimeText.text = formatDurationMs(clampedPos)
-            }
-            if (isActivityResumed && currentPlaybackState.isPlaying) {
-                mainHandler.postDelayed(this, 500L)
-            }
-        }
-    }
 
     private val subscriptionCallback = object : SubscriptionCallback() {
         override fun onChildrenLoaded(parentId: String, children: List<MediaItem>) {
@@ -179,20 +157,25 @@ class TracklistActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopTicker()
         currentSubscribedId?.let { musicServiceConnection.unsubscribe(it, subscriptionCallback) }
-        artExecutor.shutdown()
-        mainHandler.removeCallbacksAndMessages(null)
     }
 
     private fun startTicker() {
         stopTicker()
         if (currentPlaybackState.isPlaying) {
-            mainHandler.post(tickerRunnable)
+            tickerJob = lifecycleScope.launch {
+                while (isActive && isActivityResumed && currentPlaybackState.isPlaying) {
+                    updateDurationAndPosition()
+                    delay(500L)
+                }
+            }
         }
     }
 
     private fun stopTicker() {
-        mainHandler.removeCallbacks(tickerRunnable)
+        tickerJob?.cancel()
+        tickerJob = null
     }
 
     private fun navigateTo(level: NavLevel, id: String? = null, name: String? = null) {
@@ -328,10 +311,25 @@ class TracklistActivity : AppCompatActivity() {
     }
 
     private fun updateDurationAndPosition() {
+        val currentMode = musicServiceConnection.sessionExtras.value?.getString(TracklistContract.EXTRA_PLAYBACK_MODE)
+            ?: currentPlaybackState.extras?.getString(TracklistContract.EXTRA_PLAYBACK_MODE)
         val durationMs = musicServiceConnection.durationMs()
+        val isRadio = currentMode == PlaybackMode.RADIO.name || (currentPlaybackState.isPlaying && durationMs <= 0L && currentMode != PlaybackMode.TRACKLIST.name)
+
+        if (isRadio) {
+            binding.scrubSeekBar.isEnabled = false
+            binding.scrubSeekBar.max = 0
+            binding.scrubSeekBar.progress = 0
+            binding.totalTimeText.text = "LIVE"
+            binding.elapsedTimeText.text = ""
+            return
+        }
+
         if (durationMs > 0L) {
             binding.scrubSeekBar.isEnabled = true
-            binding.scrubSeekBar.max = durationMs.toInt()
+            if (binding.scrubSeekBar.max != durationMs.toInt()) {
+                binding.scrubSeekBar.max = durationMs.toInt()
+            }
             binding.totalTimeText.text = formatDurationMs(durationMs)
         } else {
             binding.scrubSeekBar.isEnabled = false
@@ -362,16 +360,7 @@ class TracklistActivity : AppCompatActivity() {
                 binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
             }
 
-            val durationMs = musicServiceConnection.durationMs()
-            if (durationMs > 0L) {
-                binding.scrubSeekBar.isEnabled = true
-                binding.scrubSeekBar.max = durationMs.toInt()
-                binding.totalTimeText.text = formatDurationMs(durationMs)
-            } else {
-                binding.scrubSeekBar.isEnabled = false
-                binding.scrubSeekBar.max = 0
-                binding.totalTimeText.text = "-:--"
-            }
+            updateDurationAndPosition()
         } else {
             binding.playerTrackTitle.text = "Select a song to play"
             binding.playerTrackSubtitle.text = ""
@@ -380,7 +369,7 @@ class TracklistActivity : AppCompatActivity() {
             binding.scrubSeekBar.isEnabled = false
             binding.scrubSeekBar.progress = 0
             binding.scrubSeekBar.max = 0
-            binding.elapsedTimeText.text = "0:00"
+            binding.elapsedTimeText.text = ""
             binding.totalTimeText.text = "-:--"
         }
     }
@@ -423,19 +412,7 @@ class TracklistActivity : AppCompatActivity() {
             }
         }
 
-        val durationMs = musicServiceConnection.durationMs()
-        if (durationMs > 0L) {
-            binding.scrubSeekBar.isEnabled = true
-            binding.scrubSeekBar.max = durationMs.toInt()
-            binding.totalTimeText.text = formatDurationMs(durationMs)
-        }
-        val isSeekingOrSettling = isUserSeeking || (SystemClock.elapsedRealtime() - lastSeekRequestTimeMs < 800L)
-        if (!isSeekingOrSettling) {
-            val currentPos = musicServiceConnection.currentPositionMs()
-            val clampedPos = if (durationMs > 0L) currentPos.coerceIn(0L, durationMs) else currentPos.coerceAtLeast(0L)
-            binding.scrubSeekBar.progress = clampedPos.toInt()
-            binding.elapsedTimeText.text = formatDurationMs(clampedPos)
-        }
+        updateDurationAndPosition()
     }
 
     private fun formatDurationMs(ms: Long): String {
@@ -489,15 +466,15 @@ class TracklistActivity : AppCompatActivity() {
                     val key = "$artist - $title"
                     holder.binding.rowIcon.tag = key
 
-                    val memArt = AlbumArtDownloader.getCachedAlbumArt(this@TracklistActivity, artist, title)
+                    val memArt = AlbumArtDownloader.getMemoryCachedAlbumArt(artist, title)
                     if (memArt != null) {
                         holder.binding.rowIcon.setImageBitmap(memArt)
                     } else {
                         holder.binding.rowIcon.setImageResource(R.drawable.music_note_24px)
-                        artExecutor.submit {
+                        lifecycleScope.launch(Dispatchers.IO) {
                             val diskArt = AlbumArtDownloader.getCachedAlbumArt(this@TracklistActivity, artist, title)
                             if (diskArt != null) {
-                                mainHandler.post {
+                                withContext(Dispatchers.Main.immediate) {
                                     if (holder.binding.rowIcon.tag == key) {
                                         holder.binding.rowIcon.setImageBitmap(diskArt)
                                     }

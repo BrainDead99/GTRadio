@@ -25,6 +25,13 @@ interface RadioStation {
 
     fun play()
     fun stop()
+    fun release() {
+        stop()
+    }
+}
+
+object StationDispatchers {
+    val ioDispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(4)
 }
 
 fun compressArtworkToJpeg(bitmap: Bitmap?, maxDim: Int = 300, quality: Int = 85): ByteArray? {

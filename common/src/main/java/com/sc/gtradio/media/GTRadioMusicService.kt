@@ -7,8 +7,6 @@ import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
@@ -36,8 +34,8 @@ import com.google.common.util.concurrent.SettableFuture
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.stations.*
+import kotlinx.coroutines.*
 import java.util.ArrayList
-import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicLong
 
 enum class PlaybackMode {
@@ -67,7 +65,7 @@ open class GTRadioMusicService : MediaLibraryService() {
     private var repeatMode: Int = TracklistContract.REPEAT_MODE_NONE
     private val tracklistPlayedIndices = mutableListOf<Int>()
 
-    private val scanExecutor = Executors.newSingleThreadExecutor()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     @Volatile private var groupsLoaded = false
     private var cachedUri: String? = null
     @Volatile private var cacheHydrated = false
@@ -171,11 +169,11 @@ open class GTRadioMusicService : MediaLibraryService() {
         DynamicThemeManager.invalidateCache()
         LibraryIndexCache.invalidate(applicationContext)
         cacheHydrated = false
-        scanExecutor.submit {
+        serviceScope.launch(Dispatchers.IO) {
             val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
             val currentUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "") ?: ""
             ensureGroupsLoadedSync(currentUri)
-            Handler(Looper.getMainLooper()).post {
+            withContext(Dispatchers.Main.immediate) {
                 mediaLibrarySession.notifyChildrenChanged("root", stationGroups.size, null)
                 mediaLibrarySession.notifyChildrenChanged(TracklistContract.ROOT_ID, stationGroups.size, null)
             }
@@ -186,9 +184,17 @@ open class GTRadioMusicService : MediaLibraryService() {
         super.onCreate()
         GTRadioLogger.init(applicationContext)
         AlbumArtDownloader.init(applicationContext)
-        Thread({
+        serviceScope.launch(Dispatchers.IO) {
             AlbumHintRepository.ensureLoaded(applicationContext)
-        }, "AlbumHintPreload").start()
+            val currentUri = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                ?.getString(getString(R.string.radio_folders_uri_key), "") ?: ""
+            if (currentUri.isNotBlank()) {
+                val cached = LibraryIndexCache.loadCache(applicationContext, currentUri)
+                if (cached != null) {
+                    DynamicThemeManager.refreshIfNeeded(applicationContext, cached.themeDirUri)
+                }
+            }
+        }
 
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
         sharedPref.registerOnSharedPreferenceChangeListener(sharedPrefListener)
@@ -346,7 +352,7 @@ open class GTRadioMusicService : MediaLibraryService() {
             val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
             val currentUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "") ?: ""
 
-            scanExecutor.submit {
+            serviceScope.launch(Dispatchers.IO) {
                 try {
                     ensureGroupsLoadedSync(currentUri)
                     val items: List<MediaItem> = when {
@@ -418,7 +424,7 @@ open class GTRadioMusicService : MediaLibraryService() {
             val sharedPref = PreferenceManager.getDefaultSharedPreferences(applicationContext)
             val currentUri = sharedPref?.getString(getString(R.string.radio_folders_uri_key), "") ?: ""
 
-            scanExecutor.submit {
+            serviceScope.launch(Dispatchers.IO) {
                 try {
                     ensureGroupsLoadedSync(currentUri)
 
@@ -427,7 +433,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                     val lastGroupId = playbackPrefs.getString("last_group_id", "") ?: ""
 
                     if (lastMediaId.isNotBlank()) {
-                        Handler(Looper.getMainLooper()).post {
+                        withContext(Dispatchers.Main.immediate) {
                             playMediaId(lastMediaId, Bundle().apply {
                                 putString("stationGroupId", lastGroupId)
                             })
@@ -513,6 +519,12 @@ open class GTRadioMusicService : MediaLibraryService() {
             if (exoPlayer.playbackState == Player.STATE_READY || exoPlayer.playbackState == Player.STATE_BUFFERING) {
                 radioPlayer.playInternal()
                 mediaLibrarySession.setSessionExtras(buildSessionExtras())
+            } else if (exoPlayer.playbackState == Player.STATE_IDLE || exoPlayer.playbackState == Player.STATE_ENDED) {
+                if (activeTracklistIndex in activeTracklistTracks.indices) {
+                    playTracklistTrack(activeTracklistIndex)
+                } else if (activeTracklistTracks.isNotEmpty()) {
+                    playTracklistTrack(0)
+                }
             } else if (activeTracklistIndex in activeTracklistTracks.indices) {
                 playTracklistTrack(activeTracklistIndex)
             }
@@ -553,7 +565,8 @@ open class GTRadioMusicService : MediaLibraryService() {
             val tracks = station?.getCleanTracks() ?: emptyList()
             val targetTrack = tracks.find { it.id.equals(trackId, ignoreCase = true) } ?: tracks.firstOrNull()
             if (targetTrack != null) {
-                val cachedArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, targetTrack.artist, targetTrack.title)
+                val cachedArt = AlbumArtDownloader.getMemoryCachedAlbumArt(targetTrack.artist, targetTrack.title)
+                    ?: AlbumArtDownloader.getCachedAlbumArt(applicationContext, targetTrack.artist, targetTrack.title)
                 val previewMeta = buildStationMediaMetadata(
                     mediaId = mediaId,
                     title = targetTrack.title,
@@ -592,7 +605,8 @@ open class GTRadioMusicService : MediaLibraryService() {
 
         val targetItem = fullStationList.find { it.mediaId == mediaId }
         if (targetItem != null) {
-            val targetArt = targetItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(applicationContext, it, 512) }
+            val targetArtUri = targetItem.mediaMetadata.artworkUri
+            val targetArt = DynamicThemeManager.getCachedBitmap(targetArtUri, 512)
             val previewMeta = buildStationMediaMetadata(
                 mediaId = targetItem.mediaId,
                 title = targetItem.mediaMetadata.title?.toString() ?: "",
@@ -606,6 +620,33 @@ open class GTRadioMusicService : MediaLibraryService() {
                 durationMs = -1L
             )
             radioPlayer.updateSessionMetadata(previewMeta)
+
+            if (targetArt == null && targetArtUri != null) {
+                val targetMediaId = targetItem.mediaId
+                val token = stationSwitchToken
+                serviceScope.launch(Dispatchers.IO) {
+                    val loaded = DynamicThemeManager.loadBitmap(applicationContext, targetArtUri, 512)
+                    if (loaded != null) {
+                        withContext(Dispatchers.Main.immediate) {
+                            if (token == stationSwitchToken && activeStation?.mediaId == targetMediaId) {
+                                val updatedMeta = buildStationMediaMetadata(
+                                    mediaId = targetMediaId,
+                                    title = targetItem.mediaMetadata.title?.toString() ?: "",
+                                    subtitle = targetItem.mediaMetadata.subtitle?.toString() ?: "",
+                                    artist = targetItem.mediaMetadata.artist?.toString() ?: "",
+                                    albumArtist = "",
+                                    stationTitle = targetItem.mediaMetadata.title?.toString() ?: "",
+                                    groupTitle = targetItem.mediaMetadata.albumTitle?.toString() ?: "",
+                                    art = loaded,
+                                    isSong = false,
+                                    durationMs = -1L
+                                )
+                                radioPlayer.updateSessionMetadata(updatedMeta)
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if (playbackMode == PlaybackMode.TRACKLIST) {
@@ -697,7 +738,8 @@ open class GTRadioMusicService : MediaLibraryService() {
 
         val nextItem = group.stationList[nextStationIndex]
         radioPlayer.setTransitionLoading(true)
-        val targetArt = nextItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(applicationContext, it, 512) }
+        val targetArtUri = nextItem.mediaMetadata.artworkUri
+        val targetArt = DynamicThemeManager.getCachedBitmap(targetArtUri, 512)
         val previewMeta = buildStationMediaMetadata(
             mediaId = nextItem.mediaId,
             title = nextItem.mediaMetadata.title?.toString() ?: "",
@@ -711,6 +753,33 @@ open class GTRadioMusicService : MediaLibraryService() {
             durationMs = -1L
         )
         radioPlayer.updateSessionMetadata(previewMeta)
+
+        if (targetArt == null && targetArtUri != null) {
+            val currentStationId = nextItem.mediaId
+            val token = stationSwitchToken
+            serviceScope.launch(Dispatchers.IO) {
+                val loaded = DynamicThemeManager.loadBitmap(applicationContext, targetArtUri, 512)
+                if (loaded != null) {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (token == stationSwitchToken && activeStation?.mediaId == currentStationId) {
+                            val updatedMeta = buildStationMediaMetadata(
+                                mediaId = currentStationId,
+                                title = nextItem.mediaMetadata.title?.toString() ?: "",
+                                subtitle = nextItem.mediaMetadata.subtitle?.toString() ?: "",
+                                artist = nextItem.mediaMetadata.artist?.toString() ?: "",
+                                albumArtist = "",
+                                stationTitle = nextItem.mediaMetadata.title?.toString() ?: "",
+                                groupTitle = nextItem.mediaMetadata.albumTitle?.toString() ?: "",
+                                art = loaded,
+                                isSong = false,
+                                durationMs = -1L
+                            )
+                            radioPlayer.updateSessionMetadata(updatedMeta)
+                        }
+                    }
+                }
+            }
+        }
 
         val nextSt = getRadioStation(group, nextItem.mediaId) ?: return
         startStationWithTuningNoise(group, nextSt, nextStationIndex, trigger = "skip_next")
@@ -759,7 +828,8 @@ open class GTRadioMusicService : MediaLibraryService() {
 
         val prevItem = group.stationList[prevStationIndex]
         radioPlayer.setTransitionLoading(true)
-        val targetArt = prevItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(applicationContext, it, 512) }
+        val targetArtUri = prevItem.mediaMetadata.artworkUri
+        val targetArt = DynamicThemeManager.getCachedBitmap(targetArtUri, 512)
         val previewMeta = buildStationMediaMetadata(
             mediaId = prevItem.mediaId,
             title = prevItem.mediaMetadata.title?.toString() ?: "",
@@ -773,6 +843,33 @@ open class GTRadioMusicService : MediaLibraryService() {
             durationMs = -1L
         )
         radioPlayer.updateSessionMetadata(previewMeta)
+
+        if (targetArt == null && targetArtUri != null) {
+            val currentStationId = prevItem.mediaId
+            val token = stationSwitchToken
+            serviceScope.launch(Dispatchers.IO) {
+                val loaded = DynamicThemeManager.loadBitmap(applicationContext, targetArtUri, 512)
+                if (loaded != null) {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (token == stationSwitchToken && activeStation?.mediaId == currentStationId) {
+                            val updatedMeta = buildStationMediaMetadata(
+                                mediaId = currentStationId,
+                                title = prevItem.mediaMetadata.title?.toString() ?: "",
+                                subtitle = prevItem.mediaMetadata.subtitle?.toString() ?: "",
+                                artist = prevItem.mediaMetadata.artist?.toString() ?: "",
+                                albumArtist = "",
+                                stationTitle = prevItem.mediaMetadata.title?.toString() ?: "",
+                                groupTitle = prevItem.mediaMetadata.albumTitle?.toString() ?: "",
+                                art = loaded,
+                                isSong = false,
+                                durationMs = -1L
+                            )
+                            radioPlayer.updateSessionMetadata(updatedMeta)
+                        }
+                    }
+                }
+            }
+        }
 
         val prevSt = getRadioStation(group, prevItem.mediaId) ?: return
         startStationWithTuningNoise(group, prevSt, prevStationIndex, trigger = "skip_prev")
@@ -862,7 +959,8 @@ open class GTRadioMusicService : MediaLibraryService() {
 
         radioPlayer.setTransitionLoading(true)
 
-        val cachedArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
+        val cachedArt = AlbumArtDownloader.getMemoryCachedAlbumArt(track.artist, track.title)
+            ?: AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
         publishTracklistMetadata(track, index, cachedArt, 0L)
 
         radioPlayer.stopInternal()
@@ -879,17 +977,26 @@ open class GTRadioMusicService : MediaLibraryService() {
         val expectedIndex = index
         val expectedTrackId = track.id
         if (cachedArt == null) {
-            AlbumArtDownloader.fetchEraAccurateArtAsync(applicationContext, track.artist, track.title, track.maxYear) {
-                Handler(Looper.getMainLooper()).post {
-                    if (playbackMode == PlaybackMode.TRACKLIST &&
-                        tracklistRequestGen.get() == reqGen &&
-                        activeTracklistIndex == expectedIndex &&
-                        activeTracklistTracks.getOrNull(expectedIndex)?.id == expectedTrackId
-                    ) {
-                        val newArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
-                        if (newArt != null) {
-                            val dur = radioPlayer.getDurationMs()
-                            publishTracklistMetadata(track, expectedIndex, newArt, dur)
+            serviceScope.launch(Dispatchers.IO) {
+                val ok = AlbumArtDownloader.fetchEraAccurateArtSync(
+                    context = applicationContext,
+                    artist = track.artist,
+                    songTitle = track.title,
+                    preferredYear = track.maxYear,
+                    maxYear = track.maxYear
+                )
+                if (ok) {
+                    val newArt = AlbumArtDownloader.getCachedAlbumArt(applicationContext, track.artist, track.title)
+                    if (newArt != null) {
+                        withContext(Dispatchers.Main.immediate) {
+                            if (playbackMode == PlaybackMode.TRACKLIST &&
+                                tracklistRequestGen.get() == reqGen &&
+                                activeTracklistIndex == expectedIndex &&
+                                activeTracklistTracks.getOrNull(expectedIndex)?.id == expectedTrackId
+                            ) {
+                                val dur = radioPlayer.getDurationMs()
+                                publishTracklistMetadata(track, expectedIndex, newArt, dur)
+                            }
                         }
                     }
                 }
@@ -902,7 +1009,7 @@ open class GTRadioMusicService : MediaLibraryService() {
             track.id,
             radioPlayer,
             onTrackFinished = {
-                Handler(Looper.getMainLooper()).post {
+                serviceScope.launch(Dispatchers.Main.immediate) {
                     if (tracklistRequestGen.get() == reqGen) {
                         onTracklistSongFinished()
                     }
@@ -1024,8 +1131,9 @@ open class GTRadioMusicService : MediaLibraryService() {
                     GTRadioLogger.log("[SCAN] LibraryIndexCache HIT: hydrated ${hydratedGroups.size} group(s) in ${cacheElapsed}ms")
 
                     // Quiet background SAF validation pass
-                    scanExecutor.submit {
+                    serviceScope.launch(Dispatchers.IO) {
                         try {
+                            DynamicThemeManager.refreshIfNeeded(applicationContext, cached.themeDirUri)
                             AlbumHintRepository.ensureLoaded(applicationContext)
                             val freshGroups = getStationGroups()
                             val freshList = ArrayList(freshGroups.map { x -> x.stationList }.flatten())
@@ -1035,11 +1143,12 @@ open class GTRadioMusicService : MediaLibraryService() {
                             }
                             LibraryIndexCache.saveCache(applicationContext, currentUri, freshGroups)
                             GTRadioLogger.log("[SCAN] LibraryIndexCache: Background SAF validation complete, ${freshGroups.size} group(s)")
-                            Handler(Looper.getMainLooper()).post {
+                            withContext(Dispatchers.Main.immediate) {
                                 mediaLibrarySession.notifyChildrenChanged("root", freshGroups.size, null)
                                 mediaLibrarySession.notifyChildrenChanged(TracklistContract.ROOT_ID, freshGroups.size, null)
                             }
                         } catch (e: Exception) {
+                            if (e is CancellationException) throw e
                             GTRadioLogger.log("[SCAN] LibraryIndexCache: Background validation pass failed", e)
                         }
                     }
@@ -1065,6 +1174,11 @@ open class GTRadioMusicService : MediaLibraryService() {
             GTRadioLogger.log("[SCAN] LibraryIndexCache MISS: full SAF scan in ${scanElapsed}ms")
             if (currentUri.isNotBlank()) {
                 LibraryIndexCache.saveCache(applicationContext, currentUri, groups)
+                serviceScope.launch(Dispatchers.IO) {
+                    val themeUri = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+                        .getString(applicationContext.getString(R.string.dynamic_theme_uri_key), null)
+                    DynamicThemeManager.refreshIfNeeded(applicationContext, themeUri)
+                }
             }
         }
     }
@@ -1218,7 +1332,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                 Rpf3KeyManager.ensureKeyLoaded(this)
             }
             if (!Rpf3KeyManager.isUnlocked(this)) {
-                Handler(Looper.getMainLooper()).post {
+                serviceScope.launch(Dispatchers.Main.immediate) {
                     Toast.makeText(
                         applicationContext,
                         "GTA IV/EFLC key not found. Select a folder containing GTAIV.exe, EFLC.exe, or a key .dat file in Settings -> Game Key Directory.",
@@ -1244,7 +1358,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                 Rpf7KeyManager.ensureKeysLoaded(this)
             }
             if (!Rpf7KeyManager.isUnlocked(this)) {
-                Handler(Looper.getMainLooper()).post {
+                serviceScope.launch(Dispatchers.Main.immediate) {
                     Toast.makeText(
                         applicationContext,
                         "GTA V keys not found. Select a folder with GTA5.exe or key files in Settings -> Game Key Directory.",
@@ -1363,17 +1477,21 @@ open class GTRadioMusicService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        serviceScope.cancel()
         if (playbackMode == PlaybackMode.TRACKLIST) {
             activeTracklistStation?.stopCleanTrackPlayback()
             radioPlayer.stopCleanQueue()
             radioPlayer.isTracklistMode = false
         }
+        for (st in stationCache.values) {
+            st.release()
+        }
+        stationCache.clear()
         mediaLibrarySession.run {
             release()
         }
         radioPlayer.removeListener(playerListener)
         radioPlayer.release()
-        scanExecutor.shutdown()
         super.onDestroy()
     }
 }

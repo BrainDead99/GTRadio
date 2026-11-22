@@ -4,8 +4,7 @@ import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Handler
-import android.os.Looper
+import kotlinx.coroutines.*
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -37,8 +36,11 @@ class Gen1At3RadioStation(
 
     private val stationTitle: String = stationName
     private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: if (isVcs) "GTA: Vice City Stories" else "GTA: Liberty City Stories").toString()
-    private val stationLogo: Bitmap? = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
+    private val stationLogo: Bitmap? by lazy { mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) ?: DynamicThemeManager.loadBitmap(context, it, 512) } }
     private val gameCode: Int = if (isVcs) 4 else 3
+
+    private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var activePollerJob: Job? = null
 
     private var _playing = false
     private var currentChunkStartFrame = 0
@@ -48,16 +50,6 @@ class Gen1At3RadioStation(
     private var _currentMetadata: MediaMetadata = buildMetadata(null, null)
     override val metadata: MediaMetadata
         get() = _currentMetadata
-
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    private val metadataTickRunnable = object : Runnable {
-        override fun run() {
-            if (!_playing) return
-            updateDynamicMetadataFromPosition()
-            mainHandler.postDelayed(this, 1000L)
-        }
-    }
 
     private fun isMetadataEnabled(): Boolean {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -168,12 +160,18 @@ class Gen1At3RadioStation(
         if (!isStationActive) return
         isStationActive = false
         _playing = false
-        mainHandler.removeCallbacks(metadataTickRunnable)
+        activePollerJob?.cancel()
+        activePollerJob = null
         if (activeListener != null) {
             player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
         player.stopInternal()
+    }
+
+    override fun release() {
+        stop()
+        stationScope.cancel()
     }
 
     override fun play() {
@@ -182,7 +180,8 @@ class Gen1At3RadioStation(
         archive.ensureHeaderParsed()
         _playing = true
         activeCueKey = "__INIT__"
-        mainHandler.removeCallbacks(metadataTickRunnable)
+        activePollerJob?.cancel()
+        activePollerJob = null
 
         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
@@ -195,7 +194,14 @@ class Gen1At3RadioStation(
             .coerceIn(0, (archive.totalFrames - 1).coerceAtLeast(0))
 
         playChunkAtFrame(liveFrame)
-        mainHandler.postDelayed(metadataTickRunnable, 1000L)
+        activePollerJob = stationScope.launch {
+            while (isActive && _playing) {
+                delay(1000L)
+                if (_playing) {
+                    updateDynamicMetadataFromPosition()
+                }
+            }
+        }
     }
 
     private fun playChunkAtFrame(startFrame: Int) {

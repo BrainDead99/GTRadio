@@ -35,7 +35,10 @@ import com.sc.gtradio.media.*
 import com.sc.gtradio.media.stations.AlbumArtDownloader
 import com.sc.gtradio.media.stations.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
-import java.util.concurrent.Executors
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -467,7 +470,7 @@ class RadioList : Fragment() {
             }
         } else {
             val ctx = context?.applicationContext ?: return
-            Executors.newSingleThreadExecutor().submit {
+            viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
                 val pack = DynamicThemeManager.findThemeForSeries(ctx, seriesName)
                 if (pack != null && pack.hasFullThemeUi) {
                     val isLandscape = resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
@@ -483,7 +486,7 @@ class RadioList : Fragment() {
                         DynamicThemeManager.loadBitmap(ctx, offUri, 256)
                     }
                 }
-                Handler(Looper.getMainLooper()).post {
+                withContext(Dispatchers.Main.immediate) {
                     if (_binding != null && isAdded) {
                         if (pack != null && pack.hasFullThemeUi) {
                             applyDynamicTheme(pack, children)

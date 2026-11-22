@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.LruCache
 import androidx.documentfile.provider.DocumentFile
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
@@ -46,7 +47,9 @@ data class DynamicThemePack(
 
 object DynamicThemeManager {
     private val packCache = HashMap<String, DynamicThemePack>()
-    private val bitmapCache = HashMap<String, Bitmap>()
+    private val iconCache = object : LruCache<String, Bitmap>(4 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
     private var scannedPacks: List<DynamicThemePack>? = null
     private var lastThemeUriString: String? = null
 
@@ -136,7 +139,32 @@ object DynamicThemeManager {
         synchronized(packCache) {
             packCache.clear()
         }
+        synchronized(iconCache) {
+            iconCache.evictAll()
+        }
         scannedPacks = null
+    }
+
+    fun refreshIfNeeded(context: Context, themeDirUriStr: String? = null) {
+        if (scannedPacks != null && packCache.isNotEmpty()) return
+        try {
+            val rootDoc = if (!themeDirUriStr.isNullOrBlank()) {
+                try {
+                    val doc = DocumentFile.fromTreeUri(context, Uri.parse(themeDirUriStr))
+                    if (doc != null && doc.isDirectory && doc.canRead()) doc else null
+                } catch (_: Exception) { null }
+            } else null
+            val packs = scanAllThemePacks(context, rootDoc)
+            synchronized(packCache) {
+                scannedPacks = packs
+                for (pack in packs) {
+                    packCache[pack.seriesName] = pack
+                }
+            }
+            GTRadioLogger.log("DynamicThemeManager: Pre-warmed ${packs.size} theme pack(s)")
+        } catch (e: Exception) {
+            GTRadioLogger.log("DynamicThemeManager: refreshIfNeeded failed", e)
+        }
     }
 
     fun clearCache() {
@@ -529,11 +557,20 @@ object DynamicThemeManager {
         )
     }
 
+    fun getCachedBitmap(uri: Uri?, maxDim: Int = 512): Bitmap? {
+        if (uri == null) return null
+        val key = "${uri}_$maxDim"
+        synchronized(iconCache) {
+            iconCache.get(key)?.let { if (!it.isRecycled) return it }
+        }
+        return null
+    }
+
     fun loadBitmap(context: Context, uri: Uri?, maxDim: Int = 1080): Bitmap? {
         if (uri == null) return null
         val key = "${uri}_$maxDim"
-        synchronized(bitmapCache) {
-            bitmapCache[key]?.let { if (!it.isRecycled) return it }
+        synchronized(iconCache) {
+            iconCache.get(key)?.let { if (!it.isRecycled) return it }
         }
         return try {
             context.contentResolver.openInputStream(uri)?.use { input ->
@@ -547,9 +584,8 @@ object DynamicThemeManager {
                 val opts = BitmapFactory.Options().apply { inSampleSize = sample }
                 val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts)
                 if (bmp != null) {
-                    synchronized(bitmapCache) {
-                        if (bitmapCache.size > 45) bitmapCache.clear()
-                        bitmapCache[key] = bmp
+                    synchronized(iconCache) {
+                        iconCache.put(key, bmp)
                     }
                 }
                 bmp

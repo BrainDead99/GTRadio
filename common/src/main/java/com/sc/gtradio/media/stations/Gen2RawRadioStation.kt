@@ -19,6 +19,7 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
+import kotlinx.coroutines.*
 import java.io.File
 import java.util.*
 
@@ -35,10 +36,11 @@ import java.util.*
     private var _weatherChatterEnabled: Boolean
 ) : RadioStation, TracklistCapableStation {
 
+    private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var activeDecodeJob: Job? = null
+    private var activeCleanJob: Job? = null
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
-    private val cleanPlayExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val playGeneration = java.util.concurrent.atomic.AtomicInteger(0)
-    private val decodeExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     override fun supportsTracklist(): Boolean {
         return !isWctr && stationMeta.streamCode != "ADVERTS" && stationMeta.songGroups.isNotEmpty()
@@ -67,10 +69,11 @@ import java.util.*
             ?: return
         val token = cleanPlayGeneration.incrementAndGet()
 
-        cleanPlayExecutor.submit {
+        activeCleanJob?.cancel()
+        activeCleanJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
                 val album = Gen2MetadataRepository.getCachedAlbumName(context, sg.artist, sg.cleanTitle) ?: groupTitle
-                mainHandler.post {
+                withContext(Dispatchers.Main.immediate) {
                     if (token == cleanPlayGeneration.get()) {
                         onMetadataReady(sg.cleanTitle, sg.artist, album, 2004)
                     }
@@ -84,7 +87,7 @@ import java.util.*
                     stationArchive.materializeTrackUri(sg.cleanOutroTrack)?.let { uris.add(it) }
                 }
                 val durations = uris.map { readAudioDurationMs(context, it) }
-                mainHandler.post {
+                withContext(Dispatchers.Main.immediate) {
                     if (token == cleanPlayGeneration.get()) {
                         if (uris.isNotEmpty()) {
                             player.playCleanQueue(uris, durations) {
@@ -98,14 +101,20 @@ import java.util.*
                     }
                 }
             } catch (e: Exception) {
-                GTRadioLogger.log("Gen2RawRadioStation: Error materializing clean track", e)
-                mainHandler.post { onTrackFinished() }
+                if (e !is CancellationException) {
+                    GTRadioLogger.log("Gen2RawRadioStation: Error materializing clean track", e)
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    onTrackFinished()
+                }
             }
         }
     }
 
     override fun stopCleanTrackPlayback() {
         cleanPlayGeneration.incrementAndGet()
+        activeCleanJob?.cancel()
+        activeCleanJob = null
         player.stopCleanQueue()
     }
 
@@ -124,7 +133,7 @@ import java.util.*
     override var stationName: String = stationMeta.stationName
     private val stationTitle: String = (mediaItem.mediaMetadata.title ?: stationMeta.stationName).toString()
     private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: "GTA San Andreas").toString()
-    private val stationLogo: Bitmap? = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
+    private val stationLogo: Bitmap? by lazy { mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) ?: DynamicThemeManager.loadBitmap(context, it, 512) } }
     private val isWctr: Boolean = stationMeta.streamCode == "TK" || stationTitle.uppercase().contains("WCTR")
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -381,6 +390,10 @@ import java.util.*
     override fun stop() {
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: stop() called (gen=$gen)")
+        activeDecodeJob?.cancel()
+        activeDecodeJob = null
+        activeCleanJob?.cancel()
+        activeCleanJob = null
         if (!isStationActive) return
         isStationActive = false
         _playing = false
@@ -394,6 +407,11 @@ import java.util.*
         player.stopInternal()
     }
 
+    override fun release() {
+        stop()
+        stationScope.cancel()
+    }
+
     override fun play() {
         val currentGen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Gen2RawRadioStation[$stationTitle]: play() called (gen=$currentGen)")
@@ -403,8 +421,9 @@ import java.util.*
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
-        decodeExecutor.submit {
-            if (!_playing || playGeneration.get() != currentGen) return@submit
+        activeDecodeJob?.cancel()
+        activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            if (!_playing || playGeneration.get() != currentGen) return@launch
             if (lastStoppedTimeMs > 0L && currentSegmentUris.isNotEmpty() && currentSegmentUris.all { u -> u.path?.let { File(it).exists() } == true }) {
                 val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
                 resumeFromRealTime(elapsedMs, currentGen)
@@ -458,11 +477,12 @@ import java.util.*
     private fun playNext() {
         val currentGen = playGeneration.get()
         if (!_playing) return
-        decodeExecutor.submit {
-            if (!_playing || playGeneration.get() != currentGen) return@submit
+        activeDecodeJob?.cancel()
+        activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            if (!_playing || playGeneration.get() != currentGen) return@launch
             pickNextSegment()
             if (currentSegmentUris.isNotEmpty()) {
-                if (!_playing || playGeneration.get() != currentGen) return@submit
+                if (!_playing || playGeneration.get() != currentGen) return@launch
                 startPlayback(currentSegmentUris, 0, 0L, currentGen)
             }
         }
