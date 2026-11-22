@@ -21,7 +21,12 @@ import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
-class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
+class StationGroup private constructor(
+    val folderDoc: DocumentFile?,
+    private val context: Context,
+    private val skipScan: Boolean
+) {
+    constructor(folderDoc: DocumentFile, context: Context) : this(folderDoc, context, false)
 
     lateinit var mediaItem: MediaItem
     var stationList: ArrayList<MediaItem> = ArrayList()
@@ -29,32 +34,32 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
     var groupName: String = ""
 
     var isGen1RawGroup: Boolean = false
-        private set
-    private val gen1StationFiles = HashMap<String, SimpleFileInfo>()
-    private var gen1GameCode: Int = 0
+        internal set
+    internal val gen1StationFiles = HashMap<String, SimpleFileInfo>()
+    internal var gen1GameCode: Int = 0
 
     var isRpf3Group: Boolean = false
-        private set
-    private val rpf3StationArchives = HashMap<String, Rpf3Archive>()
-    private val rpf3StationKeys = HashMap<String, String>()
-    private var rpf3ExtraTracksArchive: Rpf3Archive? = null
-    private var rpf3Ep1SfxArchive: Rpf3Archive? = null
-    private var rpf3Ep2SfxArchive: Rpf3Archive? = null
-    private var rpf3AdvertsArchive: Rpf3Archive? = null
-    private var rpf3NewsArchive: Rpf3Archive? = null
-    private var rpf3WeatherArchive: Rpf3Archive? = null
+        internal set
+    internal val rpf3StationArchives = HashMap<String, Rpf3Archive>()
+    internal val rpf3StationKeys = HashMap<String, String>()
+    internal var rpf3ExtraTracksArchive: Rpf3Archive? = null
+    internal var rpf3Ep1SfxArchive: Rpf3Archive? = null
+    internal var rpf3Ep2SfxArchive: Rpf3Archive? = null
+    internal var rpf3AdvertsArchive: Rpf3Archive? = null
+    internal var rpf3NewsArchive: Rpf3Archive? = null
+    internal var rpf3WeatherArchive: Rpf3Archive? = null
 
     var isRpf7Group: Boolean = false
-        private set
-    private val rpf7StationArchives = HashMap<String, Rpf7Archive>()
-    private val rpf7StationKeys = HashMap<String, String>()
-    private var rpf7AdvertsArchive: Rpf7Archive? = null
-    private var rpf7NewsArchive: Rpf7Archive? = null
+        internal set
+    internal val rpf7StationArchives = HashMap<String, Rpf7Archive>()
+    internal val rpf7StationKeys = HashMap<String, String>()
+    internal var rpf7AdvertsArchive: Rpf7Archive? = null
+    internal var rpf7NewsArchive: Rpf7Archive? = null
     var mediaId: String = ""
     var isValid: Boolean = true
     var isGen2RawGroup: Boolean = false
     var rawContainerType: Gen2ContainerType? = null
-    private val rawStreamUris = HashMap<String, Uri>()
+    internal val rawStreamUris = HashMap<String, Uri>()
     private val archiveCache = HashMap<String, Gen2StreamArchive>()
 
     companion object {
@@ -213,50 +218,157 @@ class StationGroup(val folderDoc: DocumentFile, private val context: Context) {
                 scanRecursive(child, context, results, depth + 1, maxDepth)
             }
         }
+
+        fun fromCachedDescriptor(desc: LibraryIndexCache.CachedGroupDescriptor, context: Context): StationGroup {
+            val doc = if (desc.folderUri.isNotBlank()) {
+                try {
+                    DocumentFile.fromTreeUri(context, Uri.parse(desc.folderUri))
+                } catch (_: Exception) { null }
+            } else null
+            val group = StationGroup(doc, context, skipScan = true)
+            group.generation = desc.generation
+            group.groupName = desc.groupName
+            group.mediaId = desc.groupId
+            group.isValid = true
+
+            group.isGen1RawGroup = (desc.formatType == "GEN1_RAW")
+            group.gen1GameCode = desc.gameCode
+
+            group.isGen2RawGroup = (desc.formatType == "GEN2_RAW")
+            group.rawContainerType = desc.rawContainerType?.let { runCatching { Gen2ContainerType.valueOf(it) }.getOrNull() }
+            desc.rawStreamUris.forEach { (code, u) -> group.rawStreamUris[code] = Uri.parse(u) }
+
+            group.isRpf3Group = (desc.formatType == "RPF3")
+            group.isRpf7Group = (desc.formatType == "RPF7")
+
+            if (group.isRpf3Group) {
+                desc.sharedUris["extra_tracks"]?.let { group.rpf3ExtraTracksArchive = Rpf3Archive(context, "radio_extratracks.rpf", Uri.parse(it)) }
+                desc.sharedUris["ep1_sfx"]?.let { group.rpf3Ep1SfxArchive = Rpf3Archive(context, "ep1_sfx.rpf", Uri.parse(it)) }
+                desc.sharedUris["ep2_sfx"]?.let { group.rpf3Ep2SfxArchive = Rpf3Archive(context, "ep2_sfx.rpf", Uri.parse(it)) }
+                desc.sharedUris["adverts"]?.let { group.rpf3AdvertsArchive = Rpf3Archive(context, "radio_adverts.rpf", Uri.parse(it)) }
+                desc.sharedUris["news"]?.let { group.rpf3NewsArchive = Rpf3Archive(context, "radio_news.rpf", Uri.parse(it)) }
+                desc.sharedUris["weather"]?.let { group.rpf3WeatherArchive = Rpf3Archive(context, "radio_weather.rpf", Uri.parse(it)) }
+            } else if (group.isRpf7Group) {
+                desc.sharedUris["adverts"]?.let { group.rpf7AdvertsArchive = Rpf7Archive(context, "radio_adverts.rpf", Uri.parse(it)) }
+                desc.sharedUris["news"]?.let { group.rpf7NewsArchive = Rpf7Archive(context, "radio_news.rpf", Uri.parse(it)) }
+            }
+
+            val sList = ArrayList<MediaItem>(desc.stations.size)
+            for (st in desc.stations) {
+                val extras = Bundle().apply {
+                    putString("media_id", st.mediaId)
+                    putString("group_name", desc.groupName)
+                    for ((k, v) in st.extras) {
+                        putString(k, v)
+                    }
+                }
+                val icon = st.iconUri?.let { Uri.parse(it) }
+                val stMeta = MediaMetadata.Builder()
+                    .setTitle(st.name)
+                    .setDisplayTitle(st.name)
+                    .setSubtitle(desc.groupName)
+                    .setArtist(desc.groupName)
+                    .setAlbumTitle(desc.groupName)
+                    .setIsPlayable(true)
+                    .setIsBrowsable(false)
+                    .apply { if (icon != null) setArtworkUri(icon) }
+                    .setExtras(extras)
+                    .build()
+                val item = MediaItem.Builder()
+                    .setMediaId(st.mediaId)
+                    .setMediaMetadata(stMeta)
+                    .build()
+                sList.add(item)
+
+                if (group.isGen1RawGroup && st.fileUri.isNotBlank()) {
+                    val uri = Uri.parse(st.fileUri)
+                    val sfi = SimpleFileInfo(uri, st.name, uri.lastPathSegment ?: "", false)
+                    group.gen1StationFiles[st.mediaId] = sfi
+                    group.gen1StationFiles[st.name] = sfi
+                } else if (group.isRpf3Group && st.fileUri.isNotBlank()) {
+                    val rName = st.rpfName.ifBlank { st.archiveKey }
+                    val arch = when {
+                        rName.equals("ep1_sfx.rpf", ignoreCase = true) -> group.rpf3Ep1SfxArchive ?: Rpf3Archive(context, rName, Uri.parse(st.fileUri))
+                        rName.equals("ep2_sfx.rpf", ignoreCase = true) -> group.rpf3Ep2SfxArchive ?: Rpf3Archive(context, rName, Uri.parse(st.fileUri))
+                        else -> Rpf3Archive(context, rName, Uri.parse(st.fileUri))
+                    }
+                    group.rpf3StationArchives[st.mediaId] = arch
+                    group.rpf3StationArchives[st.name] = arch
+                    group.rpf3StationKeys[st.mediaId] = st.archiveKey.ifBlank { rName.lowercase() }
+                    group.rpf3StationKeys[st.name] = st.archiveKey.ifBlank { rName.lowercase() }
+                } else if (group.isRpf7Group && st.fileUri.isNotBlank()) {
+                    val rName = st.rpfName.ifBlank { st.archiveKey }
+                    val arch = Rpf7Archive(context, rName, Uri.parse(st.fileUri))
+                    group.rpf7StationArchives[st.mediaId] = arch
+                    group.rpf7StationArchives[st.name] = arch
+                    group.rpf7StationKeys[st.mediaId] = st.archiveKey.ifBlank { rName.lowercase() }
+                    group.rpf7StationKeys[st.name] = st.archiveKey.ifBlank { rName.lowercase() }
+                }
+            }
+            group.stationList = sList
+
+            val logo = desc.logoUri?.let { Uri.parse(it) }
+            val gMeta = MediaMetadata.Builder()
+                .setTitle(desc.groupName)
+                .setDisplayTitle(desc.groupName)
+                .setIsPlayable(false)
+                .setIsBrowsable(true)
+                .apply { if (logo != null) setArtworkUri(logo) }
+                .setExtras(Bundle().apply { putString("media_id", desc.groupId) })
+                .build()
+            group.mediaItem = MediaItem.Builder()
+                .setMediaId(desc.groupId)
+                .setMediaMetadata(gMeta)
+                .build()
+
+            return group
+        }
     }
 
     
 init {
-        val rpfScanFiles = try {
-            folderDoc.listSimpleFiles(context)
-        } catch (e: Exception) {
-            emptyArray()
-        }
-        val detectedRpf7Files = detectRpf7Rpfs(rpfScanFiles)
-        val detectedRpfFiles = if (detectedRpf7Files.isEmpty()) detectRpf3Rpfs(rpfScanFiles) else emptyList()
-        val detectedGen1Pair = if (detectedRpf7Files.isEmpty() && detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
-        if (detectedRpf7Files.isNotEmpty()) {
-            setupRpf7Group(rpfScanFiles, detectedRpf7Files)
-        } else if (detectedRpfFiles.isNotEmpty()) {
-            setupRpf3Group(rpfScanFiles, detectedRpfFiles)
-        } else if (detectedGen1Pair != null) {
-            setupGen1RawGroup(rpfScanFiles, detectedGen1Pair.first, detectedGen1Pair.second)
-        } else {
-
-        val simpleFiles = try {
-            folderDoc.listSimpleFiles(context)
-        } catch (e: Exception) {
-            GTRadioLogger.log("StationGroup.init: listSimpleFiles failed on '${folderDoc.name}', falling back to listFiles()", e)
-            try {
-                folderDoc.listFiles().map {
-                    SimpleFileInfo(it.uri, it.name ?: "", it.uri.lastPathSegment ?: "", it.isDirectory)
-                }.toTypedArray()
-            } catch (_: Exception) {
+        if (!skipScan && folderDoc != null) {
+            val rpfScanFiles = try {
+                folderDoc.listSimpleFiles(context)
+            } catch (e: Exception) {
                 emptyArray()
             }
-        }
+            val detectedRpf7Files = detectRpf7Rpfs(rpfScanFiles)
+            val detectedRpfFiles = if (detectedRpf7Files.isEmpty()) detectRpf3Rpfs(rpfScanFiles) else emptyList()
+            val detectedGen1Pair = if (detectedRpf7Files.isEmpty() && detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
+            if (detectedRpf7Files.isNotEmpty()) {
+                setupRpf7Group(rpfScanFiles, detectedRpf7Files)
+            } else if (detectedRpfFiles.isNotEmpty()) {
+                setupRpf3Group(rpfScanFiles, detectedRpfFiles)
+            } else if (detectedGen1Pair != null) {
+                setupGen1RawGroup(rpfScanFiles, detectedGen1Pair.first, detectedGen1Pair.second)
+            } else {
 
-        if (!detectGen2RawStreams(simpleFiles)) {
-            setupDataFromJson(folderDoc, simpleFiles)
-        }
+            val simpleFiles = try {
+                folderDoc.listSimpleFiles(context)
+            } catch (e: Exception) {
+                GTRadioLogger.log("StationGroup.init: listSimpleFiles failed on '${folderDoc.name}', falling back to listFiles()", e)
+                try {
+                    folderDoc.listFiles().map {
+                        SimpleFileInfo(it.uri, it.name ?: "", it.uri.lastPathSegment ?: "", it.isDirectory)
+                    }.toTypedArray()
+                } catch (_: Exception) {
+                    emptyArray()
+                }
+            }
 
-        mediaItem = getMediaItem(folderDoc, simpleFiles, groupName)
-        stationList = if (isGen2RawGroup || isRpf3Group || isGen1RawGroup || isRpf7Group) {
-            getGen2RawStationsList()
-        } else {
-            getStationsList(folderDoc)
-        }
-    
+            if (!detectGen2RawStreams(simpleFiles)) {
+                setupDataFromJson(folderDoc, simpleFiles)
+            }
+
+            mediaItem = getMediaItem(folderDoc, simpleFiles, groupName)
+            stationList = if (isGen2RawGroup || isRpf3Group || isGen1RawGroup || isRpf7Group) {
+                getGen2RawStationsList()
+            } else {
+                getStationsList(folderDoc)
+            }
+        
+            }
         }
     }
 
@@ -424,7 +536,6 @@ init {
     }
 
     private fun setupRpf3Group(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
-        Rpf3MetadataRepository.ensureLoaded(context)
         isRpf3Group = true
         generation = 3
 
@@ -903,13 +1014,11 @@ init {
 
     private fun getGen2RawStationsList(): ArrayList<MediaItem> {
         val list = ArrayList<MediaItem>()
-        Gen2MetadataRepository.ensureLoaded(context)
 
         for ((code, _) in rawStreamUris) {
             if (code == "ADVERTS") continue
-            val stMeta = Gen2MetadataRepository.getByStreamCode(context, code)
-            val stName = stMeta?.stationName ?: Gen2MetadataRepository.defaultStations[code]?.first ?: code
-            val mediaId = "${folderDoc.uri}#SA_RAW#$code"
+            val stName = Gen2MetadataRepository.defaultStations[code]?.first ?: code
+            val mediaId = "${folderDoc?.uri}#SA_RAW#$code"
 
             val themePack = DynamicThemeManager.findThemeForSeries(context, groupName)
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stName) }
@@ -1028,5 +1137,86 @@ init {
 
     fun getStationIndex(stationMediaId: String): Int {
         return stationList.indexOfFirst { x -> x.mediaId == stationMediaId }
+    }
+
+    fun toCachedDescriptor(): LibraryIndexCache.CachedGroupDescriptor {
+        val format = when {
+            isGen1RawGroup -> "GEN1_RAW"
+            isGen2RawGroup -> "GEN2_RAW"
+            isRpf3Group -> "RPF3"
+            isRpf7Group -> "RPF7"
+            else -> when (generation) {
+                1 -> "GEN1_FOLDER"
+                2 -> "GEN2_FOLDER"
+                3 -> "GEN3_FOLDER"
+                else -> "GEN2_FOLDER"
+            }
+        }
+        val shared = HashMap<String, String>()
+        rpf3ExtraTracksArchive?.rpfUri?.let { shared["extra_tracks"] = it.toString() }
+        rpf3Ep1SfxArchive?.rpfUri?.let { shared["ep1_sfx"] = it.toString() }
+        rpf3Ep2SfxArchive?.rpfUri?.let { shared["ep2_sfx"] = it.toString() }
+        rpf3AdvertsArchive?.rpfUri?.let { shared["adverts"] = it.toString() }
+        rpf3NewsArchive?.rpfUri?.let { shared["news"] = it.toString() }
+        rpf3WeatherArchive?.rpfUri?.let { shared["weather"] = it.toString() }
+        rpf7AdvertsArchive?.rpfUri?.let { shared["adverts"] = it.toString() }
+        rpf7NewsArchive?.rpfUri?.let { shared["news"] = it.toString() }
+
+        val cachedStations = stationList.map { st ->
+            val meta = st.mediaMetadata
+            val exMap = HashMap<String, String>()
+            meta.extras?.let { b ->
+                for (k in b.keySet()) {
+                    b.getString(k)?.let { exMap[k] = it }
+                }
+            }
+            var fUri = ""
+            var archKey = ""
+            var rpf = ""
+            if (isRpf3Group) {
+                val a = rpf3StationArchives[st.mediaId]
+                fUri = a?.rpfUri?.toString() ?: ""
+                rpf = a?.rpfName ?: ""
+                archKey = rpf3StationKeys[st.mediaId] ?: ""
+            } else if (isRpf7Group) {
+                val a = rpf7StationArchives[st.mediaId]
+                fUri = a?.rpfUri?.toString() ?: ""
+                rpf = a?.rpfName ?: ""
+                archKey = rpf7StationKeys[st.mediaId] ?: ""
+            } else if (isGen1RawGroup) {
+                val sfi = gen1StationFiles[st.mediaId]
+                fUri = sfi?.uri?.toString() ?: ""
+                archKey = sfi?.name ?: ""
+            } else if (isGen2RawGroup) {
+                val code = st.mediaId.substringAfter("#SA_RAW#")
+                fUri = rawStreamUris[code]?.toString() ?: ""
+                archKey = code
+            } else {
+                fUri = st.mediaId
+            }
+            LibraryIndexCache.CachedStationDescriptor(
+                mediaId = st.mediaId,
+                name = meta.title?.toString() ?: "",
+                fileUri = fUri,
+                archiveKey = archKey,
+                rpfName = rpf,
+                iconUri = meta.artworkUri?.toString(),
+                extras = exMap
+            )
+        }
+
+        return LibraryIndexCache.CachedGroupDescriptor(
+            groupId = mediaItem.mediaId,
+            groupName = groupName,
+            folderUri = folderDoc?.uri?.toString() ?: "",
+            formatType = format,
+            generation = generation,
+            gameCode = gen1GameCode,
+            rawContainerType = rawContainerType?.name,
+            rawStreamUris = rawStreamUris.mapValues { it.value.toString() },
+            sharedUris = shared,
+            logoUri = if (::mediaItem.isInitialized) mediaItem.mediaMetadata.artworkUri?.toString() else null,
+            stations = cachedStations
+        )
     }
 }

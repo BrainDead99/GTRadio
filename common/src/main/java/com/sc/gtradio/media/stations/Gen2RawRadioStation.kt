@@ -154,6 +154,7 @@ import java.util.*
     private var currentSegmentUris: List<Uri> = emptyList()
     private var currentSongGroup: Gen2SongGroup? = null
     private var currentSongMainUri: Uri? = null
+    private var currentSongWindowIndices: Set<Int> = emptySet()
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedWindowIndex: Int = 0
     private var stoppedPositionMs: Long = 0L
@@ -284,8 +285,8 @@ import java.util.*
     private var isStationActive = false
 
     private fun updateMetadataForWindowIndex(winIdx: Int) {
-        if (lastSegment == RadioSegmentType.Song && currentSongGroup != null && currentSongMainUri != null) {
-            if (winIdx in currentSegmentUris.indices && currentSegmentUris[winIdx] == currentSongMainUri) {
+        if (lastSegment == RadioSegmentType.Song && currentSongGroup != null) {
+            if (winIdx in currentSongWindowIndices) {
                 applySongMetadata(currentSongGroup!!)
             } else {
                 setStationOnlyMetadata()
@@ -390,7 +391,6 @@ import java.util.*
             player.exoPlayer.removeListener(activeListener!!)
             activeListener = null
         }
-        currentSongMainUri = null
         player.stopInternal()
     }
 
@@ -539,6 +539,7 @@ import java.util.*
         interludeChainCount += 1
         currentSongGroup = null
         currentSongMainUri = null
+        currentSongWindowIndices = emptySet()
         currentSegmentUris = listOf(uri)
         return true
     }
@@ -551,6 +552,7 @@ import java.util.*
         interludeChainCount += 1
         currentSongGroup = null
         currentSongMainUri = null
+        currentSongWindowIndices = emptySet()
         currentSegmentUris = listOf(uri)
         return true
     }
@@ -572,6 +574,7 @@ import java.util.*
         interludeChainCount += 1
         currentSongGroup = null
         currentSongMainUri = null
+        currentSongWindowIndices = emptySet()
         currentSegmentUris = list
         return true
     }
@@ -607,6 +610,7 @@ import java.util.*
         currentSongGroup = song
         currentSongMainUri = mainUri
         currentSegmentUris = list
+        currentSongWindowIndices = list.indices.toSet()
         return true
     }
 

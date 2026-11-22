@@ -414,10 +414,12 @@ data class Rpf7ClipRef(
     private fun updateMetadataForWindowIndex(winIdx: Int, expectedGen: Int = playGeneration.get()) {
         if (lastSegment == RadioSegmentType.Song && currentSongItem != null) {
             val mainIdx = currentSegmentUris.size - 1
-            if (winIdx == mainIdx) {
+            if (winIdx in currentSegmentUris.indices) {
                 applySongOrShowMetadata(currentSongItem!!)
-                if (activeMixMarkers.isNotEmpty()) {
+                if (winIdx == mainIdx && activeMixMarkers.isNotEmpty()) {
                     startMixPoller(expectedGen)
+                } else {
+                    stopMixPoller()
                 }
             } else {
                 stopMixPoller()

@@ -84,6 +84,8 @@ fun buildStationMediaMetadata(
     val artBytes = compressArtworkToJpeg(art)
     if (artBytes != null) {
         b.setArtworkData(artBytes, MediaMetadata.PICTURE_TYPE_FRONT_COVER)
+    } else {
+        b.setArtworkData(null, null)
     }
 
     val finalExtras = Bundle(extras ?: Bundle())

@@ -29,13 +29,14 @@ data class AlbumHint(
 object AlbumHintRepository {
 
     private val STOP_WORDS_KEY = setOf("the", "a", "an", "in", "of", "on", "at", "to")
+    private val KNOWN_HINT_FILES = listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
 
     @Volatile
     private var loaded = false
 
-    private val hintMap = ConcurrentHashMap<String, AlbumHint>()
+    private val hintMap = ConcurrentHashMap<String, AlbumHint>(4096)
     private val allHints = ArrayList<AlbumHint>()
-    private val normKeyCache = ConcurrentHashMap<String, String>()
+    private val normKeyCache = ConcurrentHashMap<String, String>(2048)
 
     private val DIACRITICS_REGEX = Regex("\\p{M}+")
     private val EXS_REGEX = Regex("\\bex['’]?s\\b", RegexOption.IGNORE_CASE)
@@ -65,9 +66,7 @@ object AlbumHintRepository {
         if (input.isBlank()) return ""
         normKeyCache[input]?.let { return it }
         var s = stripDiacritics(input).lowercase(Locale.ROOT)
-        if (s.indexOf('$') >= 0) s = s.replace("$", "s")
-        if (s.indexOf('&') >= 0) s = s.replace("&", " and ")
-        if (s.indexOf('+') >= 0) s = s.replace("+", " and ")
+        s = applySimpleSubstitutions(s)
         if (s.contains("ex")) s = EXS_REGEX.replace(s, "exes")
         if (s.contains("cok")) s = COKANE_REGEX.replace(s, "cocaine")
         if (s.contains("rabbi")) s = RABBITT_REGEX.replace(s, "rabbit")
@@ -78,8 +77,7 @@ object AlbumHintRepository {
         if (s.contains("runin")) s = RUNIN_REGEX.replace(s, "running")
         if (s.contains("runnin")) s = RUNNIN_REGEX.replace(s, "running")
         if (s.contains("swingin")) s = SWINGIN_REGEX.replace(s, "swinging")
-        s = NON_ALPHANUMERIC_REGEX.replace(s, " ")
-        s = WHITESPACE_REGEX.replace(s, " ").trim()
+        s = stripNonAlphanumeric(s)
         if (s.startsWith("the ")) {
             s = s.substring(4).trim()
         }
@@ -87,7 +85,42 @@ object AlbumHintRepository {
         return s
     }
 
+    private fun applySimpleSubstitutions(s: String): String {
+        if (s.indexOf('$') < 0 && s.indexOf('&') < 0 && s.indexOf('+') < 0) return s
+        val sb = StringBuilder(s.length + 8)
+        for (c in s) {
+            when (c) {
+                '$' -> sb.append('s')
+                '&' -> sb.append(" and ")
+                '+' -> sb.append(" and ")
+                else -> sb.append(c)
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun stripNonAlphanumeric(s: String): String {
+        val sb = StringBuilder(s.length)
+        var lastWasSpace = false
+        for (c in s) {
+            if (Character.isLetterOrDigit(c)) {
+                sb.append(c)
+                lastWasSpace = false
+            } else {
+                if (!lastWasSpace && sb.isNotEmpty()) {
+                    sb.append(' ')
+                    lastWasSpace = true
+                }
+            }
+        }
+        if (sb.isNotEmpty() && sb[sb.length - 1] == ' ') {
+            sb.setLength(sb.length - 1)
+        }
+        return sb.toString()
+    }
+
     fun cleanTitleNoParens(s: String): String {
+        if (!s.contains('(') && !s.contains('[') && !s.contains(')') && !s.contains(']')) return s.trim()
         return BRACKETS_REGEX.replace(PARENS_REGEX.replace(s, ""), "").trim()
     }
 
@@ -97,6 +130,7 @@ object AlbumHintRepository {
     }
 
     fun stripDigits(s: String): String {
+        if (!s.any { it.isDigit() }) return s
         return WHITESPACE_REGEX.replace(DIGITS_REGEX.replace(s, ""), " ").trim()
     }
 
@@ -104,7 +138,7 @@ object AlbumHintRepository {
         val a = stripDiacritics(artist).lowercase(Locale.ROOT)
         val parts = ARTIST_SPLIT_REGEX.split(a)
         val first = if (parts.isNotEmpty()) parts[0] else a
-        var res = WHITESPACE_REGEX.replace(NON_ALPHANUMERIC_REGEX.replace(first, " "), " ").trim()
+        var res = stripNonAlphanumeric(first)
         if (res.startsWith("the ")) {
             res = res.substring(4).trim()
         }
@@ -151,13 +185,7 @@ object AlbumHintRepository {
         val startTimeMs = SystemClock.elapsedRealtime()
         loaded = true
 
-        val assetFiles = try {
-            val list = context.assets.list("")
-            val filtered = list?.filter { it.startsWith("album_hints_") && it.endsWith(".tsv") }?.sorted()
-            if (!filtered.isNullOrEmpty()) filtered else listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
-        } catch (_: Exception) {
-            listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
-        }
+        val assetFiles = KNOWN_HINT_FILES
 
         val parsedHints = ArrayList<AlbumHint>(1024)
         for (filename in assetFiles) {

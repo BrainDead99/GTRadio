@@ -98,6 +98,7 @@ import java.util.*
     private var currentSegmentUris: List<Uri> = emptyList()
     private var currentSongMainUri: Uri? = null
     private var currentSongFolderName: String = ""
+    private var currentSongWindowIndices: Set<Int> = emptySet()
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedWindowIndex: Int = 0
     private var stoppedPositionMs: Long = 0L
@@ -271,7 +272,7 @@ import java.util.*
 
     private fun updateMetadataForWindowIndex(winIdx: Int) {
         if (lastSegment == RadioSegmentType.Song && currentSongMainUri != null) {
-            if (winIdx in currentSegmentUris.indices && currentSegmentUris[winIdx] == currentSongMainUri) {
+            if (winIdx in currentSongWindowIndices) {
                 updateSongMetadataFromUri(currentSongMainUri!!, currentSongFolderName)
             } else {
                 setStationOnlyMetadata()
@@ -543,6 +544,7 @@ import java.util.*
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongMainUri = null
+        currentSongWindowIndices = emptySet()
         currentSegmentUris = listOf(announcerQueue.next())
         return true
     }
@@ -553,6 +555,7 @@ import java.util.*
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongMainUri = null
+        currentSongWindowIndices = emptySet()
         currentSegmentUris = listOf(uri)
         return true
     }
@@ -569,6 +572,7 @@ import java.util.*
         consecutiveSongs = 0
         interludeChainCount += 1
         currentSongMainUri = null
+        currentSongWindowIndices = emptySet()
         currentSegmentUris = list
         return true
     }
@@ -607,6 +611,7 @@ import java.util.*
         currentSongMainUri = mainUri
         currentSongFolderName = song.folderName
         currentSegmentUris = list
+        currentSongWindowIndices = list.indices.toSet()
         return true
     }
 
