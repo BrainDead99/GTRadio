@@ -1,6 +1,6 @@
 package com.sc.gtradio.media.stations
 
-import com.sc.gtradio.media.GTRadioPlayer
+import com.sc.gtradio.media.*
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
@@ -110,7 +110,7 @@ data class Rpf7ClipRef(
     private var songsSinceLastBreak = 0
     private var consecutiveSongs = 0
     private var interludeChainCount = 0
-    private var activeHourBucket = -1
+    private var activeTodBucket: TimeOfDayBucket? = null
     private var activeListener: Player.Listener? = null
 
     private var currentSegmentUris: List<Uri> = emptyList()
@@ -279,24 +279,15 @@ data class Rpf7ClipRef(
         )
     }
 
-    private fun getHourBucket(): Int {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        return when {
-            hour in 4..11 -> 0
-            hour in 12..16 -> 1
-            hour in 17..22 -> 2
-            else -> 3
-        }
-    }
-
     private fun rebuildTimeOfDayQueue() {
-        val b = getHourBucket()
-        activeHourBucket = b
+        val b = BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN3_RPF7)
+        activeTodBucket = b
         val list = when (b) {
-            0 -> morningDjList
-            1 -> afternoonDjList.ifEmpty { morningDjList }
-            2 -> eveningDjList.ifEmpty { afternoonDjList.ifEmpty { morningDjList } }
-            else -> nightDjList.ifEmpty { eveningDjList.ifEmpty { morningDjList } }
+            TimeOfDayBucket.MORNING -> morningDjList
+            TimeOfDayBucket.AFTERNOON -> afternoonDjList.ifEmpty { morningDjList }
+            TimeOfDayBucket.EVENING -> eveningDjList.ifEmpty { afternoonDjList.ifEmpty { morningDjList } }
+            TimeOfDayBucket.NIGHT -> nightDjList.ifEmpty { eveningDjList.ifEmpty { morningDjList } }
+            else -> emptyList()
         }
         timeOfDayDjQueue.reset(list)
     }
@@ -739,7 +730,7 @@ data class Rpf7ClipRef(
     private fun prepareDjOrWeatherSegment(): Boolean {
         stopMixPoller()
         lastSegment = RadioSegmentType.DJChatter
-        if (getHourBucket() != activeHourBucket) rebuildTimeOfDayQueue()
+        if (BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN3_RPF7) != activeTodBucket) rebuildTimeOfDayQueue()
 
         val useTod = timeOfDayDjQueue.isNotEmpty() && (generalDjQueue.isEmpty() || rng.nextInt(100) < 35)
         val ref = if (useTod) timeOfDayDjQueue.next()

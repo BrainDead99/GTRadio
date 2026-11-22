@@ -65,6 +65,9 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
     private val subscriptions = HashMap<String, MutableSet<SubscriptionCallback>>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var currentExtras: Bundle? = null
+    private var lastPostedPlaying: Boolean? = null
+    private var lastPostedState: GTRadioPlaybackState? = null
+    private var lastPostedMetadata: MediaMetadata? = null
 
     init {
         val sessionToken = SessionToken(context, serviceComponent)
@@ -135,19 +138,13 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
                 val res = future.get()
                 if (res != null && res.resultCode == LibraryResult.RESULT_SUCCESS) {
                     val children = res.value ?: emptyList()
-                    mainHandler.post {
-                        callbacks.forEach { it.onChildrenLoaded(parentId, children) }
-                    }
+                    callbacks.forEach { it.onChildrenLoaded(parentId, children) }
                 } else {
-                    mainHandler.post {
-                        callbacks.forEach { it.onError(parentId) }
-                    }
+                    callbacks.forEach { it.onError(parentId) }
                 }
             } catch (e: Exception) {
                 GTRadioLogger.log("MusicServiceConnection: fetchChildren failed for $parentId", e)
-                mainHandler.post {
-                    callbacks.forEach { it.onError(parentId) }
-                }
+                callbacks.forEach { it.onError(parentId) }
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -166,6 +163,29 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
         return true
     }
 
+    private fun bundleEquals(a: Bundle?, b: Bundle?): Boolean {
+        if (a === b) return true
+        if (a == null || b == null) return false
+        if (a.size() != b.size()) return false
+        for (key in a.keySet()) {
+            if (!b.containsKey(key)) return false
+            if (a.get(key) != b.get(key)) return false
+        }
+        return true
+    }
+
+    private fun metadataEquals(a: MediaMetadata?, b: MediaMetadata?): Boolean {
+        if (a === b) return true
+        if (a == null || b == null) return false
+        if (a.title != b.title || a.subtitle != b.subtitle || a.albumTitle != b.albumTitle ||
+            a.writer != b.writer || a.trackNumber != b.trackNumber) return false
+        val aArt = a.artworkData
+        val bArt = b.artworkData
+        if ((aArt == null) != (bArt == null)) return false
+        if (aArt != null && bArt != null && aArt.size != bArt.size) return false
+        return bundleEquals(a.extras, b.extras)
+    }
+
     private fun updatePlaybackState() {
         val browser = mediaBrowser ?: return
         val playing = browser.isPlaying
@@ -174,19 +194,41 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
         val canPrev = browser.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS) ||
             browser.isCommandAvailable(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
         val pos = browser.currentPosition.coerceAtLeast(0L)
+        val speed = browser.playbackParameters.speed
+        val meta = browser.mediaMetadata
 
-        val state = GTRadioPlaybackState(
-            isPlaying = playing,
-            isSkipToNextEnabled = canNext,
-            isSkipToPreviousEnabled = canPrev,
-            position = pos,
-            lastPositionUpdateTime = SystemClock.elapsedRealtime(),
-            playbackSpeed = browser.playbackParameters.speed,
-            extras = currentExtras
-        )
-        isPlaying.postValue(playing)
-        playbackState.postValue(state)
-        nowPlaying.postValue(browser.mediaMetadata)
+        if (lastPostedPlaying != playing) {
+            lastPostedPlaying = playing
+            isPlaying.postValue(playing)
+        }
+
+        val lastState = lastPostedState
+        val isSeek = lastState != null && Math.abs(pos - lastState.currentPlayBackPosition) > 1000L
+        val controlsChanged = lastState == null ||
+            lastState.isPlaying != playing ||
+            lastState.isSkipToNextEnabled != canNext ||
+            lastState.isSkipToPreviousEnabled != canPrev ||
+            lastState.playbackSpeed != speed ||
+            !bundleEquals(lastState.extras, currentExtras)
+
+        if (controlsChanged || isSeek) {
+            val state = GTRadioPlaybackState(
+                isPlaying = playing,
+                isSkipToNextEnabled = canNext,
+                isSkipToPreviousEnabled = canPrev,
+                position = pos,
+                lastPositionUpdateTime = SystemClock.elapsedRealtime(),
+                playbackSpeed = speed,
+                extras = currentExtras
+            )
+            lastPostedState = state
+            playbackState.postValue(state)
+        }
+
+        if (lastPostedMetadata == null || !metadataEquals(lastPostedMetadata, meta)) {
+            lastPostedMetadata = meta
+            nowPlaying.postValue(meta)
+        }
     }
 
     inner class TransportControls {
@@ -278,9 +320,11 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
         }
 
         override fun onExtrasChanged(controller: MediaController, extras: Bundle) {
-            currentExtras = extras
-            sessionExtras.postValue(extras)
-            updatePlaybackState()
+            if (!bundleEquals(currentExtras, extras)) {
+                currentExtras = extras
+                sessionExtras.postValue(extras)
+                updatePlaybackState()
+            }
         }
 
         override fun onDisconnected(controller: MediaController) {
@@ -298,7 +342,10 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
         }
 
         override fun onMediaMetadataChanged(metadata: MediaMetadata) {
-            nowPlaying.postValue(metadata)
+            if (lastPostedMetadata == null || !metadataEquals(lastPostedMetadata, metadata)) {
+                lastPostedMetadata = metadata
+                nowPlaying.postValue(metadata)
+            }
             updatePlaybackState()
         }
 
@@ -328,8 +375,24 @@ val MediaMetadata.durationMs: Long
         return b.getLong("duration_ms", -1L)
     }
 
+private val metadataArtCache = android.util.LruCache<Int, Bitmap>(16)
+
 val MediaMetadata.iconBitmap: Bitmap?
-    get() = artworkData?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+    get() {
+        val bytes = artworkData ?: return null
+        if (bytes.isEmpty()) return null
+        val hash = bytes.contentHashCode()
+        synchronized(metadataArtCache) {
+            metadataArtCache.get(hash)?.let { if (!it.isRecycled) return it }
+        }
+        val bmp = runCatching { BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }.getOrNull()
+        if (bmp != null) {
+            synchronized(metadataArtCache) {
+                metadataArtCache.put(hash, bmp)
+            }
+        }
+        return bmp
+    }
 
 val MediaMetadata.isSong: Boolean
     get() = (trackNumber == 1) || (extras?.getBoolean("is_song") == true)

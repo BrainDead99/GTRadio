@@ -1,6 +1,6 @@
 package com.sc.gtradio.media.stations
 
-import com.sc.gtradio.media.GTRadioPlayer
+import com.sc.gtradio.media.*
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
@@ -86,6 +86,11 @@ data class Rpf3ClipRef(
 
     private val advertQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
     private val newsQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val weatherSunQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val weatherCloudQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val weatherFogQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val weatherRainQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
+    private val weatherWindQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
     private val weatherQueue = RandomizedDualHeadQueue<Rpf3ClipRef>(emptyList(), rng)
     private val songQueue = RandomizedDualHeadQueue<Rpf3SongItem>(emptyList(), rng)
     private val allSongItems = ArrayList<Rpf3SongItem>()
@@ -101,7 +106,7 @@ data class Rpf3ClipRef(
     private var songsSinceLastBreak = 0
     private var consecutiveSongs = 0
     private var interludeChainCount = 0
-    private var activeHourBucket = -1
+    private var activeTodBucket: TimeOfDayBucket? = null
     private var activeListener: Player.Listener? = null
 
     private var currentSegmentUris: List<Uri> = emptyList()
@@ -319,28 +324,40 @@ data class Rpf3ClipRef(
         newsQueue.reset(allNews)
 
         weatherArchive?.let { arch ->
-            weatherQueue.reset(arch.getFileEntries().filter { !it.isWaveBank }.map { Rpf3ClipRef(arch, it.name) })
-        }
-    }
-
-    private fun getHourBucket(): Int {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        return when {
-            hour in 4..11 -> 0
-            hour in 12..16 -> 1
-            hour in 17..22 -> 2
-            else -> 3
+            val allWeather = arch.getFileEntries().filter { !it.isWaveBank }.map { Rpf3ClipRef(arch, it.name) }
+            weatherQueue.reset(allWeather)
+            val suns = ArrayList<Rpf3ClipRef>()
+            val clouds = ArrayList<Rpf3ClipRef>()
+            val fogs = ArrayList<Rpf3ClipRef>()
+            val rains = ArrayList<Rpf3ClipRef>()
+            val winds = ArrayList<Rpf3ClipRef>()
+            for (w in allWeather) {
+                val u = w.trackKey.uppercase()
+                when {
+                    u.startsWith("SUN_") -> suns.add(w)
+                    u.startsWith("CLOUD_") -> clouds.add(w)
+                    u.startsWith("FOG_") -> fogs.add(w)
+                    u.startsWith("RAIN_") -> rains.add(w)
+                    u.startsWith("WIND_") -> winds.add(w)
+                }
+            }
+            weatherSunQueue.reset(suns)
+            weatherCloudQueue.reset(clouds)
+            weatherFogQueue.reset(fogs)
+            weatherRainQueue.reset(rains)
+            weatherWindQueue.reset(winds)
         }
     }
 
     private fun rebuildTimeOfDayQueue() {
-        val b = getHourBucket()
-        activeHourBucket = b
+        val b = BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN3_RPF3)
+        activeTodBucket = b
         val list = when (b) {
-            0 -> morningDjList
-            1 -> afternoonDjList.ifEmpty { morningDjList }
-            2 -> eveningDjList.ifEmpty { afternoonDjList }
-            else -> nightDjList.ifEmpty { eveningDjList }
+            TimeOfDayBucket.MORNING -> morningDjList
+            TimeOfDayBucket.AFTERNOON -> afternoonDjList.ifEmpty { morningDjList }
+            TimeOfDayBucket.EVENING -> eveningDjList.ifEmpty { afternoonDjList.ifEmpty { morningDjList } }
+            TimeOfDayBucket.NIGHT -> nightDjList.ifEmpty { eveningDjList.ifEmpty { afternoonDjList.ifEmpty { morningDjList } } }
+            else -> emptyList()
         }
         timeOfDayDjQueue.reset(list)
     }
@@ -735,11 +752,15 @@ data class Rpf3ClipRef(
 
     private fun prepareDjOrWeatherSegment(): Boolean {
         stopMixPoller()
-        if (weatherChatterEnabled && weatherArchive != null && weatherQueue.isNotEmpty() && rng.nextInt(100) < 22) {
+        val hasAnyWeather = weatherSunQueue.isNotEmpty() || weatherCloudQueue.isNotEmpty() ||
+            weatherFogQueue.isNotEmpty() || weatherRainQueue.isNotEmpty() ||
+            weatherWindQueue.isNotEmpty() || weatherQueue.isNotEmpty()
+        if (weatherChatterEnabled && weatherArchive != null && hasAnyWeather && rng.nextInt(100) < 22) {
             return prepareWeatherSegment()
         }
         lastSegment = RadioSegmentType.DJChatter
-        if (getHourBucket() != activeHourBucket) rebuildTimeOfDayQueue()
+        val currentBucket = BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN3_RPF3)
+        if (currentBucket != activeTodBucket) rebuildTimeOfDayQueue()
 
         val useTod = timeOfDayDjQueue.isNotEmpty() && (generalDjQueue.isEmpty() || rng.nextInt(100) < 35)
         val ref = if (useTod) timeOfDayDjQueue.next()
@@ -757,8 +778,24 @@ data class Rpf3ClipRef(
     private fun prepareWeatherSegment(): Boolean {
         stopMixPoller()
         lastSegment = RadioSegmentType.WeatherReport
-        if (!weatherChatterEnabled || weatherQueue.isEmpty()) return false
-        val wRef = weatherQueue.next()
+        if (!weatherChatterEnabled || weatherArchive == null) return false
+
+        val targetWeather = BroadcastAtmosphereClock.getWeather(context, SeriesEra.GEN3_RPF3)
+        GTRadioLogger.logVerbose("ATMOS") {
+            "[ATMOS] Rpf3[$stationName]: Choosing weather clip for condition $targetWeather"
+        }
+        val chosenQueue = when (targetWeather) {
+            WeatherState.SUN -> weatherSunQueue
+            WeatherState.CLOUD -> weatherCloudQueue
+            WeatherState.FOG -> weatherFogQueue
+            WeatherState.RAIN -> weatherRainQueue
+            WeatherState.WIND -> weatherWindQueue
+            else -> weatherSunQueue
+        }
+        val wRef = if (chosenQueue.isNotEmpty()) chosenQueue.next()
+        else if (weatherQueue.isNotEmpty()) weatherQueue.next()
+        else return false
+
         val wUri = wRef.archive.materializeAudioUri(wRef.trackKey) ?: return false
 
         val list = ArrayList<Uri>(2)

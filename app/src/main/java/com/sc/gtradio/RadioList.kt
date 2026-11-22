@@ -44,6 +44,7 @@ import kotlin.math.roundToInt
 
 class RadioList : Fragment() {
     var stationGroupId: String = ""
+    var groupName: String = ""
     private var _binding: FragmentRadiolistBinding? = null
     private var musicServiceConnection: MusicServiceConnection? = null
 
@@ -337,6 +338,7 @@ class RadioList : Fragment() {
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         stationGroupId = arguments?.getString("stationGroupId") ?: ""
+        groupName = arguments?.getString("groupName") ?: ""
         if (musicServiceConnection == null) {
             musicServiceConnection = InjectorUtils.provideMusicServiceConnection(requireContext()).also {
                 it.subscribe(stationGroupId, subscriptionCallback)
@@ -351,6 +353,14 @@ class RadioList : Fragment() {
         super.onViewCreated(view, savedInstanceState)
         binding.stationList.layoutManager = LinearLayoutManager(context)
         binding.stationList.adapter = listAdapter
+
+        val targetName = if (groupName.isNotBlank()) groupName else stationGroupId
+        val cachedPack = if (DynamicThemeManager.isDynamicThemeEnabled(requireContext())) {
+            DynamicThemeManager.getCachedThemeForSeries(targetName)
+        } else null
+        if (cachedPack?.hasFullThemeUi == true) {
+            applyDynamicThemeShell(cachedPack)
+        }
 
         musicServiceConnection?.playbackState?.observe(viewLifecycleOwner, playbackStateObserver)
         musicServiceConnection?.nowPlaying?.observe(viewLifecycleOwner, mediaMetadataObserver)
@@ -499,18 +509,9 @@ class RadioList : Fragment() {
         }
     }
 
-    private fun applyDynamicTheme(pack: DynamicThemePack?, children: List<MediaItem>) {
+    private fun applyDynamicThemeShell(pack: DynamicThemePack) {
         if (_binding == null) return
-
-        if (pack == null || !pack.hasFullThemeUi) {
-            activeThemePack = null
-            binding.dynamicThemeRoot.visibility = View.GONE
-            binding.defaultRadioContainer.visibility = View.VISIBLE
-            (activity as? MainActivity)?.setFullscreenThemeMode(false)
-            return
-        }
         activeThemePack = pack
-
         binding.defaultRadioContainer.visibility = View.GONE
         binding.dynamicThemeRoot.visibility = View.VISIBLE
         (activity as? MainActivity)?.setFullscreenThemeMode(true)
@@ -578,6 +579,22 @@ class RadioList : Fragment() {
                 bgHandler.postDelayed(bgCycleRunnable, pack.bgIntervalMs)
             }
         }
+    }
+
+    private fun applyDynamicTheme(pack: DynamicThemePack?, children: List<MediaItem>) {
+        if (_binding == null) return
+
+        if (pack == null || !pack.hasFullThemeUi) {
+            activeThemePack = null
+            binding.dynamicThemeRoot.visibility = View.GONE
+            binding.defaultRadioContainer.visibility = View.VISIBLE
+            (activity as? MainActivity)?.setFullscreenThemeMode(false)
+            return
+        }
+
+        applyDynamicThemeShell(pack)
+
+        val stripMode = isStripLayout(pack)
 
         // Build Station Icons
         binding.themeIconRow1.removeAllViews()
@@ -699,10 +716,16 @@ class RadioList : Fragment() {
 
         val stripMode = isStripLayout(pack)
         val isPlaying = currentPlaybackState.isPlaying
+        val sessionExtras = musicServiceConnection?.sessionExtras?.value
+        val playbackMode = sessionExtras?.getString(TracklistContract.EXTRA_PLAYBACK_MODE)
+            ?: currentPlaybackState.extras?.getString(TracklistContract.EXTRA_PLAYBACK_MODE)
+
         val activeMediaId = currentMetadata.mediaId
             ?: currentPlaybackState.extras?.getString(TracklistContract.EXTRA_STATION_ID)
+            ?: sessionExtras?.getString(TracklistContract.EXTRA_STATION_ID)
             ?: ""
         val activeGroupId = currentPlaybackState.extras?.getString(TracklistContract.EXTRA_STATION_GROUP_ID)
+            ?: sessionExtras?.getString(TracklistContract.EXTRA_STATION_GROUP_ID)
 
         // Check if pending tapped station should expire or cleared
         if (pendingTappedMediaId != null) {
@@ -711,10 +734,17 @@ class RadioList : Fragment() {
             }
         }
 
-        val activeBelongsToThisSeries = (activeMediaId.isNotBlank() && loadedStations.any { it.mediaId == activeMediaId }) ||
+        val isTracklist = playbackMode == "TRACKLIST" || activeMediaId.startsWith("tracklist_")
+        val isDifferentGroup = !activeGroupId.isNullOrBlank() && stationGroupId.isNotBlank() && activeGroupId != stationGroupId
+
+        val activeBelongsToThisSeries = if (isTracklist || isDifferentGroup) {
+            false
+        } else {
+            (activeMediaId.isNotBlank() && loadedStations.any { it.mediaId == activeMediaId }) ||
             (!activeGroupId.isNullOrBlank() && activeGroupId == stationGroupId) ||
             (!currentMetadata.groupName.isNullOrBlank() && loadedStations.any { it.mediaMetadata.albumTitle?.toString().equals(currentMetadata.groupName, ignoreCase = true) }) ||
             (!currentMetadata.stationName.isNullOrBlank() && loadedStations.any { it.mediaMetadata.title?.toString().equals(currentMetadata.stationName, ignoreCase = true) })
+        }
         val effectivePlaying = isPlaying && activeBelongsToThisSeries
 
         val activeStationFromMeta = if (activeBelongsToThisSeries) {

@@ -37,6 +37,10 @@ class Gen2StationMeta(
     val djOtherTracks = ArrayList<Int>()
     val djCallerStoryTracks = ArrayList<Int>()
     val djWeatherTracks = ArrayList<Int>()
+    val djWeatherSunTracks = ArrayList<Int>()
+    val djWeatherFogTracks = ArrayList<Int>()
+    val djWeatherRainTracks = ArrayList<Int>()
+    val djWeatherStormTracks = ArrayList<Int>()
     val songGroups = ArrayList<Gen2SongGroup>()
 }
 
@@ -186,7 +190,15 @@ object Gen2MetadataRepository {
                         u.contains("MORNING") -> st.djMorningTracks.add(num)
                         u.contains("EVENING") -> st.djEveningTracks.add(num)
                         u.contains("NIGHT") -> st.djNightTracks.add(num)
-                        u.contains("FOG") || u.contains("RAIN") || u.contains("SUN") || u.contains("STORM") || u.contains("WEATHER") -> st.djWeatherTracks.add(num)
+                        u.contains("FOG") || u.contains("RAIN") || u.contains("SUN") || u.contains("STORM") || u.contains("WEATHER") -> {
+                            st.djWeatherTracks.add(num)
+                            when {
+                                u.contains("SUN") -> st.djWeatherSunTracks.add(num)
+                                u.contains("FOG") -> st.djWeatherFogTracks.add(num)
+                                u.contains("RAIN") -> st.djWeatherRainTracks.add(num)
+                                u.contains("STORM") -> st.djWeatherStormTracks.add(num)
+                            }
+                        }
                         else -> st.djOtherTracks.add(num)
                     }
                 }

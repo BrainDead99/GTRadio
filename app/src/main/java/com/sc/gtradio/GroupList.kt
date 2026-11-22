@@ -64,11 +64,15 @@ class GroupList : Fragment() {
     }
 
     private val listAdapter = StationGroupMediaItemListAdapter { clickedItem ->
+        val groupName = clickedItem.mediaMetadata.title?.toString() ?: ""
         musicServiceConnection?.sendCommand(
             "setActiveStationGroupId",
-            Bundle().apply { putString("stationGroupId", clickedItem.mediaId) }
+            Bundle().apply {
+                putString("stationGroupId", clickedItem.mediaId)
+                putString("groupName", groupName)
+            }
         )
-        (activity as MainActivity).navigateToRadioList(clickedItem.mediaId)
+        (activity as MainActivity).navigateToRadioList(clickedItem.mediaId, groupName)
     }
 
     private val binding get() = _binding!!

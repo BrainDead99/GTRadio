@@ -41,6 +41,13 @@
         android:title="@string/playback_header"
         app:iconSpaceReserved="false"
         app:title="@string/playback_header">
+        <SwitchPreferenceCompat
+            android:defaultValue="true"
+            android:key="atmospheric_time_weather_cycle_enabled"
+            app:iconSpaceReserved="false"
+            android:summary="@string/atmospheric_time_weather_cycle_summary"
+            android:title="@string/atmospheric_time_weather_cycle_title" />
+
         <SwitchPreference
             android:defaultValue="true"
             app:iconSpaceReserved="false"

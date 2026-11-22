@@ -1,6 +1,6 @@
 package com.sc.gtradio.media.stations
 
-import com.sc.gtradio.media.GTRadioPlayer
+import com.sc.gtradio.media.*
 import android.content.Context
 import android.graphics.Bitmap
 import android.media.MediaMetadataRetriever
@@ -147,7 +147,11 @@ import java.util.*
     private val djTalkQueue = RandomizedDualHeadQueue<Int>(stationMeta.djOtherTracks, rng)
     private val callerStoryQueue = RandomizedDualHeadQueue<Int>(stationMeta.djCallerStoryTracks, rng)
     private val timeOfDayQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
-    private val weatherQueue = RandomizedDualHeadQueue<Int>(emptyList(), rng)
+    private val weatherSunQueue = RandomizedDualHeadQueue<Int>(stationMeta.djWeatherSunTracks, rng)
+    private val weatherFogQueue = RandomizedDualHeadQueue<Int>(stationMeta.djWeatherFogTracks, rng)
+    private val weatherRainQueue = RandomizedDualHeadQueue<Int>(stationMeta.djWeatherRainTracks, rng)
+    private val weatherStormQueue = RandomizedDualHeadQueue<Int>(stationMeta.djWeatherStormTracks, rng)
+    private val weatherQueue = RandomizedDualHeadQueue<Int>(stationMeta.djWeatherTracks, rng)
     private val songQueue = RandomizedDualHeadQueue<Gen2SongGroup>(stationMeta.songGroups, rng)
 
     private var _playing = false
@@ -156,7 +160,7 @@ import java.util.*
     private var consecutiveSongs = 0
     private var interludeChainCount = 0
     private var lastDjSubCategory = -1
-    private var activeHourBucket = -1
+    private var activeTodBucket: TimeOfDayBucket? = null
     private var activeListener: Player.Listener? = null
 
     // Real-time radio state tracking
@@ -309,38 +313,64 @@ import java.util.*
         updateMetadataForWindowIndex(player.exoPlayer.currentMediaItemIndex)
     }
 
-    private fun getHourBucket(): Int {
-        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-        return when {
-            hour in 4..11 -> 0 // Morning
-            hour in 12..20 -> 1 // Afternoon/Evening
-            else -> 2 // Night
-        }
-    }
-
     private fun rebuildDjQueues() {
-        val bucket = getHourBucket()
-        activeHourBucket = bucket
+        val bucket = BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN2)
+        activeTodBucket = bucket
         val todTracks = when (bucket) {
-            0 -> stationMeta.djMorningTracks
-            1 -> stationMeta.djEveningTracks.ifEmpty { stationMeta.djMorningTracks }
-            else -> stationMeta.djNightTracks.ifEmpty { stationMeta.djEveningTracks }
+            TimeOfDayBucket.MORNING -> stationMeta.djMorningTracks
+            TimeOfDayBucket.EVENING -> stationMeta.djEveningTracks.ifEmpty { stationMeta.djMorningTracks }
+            TimeOfDayBucket.NIGHT -> stationMeta.djNightTracks.ifEmpty { stationMeta.djEveningTracks }
+            else -> emptyList()
         }
         timeOfDayQueue.reset(todTracks)
         if (weatherChatterEnabled) {
+            weatherSunQueue.reset(stationMeta.djWeatherSunTracks)
+            weatherFogQueue.reset(stationMeta.djWeatherFogTracks)
+            weatherRainQueue.reset(stationMeta.djWeatherRainTracks)
+            weatherStormQueue.reset(stationMeta.djWeatherStormTracks)
             weatherQueue.reset(stationMeta.djWeatherTracks)
         } else {
+            weatherSunQueue.reset(emptyList())
+            weatherFogQueue.reset(emptyList())
+            weatherRainQueue.reset(emptyList())
+            weatherStormQueue.reset(emptyList())
             weatherQueue.reset(emptyList())
         }
     }
 
+    private fun hasAnyWeatherTracks(): Boolean {
+        return weatherChatterEnabled && (weatherSunQueue.isNotEmpty() || weatherFogQueue.isNotEmpty() ||
+                weatherRainQueue.isNotEmpty() || weatherStormQueue.isNotEmpty() || weatherQueue.isNotEmpty())
+    }
+
     private fun hasAnyDjContent(): Boolean {
         return djTalkQueue.isNotEmpty() || callerStoryQueue.isNotEmpty() ||
-               timeOfDayQueue.isNotEmpty() || weatherQueue.isNotEmpty()
+               timeOfDayQueue.isNotEmpty() || hasAnyWeatherTracks()
+    }
+
+    private fun pickNextWeatherTrack(): Int? {
+        if (!weatherChatterEnabled) return null
+        val targetWeather = BroadcastAtmosphereClock.getWeather(context, SeriesEra.GEN2)
+        GTRadioLogger.logVerbose("ATMOS") {
+            "[ATMOS] Gen2Raw[$stationTitle]: Choosing weather track for condition $targetWeather"
+        }
+        val chosenQueue = when (targetWeather) {
+            WeatherState.SUN -> weatherSunQueue
+            WeatherState.FOG -> weatherFogQueue
+            WeatherState.RAIN -> weatherRainQueue
+            WeatherState.STORM -> weatherStormQueue
+            else -> weatherSunQueue
+        }
+        return if (chosenQueue.isNotEmpty()) {
+            chosenQueue.next()
+        } else if (weatherQueue.isNotEmpty()) {
+            weatherQueue.next()
+        } else null
     }
 
     private fun pickNextDjTrack(): Int? {
-        if (getHourBucket() != activeHourBucket) {
+        val currentBucket = BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN2)
+        if (currentBucket != activeTodBucket) {
             rebuildDjQueues()
         }
         // Build weighted candidate pools:
@@ -349,7 +379,7 @@ import java.util.*
         if (djTalkQueue.isNotEmpty()) available.add(Pair(0, 38))
         if (callerStoryQueue.isNotEmpty()) available.add(Pair(1, 26))
         if (timeOfDayQueue.isNotEmpty()) available.add(Pair(2, 20))
-        if (weatherChatterEnabled && weatherQueue.isNotEmpty()) available.add(Pair(3, 16))
+        if (hasAnyWeatherTracks()) available.add(Pair(3, 16))
         if (available.isEmpty()) return null
 
         // Avoid repeating the exact same sub-category twice in a row if another is available
@@ -375,7 +405,7 @@ import java.util.*
             0 -> djTalkQueue.next()
             1 -> callerStoryQueue.next()
             2 -> timeOfDayQueue.next()
-            3 -> weatherQueue.next()
+            3 -> pickNextWeatherTrack() ?: djTalkQueue.next()
             else -> djTalkQueue.next()
         }
     }

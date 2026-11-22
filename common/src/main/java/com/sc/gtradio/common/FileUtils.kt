@@ -43,35 +43,47 @@ object FileUtils {
      * Most of the functionality here is based on TreeDocumentFile from the Android source
      */
     fun DocumentFile.listSimpleFiles(context: Context): Array<SimpleFileInfo> {
-        val resolver: ContentResolver = context.contentResolver
-        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-            this.uri,
-            DocumentsContract.getDocumentId(this.uri)
-        )
-        val results: ArrayList<SimpleFileInfo> = ArrayList()
-        var c: Cursor? = null
-        try {
-            c = resolver.query(
-                childrenUri, arrayOf(
-                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                    DocumentsContract.Document.COLUMN_MIME_TYPE
-                ), null, null, null
-            )
-            while (c!!.moveToNext()) {
-                val documentId = c.getString(0)
-                val name = c.getString(1)
-                val mime = c.getString(2)
-                val documentUri = DocumentsContract.buildDocumentUriUsingTree(
-                    this.uri,
-                    documentId
-                )
-                results.add(SimpleFileInfo(documentUri, name, documentId, mime == DocumentsContract.Document.MIME_TYPE_DIR ))
-            }
-        }  finally {
-            closeQuietly(c)
+        if (this.uri.scheme == "file") {
+            return runCatching {
+                val file = java.io.File(this.uri.path ?: return emptyArray())
+                val children = file.listFiles() ?: return emptyArray()
+                children.map { f ->
+                    SimpleFileInfo(Uri.fromFile(f), f.name, f.absolutePath, f.isDirectory)
+                }.toTypedArray()
+            }.getOrElse { emptyArray() }
         }
-        return results.toTypedArray()
+        return runCatching {
+            val resolver: ContentResolver = context.contentResolver
+            val docId = DocumentsContract.getDocumentId(this.uri)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                this.uri,
+                docId
+            )
+            val results: ArrayList<SimpleFileInfo> = ArrayList()
+            var c: Cursor? = null
+            try {
+                c = resolver.query(
+                    childrenUri, arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                    ), null, null, null
+                )
+                while (c != null && c.moveToNext()) {
+                    val documentId = c.getString(0)
+                    val name = c.getString(1)
+                    val mime = c.getString(2)
+                    val documentUri = DocumentsContract.buildDocumentUriUsingTree(
+                        this.uri,
+                        documentId
+                    )
+                    results.add(SimpleFileInfo(documentUri, name, documentId, mime == DocumentsContract.Document.MIME_TYPE_DIR))
+                }
+            } finally {
+                closeQuietly(c)
+            }
+            results.toTypedArray()
+        }.getOrElse { emptyArray() }
     }
 }
 

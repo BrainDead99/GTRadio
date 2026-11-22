@@ -8,7 +8,8 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.Util
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
-import com.sc.gtradio.media.GTRadioPlayer
+import com.sc.gtradio.common.GTRadioLogger
+import com.sc.gtradio.media.*
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSourceFactory
 import androidx.media3.exoplayer.source.ConcatenatingMediaSource
@@ -195,7 +196,28 @@ import kotlin.collections.ArrayList
     }
 
     private fun setupWeatherFiles(weatherFolderDoc: DocumentFile) {
-        weatherFiles = weatherFolderDoc.listSimpleFiles(context).map { x -> x.uri }.toTypedArray()
+        val simple = weatherFolderDoc.listSimpleFiles(context)
+        weatherFiles = simple.map { x -> x.uri }.toTypedArray()
+        val suns = ArrayList<Uri>()
+        val clouds = ArrayList<Uri>()
+        val fogs = ArrayList<Uri>()
+        val rains = ArrayList<Uri>()
+        val winds = ArrayList<Uri>()
+        for (f in simple) {
+            val u = f.name.uppercase()
+            when {
+                u.startsWith("SUN_") -> suns.add(f.uri)
+                u.startsWith("CLOUD_") -> clouds.add(f.uri)
+                u.startsWith("FOG_") -> fogs.add(f.uri)
+                u.startsWith("RAIN_") -> rains.add(f.uri)
+                u.startsWith("WIND_") -> winds.add(f.uri)
+            }
+        }
+        weatherSunFiles = suns.toTypedArray()
+        weatherCloudFiles = clouds.toTypedArray()
+        weatherFogFiles = fogs.toTypedArray()
+        weatherRainFiles = rains.toTypedArray()
+        weatherWindFiles = winds.toTypedArray()
     }
 
     private fun setupSongs(songFolderDoc: DocumentFile?) {
@@ -259,27 +281,25 @@ import kotlin.collections.ArrayList
     }
 
     private fun randomizeMainDJFiles() {
-        //Include the relevant time-of-day DJ chatter based on current time
-        //Note: There is no afternoon slot currently based on the anticipated user dataset
-        val now = Calendar.getInstance()
-        val currentHour = now.get(Calendar.HOUR_OF_DAY)
-        var arrToConcat: ArrayList<Uri> = ArrayList()
-        if (currentHour in 3..11) {
-            //Morning (3am-noon) (03:00 to 12:00)
-            djMorningFiles.shuffle()
-            arrToConcat = djMorningFiles
-        } else if(currentHour in 12..16) {
-            //Afternoon (noon-5pm) (12:00-17:00)
-            djAfternoonFiles.shuffle()
-            arrToConcat = djAfternoonFiles
-        } else if(currentHour in 17..22) {
-            //Evening (5pm-11pm) (17:00-23:00)
-            djEveningFiles.shuffle()
-            arrToConcat = djEveningFiles
-        } else if(currentHour < 3 || currentHour >= 23) {
-            //Night (11pm-3am) (23:00-03:00)
-            djNightFiles.shuffle()
-            arrToConcat = djNightFiles
+        val bucket = BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN3_RPF3)
+        val arrToConcat: ArrayList<Uri> = when (bucket) {
+            TimeOfDayBucket.MORNING -> {
+                djMorningFiles.shuffle()
+                djMorningFiles
+            }
+            TimeOfDayBucket.AFTERNOON -> {
+                djAfternoonFiles.shuffle()
+                if (djAfternoonFiles.isNotEmpty()) djAfternoonFiles else djMorningFiles
+            }
+            TimeOfDayBucket.EVENING -> {
+                djEveningFiles.shuffle()
+                if (djEveningFiles.isNotEmpty()) djEveningFiles else if (djAfternoonFiles.isNotEmpty()) djAfternoonFiles else djMorningFiles
+            }
+            TimeOfDayBucket.NIGHT -> {
+                djNightFiles.shuffle()
+                if (djNightFiles.isNotEmpty()) djNightFiles else if (djEveningFiles.isNotEmpty()) djEveningFiles else djMorningFiles
+            }
+            else -> ArrayList()
         }
         djGeneralFiles.shuffle()
         currentDJFiles = djGeneralFiles.plus(arrToConcat).toTypedArray()
@@ -773,6 +793,32 @@ import kotlin.collections.ArrayList
         playSource(mediaSource)
     }
 
+    private var weatherSunFiles: Array<Uri> = emptyArray()
+    private var weatherCloudFiles: Array<Uri> = emptyArray()
+    private var weatherFogFiles: Array<Uri> = emptyArray()
+    private var weatherRainFiles: Array<Uri> = emptyArray()
+    private var weatherWindFiles: Array<Uri> = emptyArray()
+
+    private fun getNextWeatherFileForAtmosphere(): Uri {
+        val targetWeather = BroadcastAtmosphereClock.getWeather(context, SeriesEra.GEN3_RPF3)
+        GTRadioLogger.logVerbose("ATMOS") {
+            "[ATMOS] Gen3[$stationName]: Choosing weather file for condition $targetWeather"
+        }
+        val pool = when (targetWeather) {
+            WeatherState.SUN -> weatherSunFiles
+            WeatherState.CLOUD -> weatherCloudFiles
+            WeatherState.FOG -> weatherFogFiles
+            WeatherState.RAIN -> weatherRainFiles
+            WeatherState.WIND -> weatherWindFiles
+            else -> weatherSunFiles
+        }
+        return if (pool.isNotEmpty()) {
+            pool[rng.nextInt(pool.size)]
+        } else {
+            getNextWeatherFile()
+        }
+    }
+
     private fun playNextWeatherReport() {
         lastSegment = RadioSegmentType.WeatherReport
         if (!weatherChatterEnabled || weatherFiles.isEmpty()) {
@@ -783,7 +829,7 @@ import kotlin.collections.ArrayList
         val mediaSource = if (useDjTransition && djToWeatherFiles.isNotEmpty()) {
             //Use a DJ transition to introduce the weather
             val toWeatherFile = getNextToWeatherFile()
-            val weatherFile = getNextWeatherFile()
+            val weatherFile = getNextWeatherFileForAtmosphere()
             val toWeatherSrc = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(
                 MediaItem.fromUri(toWeatherFile))
             val weatherSrc = ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(
@@ -793,7 +839,7 @@ import kotlin.collections.ArrayList
             concatSource
         } else {
             //No transition, just play the weather
-            val weatherFile = getNextWeatherFile()
+            val weatherFile = getNextWeatherFileForAtmosphere()
             ProgressiveMediaSource.Factory(DefaultDataSourceFactory(context, Util.getUserAgent(context, context.packageName))).createMediaSource(
                 MediaItem.fromUri(weatherFile))
         }

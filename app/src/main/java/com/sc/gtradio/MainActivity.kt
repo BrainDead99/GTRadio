@@ -106,12 +106,17 @@ class MainActivity : AppCompatActivity() {
         return navController.navigateUp(appBarConfiguration) || super.onSupportNavigateUp()
     }
 
-    fun navigateToRadioList(stationGroupId: String?) {
+    fun navigateToRadioList(stationGroupId: String?, groupName: String? = null) {
         val navController = findNavController(R.id.nav_host_fragment_content_main)
         if (stationGroupId?.isNotBlank() == true) {
             navController.navigate(
                 R.id.SecondFragment,
-                Bundle().apply { putString("stationGroupId", stationGroupId) }
+                Bundle().apply {
+                    putString("stationGroupId", stationGroupId)
+                    if (!groupName.isNullOrBlank()) {
+                        putString("groupName", groupName)
+                    }
+                }
             )
         }
     }

@@ -94,6 +94,12 @@ class TracklistActivity : AppCompatActivity() {
         }
     }
 
+    private var lastActiveSongMediaId: String? = null
+    private var lastBoundMediaId: String? = null
+    private var lastBoundTitle: CharSequence? = null
+    private var lastBoundSubtitle: CharSequence? = null
+    private var lastBoundArtHash: Int? = null
+
     private val connectionObserver = Observer<Boolean> { connected ->
         if (connected == true && currentSubscribedId == null) {
             navigateTo(NavLevel.SERIES)
@@ -103,13 +109,26 @@ class TracklistActivity : AppCompatActivity() {
     private val playbackStateObserver = Observer<GTRadioPlaybackState> { state ->
         currentPlaybackState = state ?: EMPTY_PLAYBACK_STATE
         updatePlaybackState(currentPlaybackState)
-        adapter.notifyDataSetChanged()
     }
 
     private val nowPlayingObserver = Observer<MediaMetadata> { metadata ->
         currentNowPlaying = metadata ?: NOTHING_PLAYING
         updateNowPlaying(currentNowPlaying)
-        adapter.notifyDataSetChanged()
+        val newMediaId = currentNowPlaying.mediaId
+        if (newMediaId != lastActiveSongMediaId) {
+            val oldId = lastActiveSongMediaId
+            lastActiveSongMediaId = newMediaId
+            if (currentLevel == NavLevel.SONGS) {
+                if (!oldId.isNullOrBlank()) {
+                    val oldIdx = currentItems.indexOfFirst { it.mediaId == oldId }
+                    if (oldIdx >= 0) adapter.notifyItemChanged(oldIdx)
+                }
+                if (!newMediaId.isNullOrBlank()) {
+                    val newIdx = currentItems.indexOfFirst { it.mediaId == newMediaId }
+                    if (newIdx >= 0) adapter.notifyItemChanged(newIdx)
+                }
+            }
+        }
     }
 
     private val sessionExtrasObserver = Observer<Bundle?> {
@@ -348,29 +367,52 @@ class TracklistActivity : AppCompatActivity() {
     private fun updateNowPlaying(metadata: MediaMetadata) {
         val mediaId = metadata.mediaId
         if (!mediaId.isNullOrBlank()) {
-            binding.playerTrackTitle.text = metadata.title ?: getString(R.string.nothing_playing)
+            val title = metadata.title ?: getString(R.string.nothing_playing)
             val sub = metadata.subtitle?.toString() ?: ""
-            binding.playerTrackSubtitle.text = sub
-            binding.playerTrackSubtitle.visibility = if (sub.isBlank()) View.GONE else View.VISIBLE
+            val artBytes = metadata.artworkData
+            val artHash = artBytes?.contentHashCode() ?: 0
 
-            val bmp = metadata.iconBitmap
-            if (bmp != null) {
-                binding.playerAlbumArt.setImageBitmap(bmp)
-            } else {
-                binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
+            val metadataUnchanged = mediaId == lastBoundMediaId &&
+                title == lastBoundTitle &&
+                sub == lastBoundSubtitle &&
+                artHash == lastBoundArtHash
+
+            if (!metadataUnchanged) {
+                lastBoundMediaId = mediaId
+                lastBoundTitle = title
+                lastBoundSubtitle = sub
+                lastBoundArtHash = artHash
+
+                binding.playerTrackTitle.text = title
+                binding.playerTrackSubtitle.text = sub
+                binding.playerTrackSubtitle.visibility = if (sub.isBlank()) View.GONE else View.VISIBLE
+
+                val bmp = metadata.iconBitmap
+                if (bmp != null) {
+                    binding.playerAlbumArt.setImageBitmap(bmp)
+                } else {
+                    binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
+                }
             }
 
             updateDurationAndPosition()
         } else {
-            binding.playerTrackTitle.text = "Select a song to play"
-            binding.playerTrackSubtitle.text = ""
-            binding.playerTrackSubtitle.visibility = View.GONE
-            binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
-            binding.scrubSeekBar.isEnabled = false
-            binding.scrubSeekBar.progress = 0
-            binding.scrubSeekBar.max = 0
-            binding.elapsedTimeText.text = ""
-            binding.totalTimeText.text = "-:--"
+            if (lastBoundMediaId != null) {
+                lastBoundMediaId = null
+                lastBoundTitle = null
+                lastBoundSubtitle = null
+                lastBoundArtHash = null
+
+                binding.playerTrackTitle.text = "Select a song to play"
+                binding.playerTrackSubtitle.text = ""
+                binding.playerTrackSubtitle.visibility = View.GONE
+                binding.playerAlbumArt.setImageResource(R.drawable.music_note_24px)
+                binding.scrubSeekBar.isEnabled = false
+                binding.scrubSeekBar.progress = 0
+                binding.scrubSeekBar.max = 0
+                binding.elapsedTimeText.text = ""
+                binding.totalTimeText.text = "-:--"
+            }
         }
     }
 

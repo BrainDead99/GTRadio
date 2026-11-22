@@ -32,7 +32,7 @@ object TracklistContract {
     const val REPEAT_MODE_NONE = 0
     const val REPEAT_MODE_ONE = 1
     const val REPEAT_MODE_ALL = 2
-    const val EXTRA_PLAYBACK_MODE = "gtradio_playback_mode"
+    const val EXTRA_PLAYBACK_MODE = "com.sc.gtradio.EXTRA_PLAYBACK_MODE"
     const val EXTRA_SHUFFLE_ENABLED = "gtradio_shuffle_enabled"
     const val EXTRA_REPEAT_MODE = "gtradio_repeat_mode"
     const val EXTRA_STATION_ID = "gtradio_station_id"

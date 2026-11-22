@@ -50,6 +50,7 @@ object DynamicThemeManager {
     private val iconCache = object : LruCache<String, Bitmap>(4 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
+    private val scanLock = Any()
     private var scannedPacks: List<DynamicThemePack>? = null
     private var lastThemeUriString: String? = null
 
@@ -295,20 +296,28 @@ object DynamicThemeManager {
         return false
     }
 
-    private fun scanAllThemePacks(context: Context, libraryRootDoc: DocumentFile?): List<DynamicThemePack> {
+    private fun scanAllThemePacks(context: Context, libraryRootDoc: DocumentFile?): List<DynamicThemePack> = synchronized(scanLock) {
+        scannedPacks?.let { return it }
         val results = ArrayList<DynamicThemePack>()
         val seenNames = HashSet<String>()
         val root = resolveDynamicThemeRoot(context, libraryRootDoc) ?: return results
 
-        val children = try { root.listFiles() } catch (_: Exception) { emptyArray() }
+        val children = runCatching { root.listSimpleFiles(context) }.getOrElse { emptyArray() }
         for (dir in children) {
             if (!dir.isDirectory) continue
-            val dName = dir.name ?: continue
+            val dName = dir.name
             if (dName.startsWith(".") || dName.equals("HD Radio Icons", ignoreCase = true)) continue
             if (!seenNames.add(dName.uppercase())) continue
-            loadSingleThemePack(context, dir)?.let { results.add(it) }
+            val dirDoc = runCatching { DocumentFile.fromTreeUri(context, dir.uri) }.getOrNull() ?: continue
+            loadSingleThemePack(context, dirDoc)?.let { pack ->
+                results.add(pack)
+                synchronized(packCache) {
+                    packCache[pack.seriesName] = pack
+                }
+            }
         }
-        return results
+        scannedPacks = results
+        results
     }
 
     fun resolveDynamicThemeRoot(context: Context, libraryRootDoc: DocumentFile? = null): DocumentFile? {
@@ -321,9 +330,10 @@ object DynamicThemeManager {
                 val doc = DocumentFile.fromTreeUri(context, Uri.parse(customUri))
                 if (doc != null && doc.isDirectory && doc.canRead()) {
                     // If "dynamic_theme_uri" points to parent GTRadio root instead of Dynamic Theme, look for child "Dynamic Theme"
-                    val dtChild = try {
-                        doc.listFiles().firstOrNull { it.isDirectory && it.name.equals("Dynamic Theme", ignoreCase = true) }
-                    } catch (_: Exception) { null }
+                    val dtChild = runCatching {
+                        doc.listSimpleFiles(context).firstOrNull { it.isDirectory && it.name.equals("Dynamic Theme", ignoreCase = true) }
+                            ?.let { DocumentFile.fromTreeUri(context, it.uri) }
+                    }.getOrNull()
                     val resolved = dtChild ?: doc
                     GTRadioLogger.log("DynamicThemeManager: Resolved root from user override dynamic_theme_uri: ${resolved.uri}")
                     return resolved
@@ -344,9 +354,10 @@ object DynamicThemeManager {
             } else null
         }
         if (libDoc != null) {
-            val dtChild = try {
-                libDoc.listFiles().firstOrNull { it.isDirectory && it.name.equals("Dynamic Theme", ignoreCase = true) }
-            } catch (_: Exception) { null }
+            val dtChild = runCatching {
+                libDoc.listSimpleFiles(context).firstOrNull { it.isDirectory && it.name.equals("Dynamic Theme", ignoreCase = true) }
+                    ?.let { DocumentFile.fromTreeUri(context, it.uri) }
+            }.getOrNull()
             if (dtChild != null && dtChild.canRead()) {
                 GTRadioLogger.log("DynamicThemeManager: Auto-discovered Dynamic Theme inside library root: ${dtChild.uri}")
                 return dtChild
@@ -379,13 +390,13 @@ object DynamicThemeManager {
 
     private fun loadSingleThemePack(context: Context, themeDir: DocumentFile): DynamicThemePack? {
         val folderName = themeDir.name ?: return null
-        val simpleChildren = try { themeDir.listSimpleFiles(context) } catch (_: Exception) { emptyArray() }
+        val simpleChildren = runCatching { themeDir.listSimpleFiles(context) }.getOrElse { emptyArray() }
         val jsonInfo = simpleChildren.firstOrNull { !it.isDirectory && it.name.equals("theme.json", ignoreCase = true) }
             ?: return null
 
-        val jsonText = try {
+        val jsonText = runCatching {
             context.contentResolver.openInputStream(jsonInfo.uri)?.bufferedReader()?.use { it.readText() } ?: ""
-        } catch (_: Exception) { "" }
+        }.getOrElse { "" }
         if (jsonText.isBlank()) return null
 
         val cleanJson = if (jsonText.trim().endsWith("}")) jsonText else (jsonText.trim() + "}")
@@ -436,21 +447,24 @@ object DynamicThemeManager {
             }
         }
 
-        val subDirs = try { themeDir.listFiles().filter { it.isDirectory } } catch (_: Exception) { emptyList() }
+        val subDirs = simpleChildren.filter { it.isDirectory }
         for (sub in subDirs) {
-            when (sub.name?.lowercase()) {
+            val subDoc = runCatching { DocumentFile.fromTreeUri(context, sub.uri) }.getOrNull() ?: continue
+            val subChildren = runCatching { subDoc.listSimpleFiles(context) }.getOrElse { emptyArray() }
+            when (sub.name.lowercase()) {
                 "background", "backgrounds" -> {
-                    for (bgSub in sub.listFiles()) {
-                        if (!bgSub.isDirectory) continue
-                        when (bgSub.name?.lowercase()) {
+                    for (bgSub in subChildren.filter { it.isDirectory }) {
+                        val bgSubDoc = runCatching { DocumentFile.fromTreeUri(context, bgSub.uri) }.getOrNull() ?: continue
+                        val bgFiles = runCatching { bgSubDoc.listSimpleFiles(context) }.getOrElse { emptyArray() }
+                        when (bgSub.name.lowercase()) {
                             "portrait", "potrait" -> {
-                                bgSub.listSimpleFiles(context)
+                                bgFiles
                                     .filter { !it.isDirectory && !it.name.startsWith(".") }
                                     .sortedBy { it.name.lowercase() }
                                     .forEach { portraitBgs.add(it.uri) }
                             }
                             "landscape" -> {
-                                bgSub.listSimpleFiles(context)
+                                bgFiles
                                     .filter { !it.isDirectory && !it.name.startsWith(".") }
                                     .sortedBy { it.name.lowercase() }
                                     .forEach { landscapeBgs.add(it.uri) }
@@ -460,34 +474,29 @@ object DynamicThemeManager {
                 }
                 "icon", "icons" -> {
                     // 1. Check flat icons in icon/
-                    for (ic in sub.listSimpleFiles(context)) {
-                        if (!ic.isDirectory && !ic.name.startsWith(".")) {
-                            val key = normalizeStationKey(ic.name)
-                            onIcons[key] = ic.uri
-                        }
+                    for (ic in subChildren.filter { !it.isDirectory && !it.name.startsWith(".") }) {
+                        val key = normalizeStationKey(ic.name)
+                        onIcons[key] = ic.uri
                     }
                     // 2. Check icon/on and icon/off subdirectories
-                    for (icSub in sub.listFiles()) {
-                        if (!icSub.isDirectory) continue
-                        val subLower = icSub.name?.lowercase() ?: ""
+                    for (icSub in subChildren.filter { it.isDirectory }) {
+                        val subLower = icSub.name.lowercase()
+                        val icSubDoc = runCatching { DocumentFile.fromTreeUri(context, icSub.uri) }.getOrNull() ?: continue
+                        val icFiles = runCatching { icSubDoc.listSimpleFiles(context) }.getOrElse { emptyArray() }
                         if (subLower == "on") {
-                            for (ic in icSub.listSimpleFiles(context)) {
-                                if (!ic.isDirectory && !ic.name.startsWith(".")) {
-                                    onIcons[normalizeStationKey(ic.name)] = ic.uri
-                                }
+                            for (ic in icFiles.filter { !it.isDirectory && !it.name.startsWith(".") }) {
+                                onIcons[normalizeStationKey(ic.name)] = ic.uri
                             }
                         } else if (subLower == "off") {
-                            for (ic in icSub.listSimpleFiles(context)) {
-                                if (!ic.isDirectory && !ic.name.startsWith(".")) {
-                                    offIcons[normalizeStationKey(ic.name)] = ic.uri
-                                }
+                            for (ic in icFiles.filter { !it.isDirectory && !it.name.startsWith(".") }) {
+                                offIcons[normalizeStationKey(ic.name)] = ic.uri
                             }
                         }
                     }
                 }
                 "font", "fonts" -> {
                     val fontCacheDir = File(context.cacheDir, "theme_fonts_${folderName.hashCode()}").apply { mkdirs() }
-                    val fontFiles = sub.listSimpleFiles(context).filter { !it.isDirectory && it.name.lowercase().endsWith(".ttf") }
+                    val fontFiles = subChildren.filter { !it.isDirectory && it.name.lowercase().endsWith(".ttf") }
                     for (ff in fontFiles) {
                         val cachedFile = copyUriToCache(context, ff.uri, File(fontCacheDir, ff.name)) ?: continue
                         try {
@@ -511,7 +520,7 @@ object DynamicThemeManager {
                     if (bodyTf == null && headerTf != null) bodyTf = headerTf
                 }
                 "sounds", "sound" -> {
-                    sub.listSimpleFiles(context)
+                    subChildren
                         .filter { !it.isDirectory && !it.name.startsWith(".") }
                         .sortedBy { it.name.lowercase() }
                         .forEach { snd ->

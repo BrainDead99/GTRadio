@@ -17,6 +17,10 @@
     <string name="music_path_title">Path to Library</string>
     <string name="playback_header">Playback</string>
 
+    <string name="atmospheric_time_weather_cycle_key">atmospheric_time_weather_cycle_enabled</string>
+    <string name="atmospheric_time_weather_cycle_title">Atmospheric Time &amp; Weather Cycle</string>
+    <string name="atmospheric_time_weather_cycle_summary">Simulates each series\' authentic day-night and weather cycles for DJ and weather announcements (e.g., a 24-minute in-game day for Gen2 or 48 minutes for Gen3). When disabled, broadcasts follow your device\'s local clock with offline real-time improvised weather. Supported on Gen2 and Gen3 stations only.</string>
+
     <string name="ads_enabled_title">Play Ads</string>
     <string name="ads_enabled_summary">Note: This setting only affects gen 2 and 3 stations.</string>
 
