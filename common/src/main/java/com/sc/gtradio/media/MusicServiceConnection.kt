@@ -1,4 +1,6 @@
 package com.sc.gtradio.media
+import com.sc.gtradio.media.core.TracklistContract
+
 
 import android.content.ComponentName
 import android.content.Context
@@ -277,15 +279,15 @@ class MusicServiceConnection(private val context: Context, serviceComponent: Com
         if (browserDur > 0L && browserDur != androidx.media3.common.C.TIME_UNSET) {
             return browserDur
         }
-        val sessionDur = sessionExtras.value?.getLong(com.sc.gtradio.media.stations.TracklistContract.EXTRA_DURATION_MS, 0L)
-            ?: currentExtras?.getLong(com.sc.gtradio.media.stations.TracklistContract.EXTRA_DURATION_MS, 0L)
+        val sessionDur = sessionExtras.value?.getLong(com.sc.gtradio.media.core.TracklistContract.EXTRA_DURATION_MS, 0L)
+            ?: currentExtras?.getLong(com.sc.gtradio.media.core.TracklistContract.EXTRA_DURATION_MS, 0L)
             ?: 0L
         if (sessionDur > 0L) return sessionDur
 
         val metaDur = nowPlaying.value?.extras?.getLong("duration_ms", 0L) ?: 0L
         if (metaDur > 0L) return metaDur
 
-        val metaTracklistDur = nowPlaying.value?.extras?.getLong(com.sc.gtradio.media.stations.TracklistContract.EXTRA_DURATION_MS, 0L) ?: 0L
+        val metaTracklistDur = nowPlaying.value?.extras?.getLong(com.sc.gtradio.media.core.TracklistContract.EXTRA_DURATION_MS, 0L) ?: 0L
         if (metaTracklistDur > 0L) return metaTracklistDur
 
         return 0L

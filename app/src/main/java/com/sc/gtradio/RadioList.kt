@@ -37,8 +37,8 @@ import com.sc.gtradio.common.DynamicThemePack
 import com.sc.gtradio.databinding.FragmentRadiolistBinding
 import com.sc.gtradio.databinding.FragmentStationitemBinding
 import com.sc.gtradio.media.*
-import com.sc.gtradio.media.stations.AlbumArtDownloader
-import com.sc.gtradio.media.stations.TracklistContract
+import com.sc.gtradio.media.artwork.AlbumArtDownloader
+import com.sc.gtradio.media.core.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers

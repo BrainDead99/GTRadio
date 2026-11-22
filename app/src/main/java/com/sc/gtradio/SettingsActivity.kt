@@ -23,13 +23,13 @@ import androidx.preference.PreferenceFragmentCompat
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
-import com.sc.gtradio.media.stations.Rpf3KeyManager
-import com.sc.gtradio.media.stations.Rpf3MetadataRepository
-import com.sc.gtradio.media.stations.Rpf7KeyManager
-import com.sc.gtradio.media.stations.Rpf7MetadataRepository
-import com.sc.gtradio.media.stations.ImportResult
-import com.sc.gtradio.media.stations.AlbumArtDownloader
-import com.sc.gtradio.media.stations.Gen2MetadataRepository
+import com.sc.gtradio.media.rpf3.Rpf3KeyManager
+import com.sc.gtradio.media.rpf3.Rpf3MetadataRepository
+import com.sc.gtradio.media.rpf7.Rpf7KeyManager
+import com.sc.gtradio.media.rpf7.Rpf7MetadataRepository
+import com.sc.gtradio.media.rpf7.ImportResult
+import com.sc.gtradio.media.artwork.AlbumArtDownloader
+import com.sc.gtradio.media.gen2.Gen2MetadataRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -375,6 +375,7 @@ class SettingsActivity : AppCompatActivity() {
                 try {
                     Gen2MetadataRepository.ensureLoaded(ctx)
                     Rpf3MetadataRepository.ensureLoaded(ctx)
+                    Rpf7MetadataRepository.ensureLoaded(ctx)
 
                     // Tuple: (artist, title, preferredYear, maxYear)
                     val allSongs = ArrayList<ScanTrackItem>()

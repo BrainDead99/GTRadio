@@ -10,8 +10,8 @@ import android.os.SystemClock
 import android.util.Log
 import android.util.Printer
 import androidx.preference.PreferenceManager
-import com.sc.gtradio.media.stations.Rpf3KeyManager
-import com.sc.gtradio.media.stations.Rpf7KeyManager
+import com.sc.gtradio.media.rpf3.Rpf3KeyManager
+import com.sc.gtradio.media.rpf7.Rpf7KeyManager
 import java.io.File
 import java.io.FileOutputStream
 import java.io.RandomAccessFile

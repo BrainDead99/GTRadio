@@ -9,7 +9,7 @@ import androidx.lifecycle.Observer
 import androidx.media3.common.MediaMetadata
 import com.sc.gtradio.databinding.FragmentNowplayingBinding
 import com.sc.gtradio.media.*
-import com.sc.gtradio.media.stations.TracklistContract
+import com.sc.gtradio.media.core.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
 
 class NowPlayingFragment : Fragment() {

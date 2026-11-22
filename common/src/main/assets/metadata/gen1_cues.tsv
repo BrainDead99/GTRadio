@@ -1,0 +1,364 @@
+game_code	file_name	start_sec	end_sec	title	artist
+1	flash.adf	0	232	Out of Touch	Hall & Oates
+1	flash.adf	239	431	Dance Hall Days	Wang Chung
+1	flash.adf	439	681	Billie Jean	Michael Jackson
+1	flash.adf	696	923	Self Control	Laura Branigan
+1	flash.adf	930	1132	Call Me	Go West
+1	flash.adf	1143	1356	Kiss the Dirt (Falling Down the Mountain)	INXS
+1	flash.adf	1486	1684	Run to You	Bryan Adams
+1	flash.adf	1684	1846	Four Little Diamonds	Electric Light Orchestra
+1	flash.adf	1855	2064	Owner of a Lonely Heart	Yes
+1	flash.adf	2076	2295	Video Killed the Radio Star	The Buggles
+1	flash.adf	2302	2498	Japanese Boy	Aneka
+1	flash.adf	2609	2795	Life's What You Make It	Talk Talk
+1	flash.adf	2809	3000	Your Love	The Outfield
+1	flash.adf	3014	3226	Steppin' Out	Joe Jackson
+1	flash.adf	3229	3425	One Thing Leads to Another	The Fixx
+1	flash.adf	3428	3585	Running with the Night	Lionel Richie
+1	vrock.adf	10	217	You've Got Another Thing Comin'	Judas Priest
+1	vrock.adf	225	454	Too Young to Fall in Love	Mötley Crüe
+1	vrock.adf	459	680	Peace Sells	Megadeth
+1	vrock.adf	689	861	Dangerous Bastard	Love Fist
+1	vrock.adf	1060	1274	Turn Up the Radio	Autograph
+1	vrock.adf	1280	1462	I Wanna Rock	Twisted Sister
+1	vrock.adf	1471	1712	Bark at the Moon	Ozzy Osbourne
+1	vrock.adf	1719	1927	Madhouse	Anthrax
+1	vrock.adf	1940	2145	2 Minutes to Midnight	Iron Maiden
+1	vrock.adf	2351	2542	Raining Blood	Slayer
+1	vrock.adf	2545	2743	Cumin' Atcha Live	Tesla
+1	vrock.adf	2746	2916	Fist Fury	Love Fist
+1	vrock.adf	2926	3113	Yankee Rose	David Lee Roth
+1	vrock.adf	3291	3548	Cum On Feel the Noize	Quiet Riot
+1	vrock.adf	3558	3728	God Blessed Video	Alcatrazz
+1	vrock.adf	3737	3879	Working for the Weekend	Loverboy
+1	vrock.adf	3891	4103	She Sells Sanctuary	The Cult
+1	wave.adf	14	209	Two Tribes	Frankie Goes to Hollywood
+1	wave.adf	219	416	Love Missile F1-11	Sigue Sigue Sputnik
+1	wave.adf	416	599	Cars	Gary Numan
+1	wave.adf	612	827	(Keep Feeling) Fascination	The Human League
+1	wave.adf	952	1102	Atomic	Blondie
+1	wave.adf	1102	1289	99 Luftballons	Nena
+1	wave.adf	1298	1499	Kids in America	Kim Wilde
+1	wave.adf	1505	1667	Pale Shelter	Tears for Fears
+1	wave.adf	1840	2035	Sunglasses at Night	Corey Hart
+1	wave.adf	2035	2239	Poison Arrow	ABC
+1	wave.adf	2250	2459	I Ran (So Far Away)	A Flock of Seagulls
+1	wave.adf	2471	2659	Love My Way	The Psychedelic Furs
+1	wave.adf	2773	3019	Obsession	Animotion
+1	wave.adf	3031	3269	Gold	Spandau Ballet
+1	wave.adf	3280	3503	Hyperactive!	Thomas Dolby
+1	wave.adf	3511	3749	Never Say Never	Romeo Void
+1	emotion.adf	6	268	Waiting for a Girl Like You	Foreigner
+1	emotion.adf	273	484	Wow	Kate Bush
+1	emotion.adf	506	732	Tempted	Squeeze
+1	emotion.adf	735	939	Keep On Loving You	REO Speedwagon
+1	emotion.adf	1081	1338	(I Just) Died in Your Arms	Cutting Crew
+1	emotion.adf	1345	1599	More Than This	Roxy Music
+1	emotion.adf	1612	1856	Africa	Toto
+1	emotion.adf	1862	2136	Broken Wings	Mr. Mister
+1	emotion.adf	2272	2488	Missing You	John Waite
+1	emotion.adf	2501	2723	Crockett's Theme	Jan Hammer
+1	emotion.adf	2898	3144	Sister Christian	Night Ranger
+1	emotion.adf	3159	3380	Never Too Much	Luther Vandross
+1	fever.adf	8	225	And the Beat Goes On	The Whispers
+1	fever.adf	225	433	Act Like You Know	Fat Larry's Band
+1	fever.adf	438	656	Get Down Saturday Night	Oliver Cheatham
+1	fever.adf	662	872	Automatic	The Pointer Sisters
+1	fever.adf	1019	1278	I'll Be Good	René & Angela
+1	fever.adf	1289	1505	All Night Long	Mary Jane Girls
+1	fever.adf	1512	1743	Ghetto Life	Rick James
+1	fever.adf	1919	2199	Wanna Be Startin' Somethin'	Michael Jackson
+1	fever.adf	2205	2447	Shame	Evelyn 'Champagne' King
+1	fever.adf	2447	2656	Behind the Groove	Teena Marie
+1	fever.adf	2773	3005	Juicy Fruit	Mtume
+1	fever.adf	3010	3228	Summer Madness	Kool & the Gang
+1	fever.adf	3238	3503	Last Night a D.J. Saved My Life	Indeep
+1	wild.adf	0	265	Pump Me Up	Trouble Funk
+1	wild.adf	274	557	One for the Treble (Fresh)	Davy DMX
+1	wild.adf	557	814	Clear	Cybotron
+1	wild.adf	825	1118	Al-Naafiysh (The Soul)	Hashim
+1	wild.adf	1118	1419	Rockit	Herbie Hancock
+1	wild.adf	1437	1840	Looking for the Perfect Beat	Afrika Bambaataa & the Soul Sonic Force
+1	wild.adf	1848	2168	Get It Girl	2 Live Crew
+1	wild.adf	2185	2469	Rock Box	Run-D.M.C.
+1	wild.adf	2472	2743	Bassline	Mantronix
+1	wild.adf	2748	3016	The Smurf	Tyrone Brunson
+1	wild.adf	3025	3364	Magic's Wand	Whodini
+1	wild.adf	3395	3646	More Bounce to the Ounce	Zapp & Roger
+1	wild.adf	3655	3915	The Message	Grandmaster Flash & the Furious Five
+1	wild.adf	3925	4107	The Breaks	Kurtis Blow
+1	espant.adf	9	268	A Gozar Con Mi Combo	Cachao
+1	espant.adf	268	462	The Bull is Wrong	Alpha Banditos
+1	espant.adf	474	727	Yo Te Miré	Tres Apenas Como Eso
+1	espant.adf	732	1019	Latin Flute	Deodato
+1	espant.adf	1116	1367	Mama Papa Tu	Mongo Santamaría
+1	espant.adf	1370	1684	Me and You Baby (Picao y Tostao)	Mongo Santamaría
+1	espant.adf	1691	1895	Mambo Mucho Mambo	Machito and His Afro-Cuban Orchestra
+1	espant.adf	1905	2152	La Vida Es Una Lenteja	Unaesta
+1	espant.adf	2295	2579	Expansions	Lonnie Liston Smith
+1	espant.adf	2588	2768	Añunga Ñunga	Irakere
+1	espant.adf	2773	3113	Super Strut	Deodato
+1	espant.adf	3120	3319	Jamay	Xavier Cugat and His Orchestra
+1	espant.adf	3334	3564	Maracaibo Oriental	Benny Moré
+1	espant.adf	3575	3698	Mambo Gozón	Tito Puente
+2	head.wav	13	161	Stripe Summer	Dil-Don't
+2	head.wav	199	371	Good Thing	Whatever
+2	head.wav	371	571	Fade Away	Craig Gray
+2	head.wav	571	741	Change	Conor & Jay
+2	head.wav	784	968	See Through You	Frankie Fame
+2	head.wav	968	1136	Electronic Go Go	Scatwerk
+2	head.wav	1174	1311	Life Is But A Mere Supply	Dezma
+2	lips.wav	74	207	Bump To The Music	Fatamarse
+2	lips.wav	333	530	Feels Like I Just Can't Take No More	April's in Paris
+2	lips.wav	530	708	Forever	Lucy
+2	lips.wav	708	938	Pray It Goes Ok?	Boyz 2 Girls
+2	lips.wav	938	1059	Grand Theft Auto (Joyride)	Da Shootaz
+2	lips.wav	1059	1196	Rubber Tip	Funky BJs
+2	flash.wav	3	199	Rush Rush	Debbie Harry
+2	flash.wav	244	444	Shake It Up	Elizabeth Daily
+2	flash.wav	526	677	Scarface (Push It to the Limit)	Paul Engemann
+2	flash.wav	677	893	She's on Fire	Amy Holland
+2	flash.wav	936	1102	I'm Hot Tonight	Elizabeth Daily
+2	kjah.wav	5	240	Dance of the Vampires	Scientist
+2	kjah.wav	240	521	Your Teeth in My Neck	Scientist
+2	kjah.wav	521	734	The Corpse Rises	Scientist
+2	kjah.wav	734	994	The Mummy's Shroud	Scientist
+2	kjah.wav	994	1144	Plague of Zombies	Scientist
+2	rise.wav	0	94	Shake (Revolt Clogrock Remix)	Chris Walsh & Dave Beran
+2	rise.wav	94	407	Deep Time	Shiver
+2	rise.wav	407	557	Innerbattle	R.R.D.S.
+2	rise.wav	557	834	Score (Original Mix)	Slyder
+2	rise.wav	834	1247	Neo (The One)	Slyder
+2	rise.wav	1247	1568	Shake (Revolt Clogrock Remix)	Chris Walsh & Dave Beran
+2	msx.wav	0	171	Quagmire	Calyx
+2	msx.wav	171	354	Get Wild	Rascal & Klone
+2	msx.wav	354	482	Judgement Day	Ryme Tyme
+2	msx.wav	482	569	Force	Hex
+2	msx.wav	569	649	First Contact	Omni Trio
+2	msx.wav	649	758	Spectre	Aquasky
+2	msx.wav	758	1048	Winner Takes All	Rascal & Klone
+2	msx.wav	1048	1091	T Minus	Ryme Tyme
+2	msx.wav	1091	1177	Spasm	nCode
+2	msx.wav	1177	1391	Monolith	D.Kay
+2	msx.wav	1391	1500	Iceberg	Dom & Ryme Tyme
+2	game.wav	0	27	Scary Movies (Instrumental)	Bad Meets Evil
+2	game.wav	27	162	We're Live (Danger)	Royce Da 5'9"
+2	game.wav	162	228	Nature Freestyle	Nature
+2	game.wav	228	314	JoJo Pellegrino Freestyle	JoJo Pellegrino
+2	game.wav	314	455	Spit Game	Pretty Ugly & Royce Da 5'9"
+2	game.wav	455	595	I'm the King	Royce Da 5'9"
+2	game.wav	651	770	By a Stranger	Black Rob
+2	game.wav	770	915	Rising to the Top	Agallah feat. Sean Price
+2	class.wav	8	212	Non più andrai farfallone amoroso	Wolfgang Amadeus Mozart
+2	class.wav	337	448	O mio babbino caro	Giacomo Puccini
+2	class.wav	465	633	Libiamo ne' lieti calici	Giuseppe Verdi
+2	class.wav	761	964	Chi mi frena in tal momento	Gaetano Donizetti
+2	class.wav	977	1143	La donna è mobile	Giuseppe Verdi
+2	class.wav	1158	1235	Finch'han del vino	Wolfgang Amadeus Mozart
+3	head.at3	14	199	Train	Conor & Jay
+3	head.at3	204	375	The One For Me	Cloud Nineteen
+3	head.at3	492	696	Take the Pain	Purser
+3	head.at3	706	928	Free Yourself	L-Marie feat. Raff
+3	head.at3	1040	1236	Drive	15 Ways
+3	head.at3	1242	1402	Welcome to the Real World	Roush
+3	head.at3	1408	1585	Keep Dreaming	Vanilla Smoothie
+3	lips.at3	18	228	Funk in Time	Rudy La Fontaine
+3	lips.at3	235	422	Love is the Feeling	Sawaar
+3	lips.at3	545	728	Mine Until Monday	Sunshine Shine
+3	lips.at3	735	925	Get Down	Credit Check
+3	lips.at3	1042	1245	Tonight	Cool Timers
+3	lips.at3	1252	1452	Bass	Nina Barry
+3	lips.at3	1460	1665	Into Something (Come on, Get Down)	The Jackstars
+3	double.at3	28	194	Anvil Chorus (Il trovatore)	Giuseppe Verdi
+3	double.at3	215	450	Tacea la notte placida	Giuseppe Verdi
+3	double.at3	570	760	Vesti la giubba (Pagliacci)	Ruggero Leoncavallo
+3	double.at3	775	1010	E amore un ladroncello	Wolfgang Amadeus Mozart
+3	double.at3	1125	1370	The Marriage of Figaro: Overture	Wolfgang Amadeus Mozart
+3	double.at3	1385	1585	Va, pensiero (Nabucco)	Giuseppe Verdi
+3	kjah.at3	18	218	Pick a Sound	Selah Collins
+3	kjah.at3	222	412	What a Wonderful Feeling	Errol Bellot
+3	kjah.at3	416	618	Watch How the People Dancing	Kenny Knots
+3	kjah.at3	735	928	Lean Boot	Richie Davis
+3	kjah.at3	932	1140	Ready for the Dancehall Tonight	Peter Bouncer
+3	kjah.at3	1145	1338	Ring My Number	Kenny Knots
+3	kjah.at3	1342	1535	Run Come Call Me	Kenny Knots
+3	kjah.at3	1540	1722	You Ha Fe Cool	Richie Davis
+3	rise.at3	0	278	Sing It Back (Boris Musical Mix)	Moloko
+3	rise.at3	278	505	Free	Ultra Naté
+3	rise.at3	505	735	I Believe	Happy Clappers
+3	rise.at3	735	952	House Music	Eddie Amador
+3	rise.at3	952	1175	Feel What You Want	Kristine W
+3	rise.at3	1175	1408	Hideaway (Deep Dish Vocal Remix)	De'Lacy
+3	rise.at3	1408	1630	Spin Spin Sugar (Armand's Dark Garage Mix)	Sneaker Pimps
+3	rise.at3	1630	1845	Plastic Dreams	Jaydee
+3	rise.at3	1845	2060	Altered States	Ron Trent
+3	rise.at3	2060	2235	There Will Come a Day (Half Tab Mix)	The Absolute
+3	rise.at3	2235	2390	Positive Education	Slam
+3	rise.at3	2390	2540	Flash	Green Velvet
+3	msx.at3	0	205	Renegade Snares	Omni Trio
+3	msx.at3	205	408	Terrorist	Renegade
+3	msx.at3	408	612	Finest Illusion (Legal Mix)	Foul Play
+3	msx.at3	612	800	Thru the Vibe (2 on 1 Mix)	Omni Trio
+3	msx.at3	800	1005	The Helicopter Tune	Deep Blue
+3	msx.at3	1005	1210	Dred Bass	Dead Dred
+3	msx.at3	1210	1410	Soul Promenade	Omni Trio
+3	msx.at3	1410	1605	Living For The Future (FBD Project Remix)	Omni Trio
+3	msx.at3	1605	1795	Disturbance (Tango Remix)	Hyper-On Experience
+3	msx.at3	1795	1990	Cold Fresh Air	Higher Sense
+3	msx.at3	1990	2165	First Contact	Omni Trio
+3	msx.at3	2165	2328	Rolled Into 1 (Photek Remix)	E-Z Rollers
+3	flash.at3	14	265	I Wanna Rock You	Giorgio Moroder
+3	flash.at3	272	508	E=MC2	Giorgio Moroder
+3	flash.at3	515	785	From Here to Eternity	Giorgio Moroder
+3	flash.at3	908	1185	Chase	Giorgio Moroder
+3	flash.at3	1192	1458	First Hand Experience in Second Hand Love	Giorgio Moroder
+3	flash.at3	1465	1730	Knights in White Satin	Giorgio Moroder
+3	lcj.at3	20	225	All I Need	Method Man
+3	lcj.at3	232	465	Shook Ones (Part II)	Mobb Deep
+3	lcj.at3	472	695	Incarcerated Scarfaces	Raekwon
+3	lcj.at3	702	905	N.O.R.E.	Noreaga
+3	lcj.at3	1030	1265	Shut 'Em Down (Remix)	Onyx feat. Noreaga & Big Pun
+3	lcj.at3	1272	1455	Beware	Big Pun
+3	lcj.at3	1460	1675	Twinz (Deep Cover 98)	Big Pun & Fat Joe
+3	lcj.at3	1682	1855	Get At Me Dog	DMX feat. Sheek Louch
+3	lcj.at3	1980	2205	Ruff Ryders' Anthem (Remix)	DMX feat. DJ Clue, Jadakiss, Styles P, Drag-On & Eve
+3	lcj.at3	2212	2435	Do What Ya Feel	Redman feat. Method Man
+3	lcj.at3	2442	2640	Chain Gang Freestyle	The LOX & Black Rob
+3	lcj.at3	2645	2850	Chest2Chest Freestyle	The LOX
+3	mundo.at3	15	218	Raghupati	Ananda Shankar
+3	mundo.at3	225	455	Dum Maro Dum	Asha Bhosle
+3	mundo.at3	462	685	Neeve Nanna (Only You Were Mine)	Vijaya Anand
+3	mundo.at3	800	1050	Kidda	Natacha Atlas
+3	mundo.at3	1058	1305	Hebeena Hebeena	Farid El Atrache
+3	mundo.at3	1312	1525	Aini Bet Ref	Ahmed Mneimneh
+3	mundo.at3	1640	1840	Im Nin'alu	Ofra Haza
+3	mundo.at3	1848	2012	Ballaa Tsoubou Hul Kahwa	Samira Tawfik
+3	lcfr.at3	10	585	Heartland Values	Nurse Bob
+3	lcfr.at3	690	1275	The Electron Zone	Steve & Bill
+3	lcfr.at3	1380	1905	Breathing World	Crow & Isis
+3	lcfr.at3	2000	2430	Coq 'O' Vin	Richard Goblin
+3	lcfr.at3	2520	3010	Chatterbox	Lazlow
+4	flash.at3	0	235	Gloria	Laura Branigan
+4	flash.at3	246	470	Human Touch	Rick Springfield
+4	flash.at3	481	672	The One Thing	INXS
+4	flash.at3	677	922	Easy Lover	Philip Bailey & Phil Collins
+4	flash.at3	930	1158	The Warrior	Scandal feat. Patty Smyth
+4	flash.at3	1168	1372	Love Resurrection	Alison Moyet
+4	flash.at3	1381	1595	Games People Play	The Alan Parsons Project
+4	flash.at3	1664	1840	Family Man	Hall & Oates
+4	flash.at3	1846	2040	Love Is a Battlefield	Pat Benatar
+4	flash.at3	2046	2238	Wouldn't It Be Good	Nik Kershaw
+4	flash.at3	2243	2455	Together in Electric Dreams	Philip Oakey & Giorgio Moroder
+4	flash.at3	2465	2685	It's My Life	Talk Talk
+4	flash.at3	2695	2895	Destination Unknown	Missing Persons
+4	flash.at3	2905	3115	Don't Let Go	Wang Chung
+4	flash.at3	3125	3345	Appaloosa	Gino Vannelli
+4	flash.at3	3355	3555	Turn It On Again	Genesis
+4	flash.at3	3562	3725	Living on the Ceiling	Blancmange
+4	flash.at3	3732	3890	Come Back and Stay	Paul Young
+4	vrock.at3	32	262	Holy Diver	Dio
+4	vrock.at3	267	515	Queen of the Reich	Queensrÿche
+4	vrock.at3	592	794	Lick It Up	KISS
+4	vrock.at3	799	1015	Breaking the Chains	Dokken
+4	vrock.at3	1111	1340	All I'm Gonna Take	Autograph
+4	vrock.at3	1425	1675	Balls to the Wall	Accept
+4	vrock.at3	1681	1925	Rock You Like a Hurricane	Scorpions
+4	vrock.at3	1977	2195	Long Stick Goes Boom	Krokus
+4	vrock.at3	2201	2455	Stranglehold	Ted Nugent
+4	vrock.at3	2462	2710	Round and Round	Ratt
+4	vrock.at3	2775	3025	Electric Eye	Judas Priest
+4	vrock.at3	3035	3270	Looks That Kill	Mötley Crüe
+4	vrock.at3	3315	3578	Metal Health (Bang Your Head)	Quiet Riot
+4	emotion.at3	0	172	Only the Lonely	The Motels
+4	emotion.at3	177	475	I'm Not in Love	10cc
+4	emotion.at3	488	705	Harden My Heart	Quarterflash
+4	emotion.at3	787	985	Make Believe	Toto
+4	emotion.at3	992	1205	Fool (If You Think It's Over)	Elkie Brooks
+4	emotion.at3	1266	1495	I'm in Love with a German Film Star	The Passions
+4	emotion.at3	1549	1775	I Want to Know What Love Is	Foreigner
+4	emotion.at3	1780	1995	Never Never	The Assembly
+4	emotion.at3	2055	2270	We Belong	Pat Benatar
+4	emotion.at3	2276	2472	Private Life	The Pretenders
+4	emotion.at3	2477	2758	In the Air Tonight	Phil Collins
+4	emotion.at3	2767	2995	Avalon	Roxy Music
+4	emotion.at3	3049	3255	Baby Hold On	Eddie Money
+4	emotion.at3	3262	3515	Stone Cold	Rainbow
+4	emotion.at3	3523	3748	Call to the Heart	Giuffria
+4	emotion.at3	3755	3940	Moments in Love	Art of Noise
+4	emotion.at3	3947	4145	I Can Dream About You	Dan Hartman
+4	wave_eu.at3	10	225	Love Action (I Believe in Love)	The Human League
+4	wave_eu.at3	232	445	Love on Your Side	Thompson Twins
+4	wave_eu.at3	452	675	Everything Counts	Depeche Mode
+4	wave_eu.at3	750	970	Heart of Glass	Blondie
+4	wave_eu.at3	978	1195	Relax	Frankie Goes to Hollywood
+4	wave_eu.at3	1205	1415	(How to Be A) Millionaire	ABC
+4	wave_eu.at3	1500	1775	Blue Monday	New Order
+4	wave_eu.at3	1782	2005	Quiet Life	Japan
+4	wave_eu.at3	2012	2240	Too Shy (Midnight Mix)	Kajagoogoo
+4	wave_eu.at3	2310	2535	Penthouse and Pavement	Heaven 17
+4	wave_eu.at3	2575	2778	Like to Get to Know You Well	Howard Jones
+4	wave_eu.at3	2783	2995	A Forest	The Cure
+4	wave_eu.at3	3000	3215	Space Age Love Song	A Flock of Seagulls
+4	wave_eu.at3	3220	3380	Don't Go	Yazoo
+4	wave.at3	10	225	Love Action (I Believe in Love)	The Human League
+4	wave.at3	232	445	Love on Your Side	Thompson Twins
+4	wave.at3	452	675	Everything Counts	Depeche Mode
+4	wave.at3	750	970	Heart of Glass	Blondie
+4	wave.at3	978	1195	Relax	Frankie Goes to Hollywood
+4	wave.at3	1205	1415	(How to Be A) Millionaire	ABC
+4	wave.at3	1500	1775	Blue Monday	New Order
+4	wave.at3	1782	2005	Quiet Life	Japan
+4	wave.at3	2012	2240	Too Shy (Midnight Mix)	Kajagoogoo
+4	wave.at3	2310	2530	Penthouse and Pavement	Heaven 17
+4	wave.at3	2535	2750	Sex (I'm A...)	Berlin
+4	wave.at3	2797	2998	Like to Get to Know You Well	Howard Jones
+4	wave.at3	3001	3212	A Forest	The Cure
+4	wave.at3	3216	3435	Space Age Love Song	A Flock of Seagulls
+4	wave.at3	3439	3600	Don't Go	Yazoo
+4	fresh.at3	0	185	Renegades of Funk	Afrika Bambaataa & the Soul Sonic Force
+4	fresh.at3	188	345	Pack Jam (Look Out for the OVC)	The Jonzun Crew
+4	fresh.at3	347	515	It's Like That	Run-D.M.C.
+4	fresh.at3	519	715	Play at Your Own Risk	Planet Patrol
+4	fresh.at3	720	905	Egypt, Egypt	The Egyptian Lover
+4	fresh.at3	909	1070	Beat Box (Diversion One)	Art of Noise
+4	fresh.at3	1075	1245	Boogie Down Bronx	Man Parrish
+4	fresh.at3	1250	1435	Request Line	Rock Master Scott & the Dynamic Three
+4	fresh.at3	1440	1615	Freak-A-Zoid	Midnight Star
+4	fresh.at3	1620	1784	Freaks Come Out at Night	Whodini
+4	paradise.at3	1	175	I Hear Music in the Streets	Unlimited Touch
+4	paradise.at3	178	414	Everyway But Loose (Larry Levan Remix)	Plunky & the Oneness of Juju
+4	paradise.at3	417	585	Can't Fake the Feeling	Geraldine Hunt
+4	paradise.at3	589	758	Do It to the Music	Raw Silk
+4	paradise.at3	762	922	Is It In	Jimmy 'Bo' Horne
+4	paradise.at3	925	1102	Together Forever	Exodus
+4	paradise.at3	1105	1390	This Time Baby	Jackie Moore
+4	paradise.at3	1395	1580	Weekend (Tonight Is Party Time)	Class Action
+4	paradise.at3	1585	1790	It Should Have Been You	Gwen Guthrie
+4	paradise.at3	1795	1952	You Used to Hold Me So Tight	Thelma Houston
+4	paradise.at3	1955	2135	Lost in Music (1984 Bernard Edwards & Nile Rodgers Remix)	Sister Sledge
+4	paradise.at3	2140	2305	Love Has Come Around	Donald Byrd
+4	paradise.at3	2308	2477	The Glow of Love	Change feat. Luther Vandross
+4	vcfl.at3	0	200	Sexual Healing	Marvin Gaye
+4	vcfl.at3	202	382	Fantasy	Earth, Wind & Fire
+4	vcfl.at3	447	638	It Started with a Kiss	Hot Chocolate
+4	vcfl.at3	642	812	Mary Jane	Rick James
+4	vcfl.at3	816	1035	Nightshift	Commodores
+4	vcfl.at3	1100	1275	Mambo	Wally Badarou
+4	vcfl.at3	1280	1510	It's Ecstasy When You Lay Down Next to Me	Barry White
+4	vcfl.at3	1575	1785	You Can't Turn Me Away	Sylvia Striplin
+4	vcfl.at3	1790	1975	Everybody Loves the Sunshine	Roy Ayers Ubiquity
+4	vcfl.at3	1980	2155	Risin' to the Top	Keni Burke
+4	vcfl.at3	2160	2334	Love T.K.O.	Teddy Pendergrass
+4	espant.at3	1	200	Acid	Ray Barretto
+4	espant.at3	204	460	I Like It (I Like It Like That)	Pete 'El Conde' Rodriguez
+4	espant.at3	465	680	Oye Cómo Va	Tito Puente
+4	espant.at3	684	848	Mi Ritmo Es Bueno	Bobby Valentín & Frankie Hernández
+4	espant.at3	852	1058	Químbara	Celia Cruz & Johnny Pacheco
+4	espant.at3	1061	1260	Mi Gente	Héctor Lavoe
+4	espant.at3	1265	1575	Revolt / La Libertad Lógico	Eddie Palmieri & Ismael Quintana
+4	espant.at3	1580	1832	El Malo	Willie Colón & Héctor Lavoe
+4	vcpr.at3	0	1055	Pressing Issues	Maurice Chavez
+4	vcpr.at3	1062	1885	Bait and Switch	Larry Joe & Bobbie Ray
+4	vcpr.at3	1891	2430	The Time Ranger	VCPR Vintage Drama
+4	vcpr.at3	2436	3200	New World Order	Dwayne Thorn
+4	vcpr.at3	3205	3899	Gordon Moorehead Rides Again	VCPR Vintage Drama

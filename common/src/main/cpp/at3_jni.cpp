@@ -38,7 +38,7 @@ static inline int16_t floatToPcm16(float s, float scale) {
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_sc_gtradio_media_stations_At3AudioArchive_nativeDecodeAt3ToWav(
+Java_com_sc_gtradio_media_gen1_At3AudioArchive_nativeDecodeAt3ToWav(
         JNIEnv *env,
         jclass /* clazz */,
         jbyteArray inDataArr,

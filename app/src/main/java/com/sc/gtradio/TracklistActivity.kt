@@ -24,8 +24,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.sc.gtradio.databinding.ActivityTracklistBinding
 import com.sc.gtradio.databinding.ItemTracklistRowBinding
 import com.sc.gtradio.media.*
-import com.sc.gtradio.media.stations.AlbumArtDownloader
-import com.sc.gtradio.media.stations.TracklistContract
+import com.sc.gtradio.media.artwork.AlbumArtDownloader
+import com.sc.gtradio.media.core.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
