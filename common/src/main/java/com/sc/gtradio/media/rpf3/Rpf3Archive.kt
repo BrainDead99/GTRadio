@@ -59,6 +59,24 @@ class Rpf3Archive(
         private val decodeLock = Any()
         @Volatile private var oldCachePurged = false
 
+        private val pinnedFileNames = java.util.Collections.synchronizedSet(HashSet<String>())
+
+        fun pinFile(fileNameOrUri: String) {
+            val name = fileNameOrUri.substringAfterLast('/')
+            pinnedFileNames.add(name)
+        }
+
+        fun unpinFile(fileNameOrUri: String) {
+            val name = fileNameOrUri.substringAfterLast('/')
+            pinnedFileNames.remove(name)
+        }
+
+        fun clearPinnedFiles() {
+            pinnedFileNames.clear()
+        }
+
+        fun isPinned(fileName: String): Boolean = pinnedFileNames.contains(fileName)
+
         private val INDEX_TABLE = intArrayOf(
             -1, -1, -1, -1, 2, 4, 6, 8,
             -1, -1, -1, -1, 2, 4, 6, 8
@@ -488,7 +506,7 @@ class Rpf3Archive(
                 for (f in allCached) {
                     if (totalBytes <= targetBytes) break
                     val ageMs = now - f.lastModified()
-                    if (f.name != safeFileName && ageMs > 25_000L) {
+                    if (f.name != safeFileName && !isPinned(f.name) && ageMs > 25_000L) {
                         val len = f.length()
                         if (f.delete()) {
                             totalBytes -= len

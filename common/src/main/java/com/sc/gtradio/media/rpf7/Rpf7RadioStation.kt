@@ -58,9 +58,9 @@ data class Rpf7ClipRef(
     private val newsArchive: Rpf7Archive?,
     private val player: GTRadioPlayer,
     private val context: Context,
-    override var adsEnabled: Boolean,
-    override var weatherChatterEnabled: Boolean = false,
-    override var newsReportsEnabled: Boolean
+    adsEnabled: Boolean,
+    weatherChatterEnabled: Boolean = false,
+    newsReportsEnabled: Boolean
 ) : RadioStation, TracklistCapableStation {
 
     override var onMetadataChanged: ((MediaMetadata) -> Unit)? = null
@@ -80,22 +80,41 @@ data class Rpf7ClipRef(
     private var isTalkRadio = false
     private var isContinuousMixStation = false
 
-    private val idQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
-    private val soloQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
-    private val generalDjQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
+    private val director by lazy {
+        Gen3RadioDirector<Rpf7SongItem, Rpf7ClipRef>(
+            context = context,
+            era = SeriesEra.GEN3_RPF7,
+            stationName = stationTitle,
+            isTalkRadio = isTalkRadio,
+            rng = rng
+        ).also { d ->
+            d.adsEnabled = this.adsEnabled
+            d.weatherChatterEnabled = this.weatherChatterEnabled
+            d.newsReportsEnabled = this.newsReportsEnabled
+        }
+    }
+
+    override var adsEnabled: Boolean = adsEnabled
+        set(value) {
+            field = value
+            director.adsEnabled = value
+        }
+    override var weatherChatterEnabled: Boolean = weatherChatterEnabled
+        set(value) {
+            field = value
+            director.weatherChatterEnabled = value
+        }
+    override var newsReportsEnabled: Boolean = newsReportsEnabled
+        set(value) {
+            field = value
+            director.newsReportsEnabled = value
+        }
+
     private val morningDjList = ArrayList<Rpf7ClipRef>()
     private val afternoonDjList = ArrayList<Rpf7ClipRef>()
     private val eveningDjList = ArrayList<Rpf7ClipRef>()
     private val nightDjList = ArrayList<Rpf7ClipRef>()
-    private val timeOfDayDjQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
 
-    private val toAdQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
-    private val toNewsQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
-    private val toWeatherQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
-
-    private val advertQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
-    private val newsQueue = RandomizedDualHeadQueue<Rpf7ClipRef>(emptyList(), rng)
-    private val songQueue = RandomizedDualHeadQueue<Rpf7SongItem>(emptyList(), rng)
     private val allSongItems = ArrayList<Rpf7SongItem>()
     private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeDecodeJob: Job? = null
@@ -105,10 +124,6 @@ data class Rpf7ClipRef(
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
-    private var songsSinceLastBreak = 0
-    private var consecutiveSongs = 0
-    private var interludeChainCount = 0
-    private var activeTodBucket: TimeOfDayBucket? = null
     private var activeListener: Player.Listener? = null
 
     private var currentSegmentUris: List<Uri> = emptyList()
@@ -119,6 +134,35 @@ data class Rpf7ClipRef(
     private var introItemCount = 0
     private val chunkWindowStartSamples = java.util.concurrent.ConcurrentHashMap<Int, Long>()
     private val chunkWindowFileNames = java.util.concurrent.ConcurrentHashMap<Int, String>()
+
+    private data class PrefetchedBroadcastItem(
+        val uris: List<Uri>,
+        val pinnedFiles: List<String>,
+        val event: NextBroadcastEvent<Rpf7SongItem, Rpf7ClipRef>,
+        val songItem: Rpf7SongItem?,
+        val segmentType: RadioSegmentType,
+        val pendingBreakClips: List<DirectorBreakClip<Rpf7ClipRef>>? = null
+    )
+
+    private var prefetchedItem: PrefetchedBroadcastItem? = null
+    private var lookAheadJob: Job? = null
+    private var isPrefetching = false
+    private val activePinnedUris = java.util.Collections.synchronizedSet(HashSet<String>())
+    private val pendingBreakClips = ArrayList<DirectorBreakClip<Rpf7ClipRef>>()
+
+    private fun pinAudioUri(uri: Uri) {
+        val uriStr = uri.toString()
+        activePinnedUris.add(uriStr)
+        Rpf7Archive.pinFile(uriStr)
+    }
+
+    private fun unpinAllActive() {
+        for (u in activePinnedUris) {
+            Rpf7Archive.unpinFile(u)
+        }
+        activePinnedUris.clear()
+        Rpf7Archive.clearPinnedFiles()
+    }
 
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedWindowIndex: Int = 0
@@ -249,29 +293,33 @@ data class Rpf7ClipRef(
             }
         }
 
-        idQueue.reset(ids)
-        soloQueue.reset(solos)
-        generalDjQueue.reset(generals)
-        toAdQueue.reset(toAds)
-        toNewsQueue.reset(toNews)
-        toWeatherQueue.reset(toWeather)
-        songQueue.reset(songItems)
+        director.idQueue.reset(ids)
+        director.soloQueue.reset(solos)
+        director.generalDjQueue.reset(generals)
+        director.toAdQueue.reset(toAds)
+        director.toNewsQueue.reset(toNews)
+        director.toWeatherQueue.reset(toWeather)
+        director.songQueue.reset(songItems)
+        director.morningDjList = morningDjList
+        director.afternoonDjList = afternoonDjList
+        director.eveningDjList = eveningDjList
+        director.nightDjList = nightDjList
         allSongItems.clear()
         allSongItems.addAll(songItems)
-        rebuildTimeOfDayQueue()
+        director.rebuildTimeOfDayQueueIfNeeded()
 
         // 4. Index Adverts and News
         val allAdverts = ArrayList<Rpf7ClipRef>()
         advertsArchive?.getFileEntries()?.forEach {
             allAdverts.add(Rpf7ClipRef(advertsArchive, it.name))
         }
-        advertQueue.reset(allAdverts)
+        director.advertQueue.reset(allAdverts)
 
         val allNews = ArrayList<Rpf7ClipRef>()
         newsArchive?.getFileEntries()?.forEach {
             allNews.add(Rpf7ClipRef(newsArchive, it.name))
         }
-        newsQueue.reset(allNews)
+        director.newsQueue.reset(allNews)
 
         GTRadioLogger.log(
             "Rpf7RadioStation[$stationTitle]: Indexed ${songItems.size} songs/shows, " +
@@ -279,19 +327,6 @@ data class Rpf7ClipRef(
                     "${morningDjList.size + afternoonDjList.size + eveningDjList.size + nightDjList.size} TOD clips, " +
                     "${allAdverts.size} adverts, ${allNews.size} news"
         )
-    }
-
-    private fun rebuildTimeOfDayQueue() {
-        val b = BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN3_RPF7)
-        activeTodBucket = b
-        val list = when (b) {
-            TimeOfDayBucket.MORNING -> morningDjList
-            TimeOfDayBucket.AFTERNOON -> afternoonDjList.ifEmpty { morningDjList }
-            TimeOfDayBucket.EVENING -> eveningDjList.ifEmpty { afternoonDjList.ifEmpty { morningDjList } }
-            TimeOfDayBucket.NIGHT -> nightDjList.ifEmpty { eveningDjList.ifEmpty { morningDjList } }
-            else -> emptyList()
-        }
-        timeOfDayDjQueue.reset(list)
     }
 
     private fun isMetadataEnabled(): Boolean {
@@ -484,15 +519,24 @@ data class Rpf7ClipRef(
         activeCleanJob?.cancel()
         activeCleanJob = null
         stopMixPoller(clearMarkers = true)
-        Rpf7Archive.clearPinnedFiles()
+        lookAheadJob?.cancel()
+        lookAheadJob = null
+        isPrefetching = false
+        prefetchedItem?.pinnedFiles?.forEach { Rpf7Archive.unpinFile(it) }
+        prefetchedItem = null
+        unpinAllActive()
+        pendingBreakClips.clear()
         chunkWindowStartSamples.clear()
         chunkWindowFileNames.clear()
         if (!isStationActive) return
         isStationActive = false
         if (_playing) {
-            lastStoppedTimeMs = System.currentTimeMillis()
-            stoppedWindowIndex = player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
-            stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
+            val isReady = player.exoPlayer.playbackState == Player.STATE_READY
+            if (isReady || lastStoppedTimeMs == 0L) {
+                lastStoppedTimeMs = System.currentTimeMillis()
+                stoppedWindowIndex = player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
+                stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
+            }
         }
         _playing = false
         prefetchGeneration++ // Cancel any active background prefetches immediately
@@ -559,6 +603,14 @@ data class Rpf7ClipRef(
         var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
 
+        val isContinuousMix = isContinuousMixStation() || (currentSongItem != null && Rpf7MetadataRepository.getTrackMeta(currentSongItem!!.trackName).isContinuousMix)
+        if (isContinuousMix && currentSongItem != null && activeMixMarkers.isEmpty()) {
+            val markers = currentSongItem!!.archive.readTrackMarkers(currentSongItem!!.trackName)
+            if (markers.isNotEmpty()) {
+                activeMixMarkers = markers
+            }
+        }
+
         var safety = 0
         while (safety < 6 && currentSegmentUris.isNotEmpty()) {
             safety++
@@ -605,9 +657,11 @@ data class Rpf7ClipRef(
                     chunkBlocks
                 )
                 if (nextUri != null) {
-                    if (activeMixMarkers.isNotEmpty()) {
-                        activeMixChunkStartSample = item.archive.getChunkStartSample(item.trackName, nextStart)
-                    }
+                    val nextWinIdx = introItemCount + currentMultiChunksPlayedInRow
+                    val nextSample = item.archive.getChunkStartSample(item.trackName, nextStart)
+                    chunkWindowStartSamples[nextWinIdx] = nextSample
+                    chunkWindowFileNames[nextWinIdx] = nextUri.toString()
+                    pinAudioUri(nextUri)
                     currentMultiChunkNextBlock += chunkBlocks
                     currentMultiChunksPlayedInRow += 1
                     currentSegmentUris = listOf(nextUri)
@@ -645,236 +699,306 @@ data class Rpf7ClipRef(
         }
     }
 
-    private fun hasAnyDjChatter(): Boolean {
-        return generalDjQueue.isNotEmpty() || timeOfDayDjQueue.isNotEmpty()
-    }
-
-    private fun hasAnyAnnouncerOrSolo(): Boolean {
-        return idQueue.isNotEmpty() || soloQueue.isNotEmpty()
-    }
-
     private fun pickNextSegment() {
         currentMultiChunkNextBlock = 0
         currentMultiChunkTotalBlocks = 0
         currentMultiChunksPlayedInRow = 0
+        chunkWindowStartSamples.clear()
+        chunkWindowFileNames.clear()
 
-        var attempts = 0
-        while (attempts < 12) {
-            attempts++
-            when (lastSegment) {
-                RadioSegmentType.None -> {
-                    if (prepareSongSegment(requireDjIntro = false)) return
-                    lastSegment = RadioSegmentType.Song
+        val isContinuousMix = isContinuousMixStation() || (currentSongItem != null && Rpf7MetadataRepository.getTrackMeta(currentSongItem!!.trackName).isContinuousMix)
+        if (isContinuousMix && allSongItems.isNotEmpty()) {
+            prepareContinuousMixSegment()
+            return
+        }
+
+        val prefetched = prefetchedItem
+        prefetchedItem = null
+        if (prefetched != null && areSegmentFilesValid(prefetched.uris)) {
+            currentSegmentUris = prefetched.uris
+            for (u in currentSegmentUris) pinAudioUri(u)
+            currentSongItem = prefetched.songItem
+            lastSegment = prefetched.segmentType
+            pendingBreakClips.clear()
+            prefetched.pendingBreakClips?.let { pendingBreakClips.addAll(it) }
+            introItemCount = if (currentSegmentUris.size > 1 && lastSegment == RadioSegmentType.Song) 1 else 0
+            if (prefetched.songItem != null) {
+                val totalBlocks = prefetched.songItem.archive.getEntryBlockCount(prefetched.songItem.trackName)
+                val chunkBlocks = prefetched.songItem.archive.getChunkBlocksFor(prefetched.songItem.trackName)
+                val chunkThreshold = prefetched.songItem.archive.getChunkThresholdFor(prefetched.songItem.trackName)
+                currentMultiChunkTotalBlocks = totalBlocks
+                currentMultiChunkNextBlock = if (totalBlocks > chunkThreshold) chunkBlocks else totalBlocks
+                currentMultiChunksPlayedInRow = 1
+                if (totalBlocks > chunkThreshold) {
+                    val chunk0WinIdx = introItemCount
+                    val sOff = prefetched.songItem.archive.getChunkStartSample(prefetched.songItem.trackName, 0)
+                    chunkWindowStartSamples[chunk0WinIdx] = sOff
+                    chunkWindowFileNames[chunk0WinIdx] = currentSegmentUris.last().toString()
+                    Rpf7Archive.pinFile(currentSegmentUris.last().toString())
                 }
-                RadioSegmentType.Commercial, RadioSegmentType.NewsReport -> {
-                    val roll = rng.nextInt(10)
-                    if (interludeChainCount < 2 && hasAnyAnnouncerOrSolo() && (isTalkRadio || roll < 6)) {
-                        if (prepareAnnouncerOrSoloSegment()) return
-                    } else if (interludeChainCount < 2 && hasAnyDjChatter() && roll < 8) {
-                        if (prepareDjOrWeatherSegment()) return
-                    } else if (prepareSongSegment(requireDjIntro = true)) return
-                }
-                RadioSegmentType.Announcer -> {
-                    if (interludeChainCount < 2 && hasAnyDjChatter() && rng.nextInt(100) < 55) {
-                        if (prepareDjOrWeatherSegment()) return
-                    } else if (prepareSongSegment(requireDjIntro = true)) return
-                }
-                RadioSegmentType.DJChatter, RadioSegmentType.WeatherReport -> {
-                    val adThreshold = rng.nextInt(3) + 2
-                    if ((adsEnabled || newsReportsEnabled) && songsSinceLastBreak >= adThreshold && interludeChainCount < 2) {
-                        if (prepareAdvertOrNewsSegment()) return
-                    } else if (interludeChainCount < 2 && hasAnyAnnouncerOrSolo() && rng.nextInt(100) < 25) {
-                        if (prepareAnnouncerOrSoloSegment()) return
-                    } else if (prepareSongSegment(false)) return
-                }
-                RadioSegmentType.Song -> {
-                    val adThreshold = rng.nextInt(3) + 2
-                    if ((isTalkRadio && songsSinceLastBreak >= 1) || ((adsEnabled || newsReportsEnabled) && songsSinceLastBreak >= adThreshold)) {
-                        if (prepareAdvertOrNewsSegment()) return
+            }
+            return
+        }
+
+        val event = director.pickNextEvent { song ->
+            if (song.introKeys.isNotEmpty()) {
+                val intro = song.introKeys[rng.nextInt(song.introKeys.size)]
+                Rpf7ClipRef(song.archive, intro)
+            } else null
+        }
+        when (event) {
+            is NextBroadcastEvent.SongSweepItem -> {
+                val item = event.song
+                val uris = ArrayList<Uri>()
+                if (event.djIntro != null) {
+                    materializeClip(event.djIntro.trackKey)?.let { u ->
+                        uris.add(u)
+                        pinAudioUri(u)
                     }
-                    val allowBackToBack = consecutiveSongs < 2 && rng.nextInt(100) < 20
-                    if (allowBackToBack || (!hasAnyDjChatter() && !hasAnyAnnouncerOrSolo())) {
-                        if (prepareSongSegment(false)) return
-                    } else if (hasAnyDjChatter() && hasAnyAnnouncerOrSolo()) {
-                        if (rng.nextInt(100) < 60) {
-                            if (prepareDjOrWeatherSegment()) return
-                        } else {
-                            if (prepareAnnouncerOrSoloSegment()) return
-                        }
-                    } else if (hasAnyDjChatter()) {
-                        if (prepareDjOrWeatherSegment()) return
-                    } else if (hasAnyAnnouncerOrSolo()) {
-                        if (prepareAnnouncerOrSoloSegment()) return
-                    } else if (prepareSongSegment(false)) return
                 }
+                val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
+                val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
+                val chunkThreshold = item.archive.getChunkThresholdFor(item.trackName)
+                val mainUri = if (totalBlocks > chunkThreshold) {
+                    item.archive.materializeBlockChunkUri(item.trackName, 0, chunkBlocks)
+                } else {
+                    item.archive.materializeAudioUri(item.trackName)
+                }
+                if (mainUri != null) {
+                    uris.add(mainUri)
+                    pinAudioUri(mainUri)
+                }
+                introItemCount = if (uris.size > 1) 1 else 0
+                if (totalBlocks > chunkThreshold && mainUri != null) {
+                    val chunk0WinIdx = introItemCount
+                    val sOff = item.archive.getChunkStartSample(item.trackName, 0)
+                    chunkWindowStartSamples[chunk0WinIdx] = sOff
+                    chunkWindowFileNames[chunk0WinIdx] = mainUri.toString()
+                    Rpf7Archive.pinFile(mainUri.toString())
+                }
+                currentSegmentUris = uris
+                currentSongItem = item
+                lastSegment = RadioSegmentType.Song
+                currentMultiChunkTotalBlocks = totalBlocks
+                currentMultiChunkNextBlock = if (totalBlocks > chunkThreshold) chunkBlocks else totalBlocks
+                currentMultiChunksPlayedInRow = 1
+                pendingBreakClips.clear()
             }
-            lastSegment = RadioSegmentType.Song
+            is NextBroadcastEvent.BreakBlockItem -> {
+                val clips = ArrayList(event.clips)
+                val upfrontClips = ArrayList<DirectorBreakClip<Rpf7ClipRef>>()
+                if (clips.isNotEmpty() && clips[0].segmentType in listOf(RadioSegmentType.Announcer, RadioSegmentType.DJChatter)) {
+                    upfrontClips.add(clips.removeAt(0))
+                }
+                if (clips.isNotEmpty()) {
+                    upfrontClips.add(clips.removeAt(0))
+                }
+                val uris = ArrayList<Uri>()
+                for (c in upfrontClips) {
+                    val u = c.clip.archive.materializeAudioUri(c.clip.trackKey)
+                    if (u != null) {
+                        uris.add(u)
+                        pinAudioUri(u)
+                    }
+                }
+                currentSegmentUris = uris
+                currentSongItem = null
+                lastSegment = upfrontClips.firstOrNull()?.segmentType ?: RadioSegmentType.Commercial
+                pendingBreakClips.clear()
+                pendingBreakClips.addAll(clips)
+                introItemCount = 0
+            }
+            is NextBroadcastEvent.MidSweepInterludeItem -> {
+                val ref = event.clip
+                val u = ref.archive.materializeAudioUri(ref.trackKey)
+                if (u != null) {
+                    pinAudioUri(u)
+                    currentSegmentUris = listOf(u)
+                }
+                currentSongItem = null
+                lastSegment = event.segmentType
+                pendingBreakClips.clear()
+                introItemCount = 0
+            }
         }
     }
 
-    private fun prepareAnnouncerOrSoloSegment(): Boolean {
-        stopMixPoller(clearMarkers = true)
-        Rpf7Archive.clearPinnedFiles()
-        chunkWindowStartSamples.clear()
-        chunkWindowFileNames.clear()
-        lastSegment = RadioSegmentType.Announcer
-        val useId = if (idQueue.isNotEmpty() && soloQueue.isNotEmpty()) {
-            isTalkRadio || rng.nextBoolean()
-        } else {
-            idQueue.isNotEmpty()
-        }
-        val ref = if (useId && idQueue.isNotEmpty()) idQueue.next()
-        else if (soloQueue.isNotEmpty()) soloQueue.next()
-        else return false
-
-        val uri = ref.archive.materializeAudioUri(ref.trackKey) ?: return false
-        consecutiveSongs = 0
-        interludeChainCount += 1
-        currentSongItem = null
-        currentSegmentUris = listOf(uri)
-        return true
-    }
-
-    private fun prepareDjOrWeatherSegment(): Boolean {
-        stopMixPoller(clearMarkers = true)
-        Rpf7Archive.clearPinnedFiles()
-        chunkWindowStartSamples.clear()
-        chunkWindowFileNames.clear()
-        lastSegment = RadioSegmentType.DJChatter
-        if (BroadcastAtmosphereClock.getTimeOfDay(context, SeriesEra.GEN3_RPF7) != activeTodBucket) rebuildTimeOfDayQueue()
-
-        val useTod = timeOfDayDjQueue.isNotEmpty() && (generalDjQueue.isEmpty() || rng.nextInt(100) < 35)
-        val ref = if (useTod) timeOfDayDjQueue.next()
-        else if (generalDjQueue.isNotEmpty()) generalDjQueue.next()
-        else return false
-
-        val uri = ref.archive.materializeAudioUri(ref.trackKey) ?: return false
-        consecutiveSongs = 0
-        interludeChainCount += 1
-        currentSongItem = null
-        currentSegmentUris = listOf(uri)
-        return true
-    }
-
-    private fun prepareAdvertOrNewsSegment(): Boolean {
-        stopMixPoller(clearMarkers = true)
-        Rpf7Archive.clearPinnedFiles()
-        chunkWindowStartSamples.clear()
-        chunkWindowFileNames.clear()
-        songsSinceLastBreak = 0
-        val canAd = adsEnabled && advertQueue.isNotEmpty()
-        val canNews = newsReportsEnabled && newsQueue.isNotEmpty()
-        if (!canAd && !canNews) return false
-
-        val playAd = if (canAd && canNews) (rng.nextInt(10) < 7) else canAd
-        if (playAd) {
-            lastSegment = RadioSegmentType.Commercial
-            val adRef = advertQueue.next()
-            val adUri = adRef.archive.materializeAudioUri(adRef.trackKey) ?: return false
-            val list = ArrayList<Uri>(2)
-            if (toAdQueue.isNotEmpty() && rng.nextBoolean()) {
-                val toRef = toAdQueue.next()
-                toRef.archive.materializeAudioUri(toRef.trackKey)?.let { list.add(it) }
-            }
-            list.add(adUri)
-            consecutiveSongs = 0
-            interludeChainCount += 1
-            currentSongItem = null
-            currentSegmentUris = list
-            return true
-        } else {
-            lastSegment = RadioSegmentType.NewsReport
-            val newsRef = newsQueue.next()
-            val newsUri = newsRef.archive.materializeAudioUri(newsRef.trackKey) ?: return false
-            val list = ArrayList<Uri>(2)
-            if (toNewsQueue.isNotEmpty() && rng.nextBoolean()) {
-                val toRef = toNewsQueue.next()
-                toRef.archive.materializeAudioUri(toRef.trackKey)?.let { list.add(it) }
-            }
-            list.add(newsUri)
-            consecutiveSongs = 0
-            interludeChainCount += 1
-            currentSongItem = null
-            currentSegmentUris = list
-            return true
-        }
-    }
-
-    private fun prepareSongSegment(requireDjIntro: Boolean): Boolean {
-        if (songQueue.isEmpty()) return false
-        songsSinceLastBreak += 1
-        consecutiveSongs += 1
-        interludeChainCount = 0
-        lastSegment = RadioSegmentType.Song
-
-        val item = songQueue.next()
+    private fun prepareContinuousMixSegment() {
+        val item = allSongItems[rng.nextInt(allSongItems.size)]
         val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
         val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
         val chunkThreshold = item.archive.getChunkThresholdFor(item.trackName)
-        GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: Selected track '${item.trackName}' (blocks=$totalBlocks, chunkBlocks=$chunkBlocks, intros=${item.introKeys.size})")
-
-        val mainUri: Uri
-        if (totalBlocks > chunkThreshold) {
-            val isContinuousMix = isContinuousMixStation() || Rpf7MetadataRepository.getTrackMeta(item.trackName).isContinuousMix
-            val startBlk = if (isContinuousMix && totalBlocks > chunkBlocks * 2) {
-                (rng.nextInt(totalBlocks / chunkBlocks) * chunkBlocks).coerceAtMost(totalBlocks - chunkBlocks)
-            } else {
-                0
-            }
-            mainUri = item.archive.materializeBlockChunkUri(item.trackName, startBlk, chunkBlocks) ?: return false
-            currentMultiChunkTotalBlocks = totalBlocks
-            currentMultiChunkNextBlock = startBlk + chunkBlocks
-            currentMultiChunksPlayedInRow = 1
-
-            val markers = item.archive.readTrackMarkers(item.trackName)
-            val distinctMusicIds = markers.map { it.trackId }.filter { it > 1 }.distinct()
-            val useMixPoller = distinctMusicIds.size >= 2 || isContinuousMixStation()
-            if (useMixPoller && markers.isNotEmpty()) {
-                activeMixMarkers = markers
-                activeMixChunkStartSample = item.archive.getChunkStartSample(item.trackName, startBlk)
-                activeMixSampleRate = item.archive.getEntrySampleRate(item.trackName)
-                lastDisplayedMixTrackId = -1
-            } else {
-                stopMixPoller(clearMarkers = true)
-            }
+        val startBlk = if (totalBlocks > chunkBlocks * 2) {
+            (rng.nextInt(totalBlocks / chunkBlocks) * chunkBlocks).coerceAtMost(totalBlocks - chunkBlocks)
         } else {
-            mainUri = item.archive.materializeAudioUri(item.trackName) ?: return false
-            currentMultiChunkTotalBlocks = totalBlocks
-            currentMultiChunkNextBlock = totalBlocks
-            currentMultiChunksPlayedInRow = 1
+            0
+        }
+        val mainUri = item.archive.materializeBlockChunkUri(item.trackName, startBlk, chunkBlocks) ?: return
+        pinAudioUri(mainUri)
+        currentMultiChunkTotalBlocks = totalBlocks
+        currentMultiChunkNextBlock = startBlk + chunkBlocks
+        currentMultiChunksPlayedInRow = 1
 
-            val markers = item.archive.readTrackMarkers(item.trackName)
-            val distinctMusicIds = markers.map { it.trackId }.filter { it > 1 }.distinct()
-            val useMixPoller = distinctMusicIds.size >= 2 || isContinuousMixStation()
-            if (useMixPoller && markers.isNotEmpty()) {
-                activeMixMarkers = markers
-                activeMixChunkStartSample = 0L
-                activeMixSampleRate = item.archive.getEntrySampleRate(item.trackName)
-                lastDisplayedMixTrackId = -1
-            } else {
-                stopMixPoller(clearMarkers = true)
-            }
+        val markers = item.archive.readTrackMarkers(item.trackName)
+        if (markers.isNotEmpty()) {
+            activeMixMarkers = markers
+            val sOff = item.archive.getChunkStartSample(item.trackName, startBlk)
+            activeMixChunkStartSample = sOff
+            activeMixSampleRate = item.archive.getEntrySampleRate(item.trackName)
+            lastDisplayedMixTrackId = -1
+        } else {
+            stopMixPoller(clearMarkers = true)
         }
 
-        val list = ArrayList<Uri>(2)
-        if (item.introKeys.isNotEmpty() && (requireDjIntro || rng.nextInt(100) < 60)) {
-            val chosenIntro = item.introKeys[rng.nextInt(item.introKeys.size)]
-            materializeClip(chosenIntro)?.let { list.add(it) }
-        }
-        list.add(mainUri)
-        introItemCount = if (list.size > 1) 1 else 0
-
+        introItemCount = 0
         if (totalBlocks > chunkThreshold) {
-            val chunk0WinIdx = introItemCount
-            val sOff = item.archive.getChunkStartSample(item.trackName, currentMultiChunkNextBlock - chunkBlocks)
+            val chunk0WinIdx = 0
+            val sOff = item.archive.getChunkStartSample(item.trackName, startBlk)
             chunkWindowStartSamples[chunk0WinIdx] = sOff
             chunkWindowFileNames[chunk0WinIdx] = mainUri.toString()
             Rpf7Archive.pinFile(mainUri.toString())
         }
 
         currentSongItem = item
-        currentSegmentUris = list
-        return true
+        lastSegment = RadioSegmentType.Song
+        currentSegmentUris = listOf(mainUri)
+        pendingBreakClips.clear()
+    }
+
+    private fun startLookAheadMonitor(expectedGen: Int, totalDurationMs: Long) {
+        lookAheadJob?.cancel()
+        isPrefetching = false
+        prefetchedItem = null
+        if (totalDurationMs <= 25_000L) {
+            lookAheadJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+                delay(2_000L)
+                if (!_playing || playGeneration.get() != expectedGen || isPrefetching) return@launch
+                prefetchNextEvent(expectedGen)
+            }
+            return
+        }
+        lookAheadJob = stationScope.launch {
+            while (isActive && _playing && playGeneration.get() == expectedGen && !isPrefetching) {
+                delay(1000L)
+                val pos = player.getCurrentTrackPosition().coerceAtLeast(0L)
+                val remainingMs = totalDurationMs - pos
+                if (remainingMs in 1..25_000L) {
+                    isPrefetching = true
+                    stationScope.launch(StationDispatchers.ioDispatcher) {
+                        if (!_playing || playGeneration.get() != expectedGen) return@launch
+                        prefetchNextEvent(expectedGen)
+                    }
+                    break
+                }
+            }
+        }
+    }
+
+    private fun prefetchNextEvent(expectedGen: Int) {
+        if (!_playing || playGeneration.get() != expectedGen) return
+        val event = director.pickNextEvent { song ->
+            if (song.introKeys.isNotEmpty()) {
+                val intro = song.introKeys[rng.nextInt(song.introKeys.size)]
+                Rpf7ClipRef(song.archive, intro)
+            } else null
+        }
+        when (event) {
+            is NextBroadcastEvent.SongSweepItem -> {
+                val item = event.song
+                val uris = ArrayList<Uri>()
+                val pinned = ArrayList<String>()
+                if (event.djIntro != null) {
+                    materializeClip(event.djIntro.trackKey)?.let { u ->
+                        uris.add(u)
+                        val p = u.toString()
+                        pinned.add(p)
+                        Rpf7Archive.pinFile(p)
+                    }
+                }
+                val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
+                val chunkThreshold = item.archive.getChunkThresholdFor(item.trackName)
+                val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
+                val mainUri = if (totalBlocks > chunkThreshold) {
+                    item.archive.materializeBlockChunkUri(item.trackName, 0, chunkBlocks)
+                } else {
+                    item.archive.materializeAudioUri(item.trackName)
+                }
+                if (mainUri != null) {
+                    uris.add(mainUri)
+                    val p = mainUri.toString()
+                    pinned.add(p)
+                    Rpf7Archive.pinFile(p)
+                }
+                if (uris.isNotEmpty() && _playing && playGeneration.get() == expectedGen) {
+                    prefetchedItem = PrefetchedBroadcastItem(
+                        uris = uris,
+                        pinnedFiles = pinned,
+                        event = event,
+                        songItem = item,
+                        segmentType = RadioSegmentType.Song
+                    )
+                    GTRadioLogger.logVerbose("DIRECTOR") {
+                        "[DIRECTOR] Rpf7[$stationTitle]: Look-ahead prefetched next song '${item.trackName}' (intro=${event.djIntro != null})"
+                    }
+                } else {
+                    pinned.forEach { Rpf7Archive.unpinFile(it) }
+                }
+            }
+            is NextBroadcastEvent.BreakBlockItem -> {
+                val clips = ArrayList(event.clips)
+                val upfrontClips = ArrayList<DirectorBreakClip<Rpf7ClipRef>>()
+                if (clips.isNotEmpty() && clips[0].segmentType in listOf(RadioSegmentType.Announcer, RadioSegmentType.DJChatter)) {
+                    upfrontClips.add(clips.removeAt(0))
+                }
+                if (clips.isNotEmpty()) {
+                    upfrontClips.add(clips.removeAt(0))
+                }
+                val uris = ArrayList<Uri>()
+                val pinned = ArrayList<String>()
+                for (c in upfrontClips) {
+                    val u = c.clip.archive.materializeAudioUri(c.clip.trackKey)
+                    if (u != null) {
+                        uris.add(u)
+                        val p = u.toString()
+                        pinned.add(p)
+                        Rpf7Archive.pinFile(p)
+                    }
+                }
+                if (uris.isNotEmpty() && _playing && playGeneration.get() == expectedGen) {
+                    prefetchedItem = PrefetchedBroadcastItem(
+                        uris = uris,
+                        pinnedFiles = pinned,
+                        event = event,
+                        songItem = null,
+                        segmentType = upfrontClips.first().segmentType,
+                        pendingBreakClips = clips
+                    )
+                    GTRadioLogger.logVerbose("DIRECTOR") {
+                        "[DIRECTOR] Rpf7[$stationTitle]: Look-ahead prefetched break upfront (${upfrontClips.size} clips, ${clips.size} queued)"
+                    }
+                } else {
+                    pinned.forEach { Rpf7Archive.unpinFile(it) }
+                }
+            }
+            is NextBroadcastEvent.MidSweepInterludeItem -> {
+                val ref = event.clip
+                val u = ref.archive.materializeAudioUri(ref.trackKey)
+                if (u != null && _playing && playGeneration.get() == expectedGen) {
+                    val p = u.toString()
+                    Rpf7Archive.pinFile(p)
+                    prefetchedItem = PrefetchedBroadcastItem(
+                        uris = listOf(u),
+                        pinnedFiles = listOf(p),
+                        event = event,
+                        songItem = null,
+                        segmentType = event.segmentType
+                    )
+                    GTRadioLogger.logVerbose("DIRECTOR") {
+                        "[DIRECTOR] Rpf7[$stationTitle]: Look-ahead prefetched interlude '${ref.trackKey}' (${event.segmentType})"
+                    }
+                }
+            }
+        }
     }
 
     private fun prefetchAndQueueNextChunk(expectedGen: Int = playGeneration.get()) {
@@ -941,6 +1065,9 @@ data class Rpf7ClipRef(
                         alreadyHandled = true
                         player.exoPlayer.removeListener(this)
                         if (_playing && playGeneration.get() == expectedGen) {
+                            if (pendingBreakClips.isEmpty() && director.currentPhase == DirectorPhase.BREAK_BLOCK) {
+                                director.onBreakCompleted()
+                            }
                             playNext()
                         }
                     }
@@ -958,7 +1085,25 @@ data class Rpf7ClipRef(
                     }
                     updateMetadataForWindowIndex(curIdx, expectedGen)
 
-                    if (currentSongItem != null && currentMultiChunkTotalBlocks > 0) {
+                    // Staged Break Decoding: while Clip #1 plays, decode Clip #2; while Clip #2 plays, decode remaining clips
+                    if (pendingBreakClips.isNotEmpty()) {
+                        val nextClip = pendingBreakClips.removeAt(0)
+                        stationScope.launch(StationDispatchers.ioDispatcher) {
+                            if (!_playing || playGeneration.get() != expectedGen) return@launch
+                            val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey) ?: return@launch
+                            pinAudioUri(uri)
+                            withContext(Dispatchers.Main.immediate) {
+                                if (_playing && playGeneration.get() == expectedGen) {
+                                    player.exoPlayer.addMediaItem(MediaItem.fromUri(uri))
+                                    GTRadioLogger.logVerbose("DIRECTOR") {
+                                        "[DIRECTOR] Rpf7[$stationTitle]: Staged queued break clip '${nextClip.clip.trackKey}' (${nextClip.label})"
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (currentSongItem != null && currentMultiChunkTotalBlocks > 0 && isContinuousMixStation()) {
                         prefetchAndQueueNextChunk(expectedGen)
                     }
                 }
@@ -983,12 +1128,19 @@ data class Rpf7ClipRef(
 
             if (activeMixMarkers.isNotEmpty()) {
                 startMixPoller(expectedGen)
+                updateMixTrackMetadata()
             } else {
                 stopMixPoller(clearMarkers = false)
             }
 
-            if (currentMultiChunkTotalBlocks > 0 && currentMultiChunkNextBlock < currentMultiChunkTotalBlocks) {
+            if (currentMultiChunkTotalBlocks > 0 && currentMultiChunkNextBlock < currentMultiChunkTotalBlocks && isContinuousMixStation()) {
                 prefetchAndQueueNextChunk(expectedGen)
+            }
+
+            // Start look-ahead prefetch monitor for discrete songs
+            if (!isContinuousMixStation() && currentSongItem != null) {
+                val totalDur = if (uris.isNotEmpty()) getFileDurationMs(uris.last()) else 0L
+                startLookAheadMonitor(expectedGen, totalDur)
             }
         }
     }

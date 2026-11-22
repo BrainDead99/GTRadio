@@ -44,6 +44,8 @@ import com.sc.gtradio.media.rpf3.*
 import com.sc.gtradio.media.rpf7.*
 import com.sc.gtradio.media.artwork.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.ArrayList
 import java.util.concurrent.atomic.AtomicLong
 
@@ -75,6 +77,7 @@ open class GTRadioMusicService : MediaLibraryService() {
     private val tracklistPlayedIndices = mutableListOf<Int>()
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val scanMutex = Mutex()
     @Volatile private var groupsLoaded = false
     private var cachedUri: String? = null
     @Volatile private var cacheHydrated = false
@@ -1151,8 +1154,10 @@ open class GTRadioMusicService : MediaLibraryService() {
         return groups
     }
 
-    private fun ensureGroupsLoadedSync(currentUri: String) {
-        if (!groupsLoaded || cachedUri != currentUri) {
+    private suspend fun ensureGroupsLoadedSync(currentUri: String) {
+        if (groupsLoaded && cachedUri == currentUri) return
+        scanMutex.withLock {
+            if (groupsLoaded && cachedUri == currentUri) return@withLock
             if (!cacheHydrated && currentUri.isNotBlank()) {
                 val cacheStart = System.currentTimeMillis()
                 val cached = LibraryIndexCache.loadCache(applicationContext, currentUri)
@@ -1191,7 +1196,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                             GTRadioLogger.log("[SCAN] LibraryIndexCache: Background validation pass failed", e)
                         }
                     }
-                    return
+                    return@withLock
                 } else {
                     val cacheElapsed = System.currentTimeMillis() - cacheStart
                     GTRadioLogger.log("[SCAN] LibraryIndexCache MISS: cache check took ${cacheElapsed}ms, running full SAF scan")

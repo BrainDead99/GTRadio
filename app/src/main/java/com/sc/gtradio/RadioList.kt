@@ -41,9 +41,7 @@ import com.sc.gtradio.media.artwork.AlbumArtDownloader
 import com.sc.gtradio.media.core.TracklistContract
 import com.sc.gtradio.utils.InjectorUtils
 import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -672,19 +670,59 @@ class RadioList : Fragment() {
         stripItemSpanPx = iconSizePx + (marginPx * 2)
         stripCycleWidthPx = children.size * stripItemSpanPx
 
+        var missingIcons = false
         for (item in children) {
             val mId = item.mediaId
             val stTitle = item.mediaMetadata.title?.toString() ?: ""
             val onUri = DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, stTitle)
             val offUri = DynamicThemeManager.resolveStationIconUri(pack.stationOffIconUris, stTitle)
 
-            val onBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), onUri, 256)
-                ?: item.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(requireContext(), it, 256) }
-            val offBmp: Bitmap? = DynamicThemeManager.loadBitmap(requireContext(), offUri, 256)
+            val onBmp: Bitmap? = DynamicThemeManager.getCachedBitmap(onUri, 256)
+                ?: item.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 256) }
+            val offBmp: Bitmap? = DynamicThemeManager.getCachedBitmap(offUri, 256)
                 ?: onBmp
+
+            if (onBmp == null || offBmp == null) {
+                missingIcons = true
+            }
 
             stationOnBitmaps[mId] = onBmp
             stationOffBitmaps[mId] = offBmp
+        }
+
+        if (missingIcons) {
+            val ctx = requireContext().applicationContext
+            viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
+                for (item in children) {
+                    val mId = item.mediaId
+                    val stTitle = item.mediaMetadata.title?.toString() ?: ""
+                    val onUri = DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, stTitle)
+                    val offUri = DynamicThemeManager.resolveStationIconUri(pack.stationOffIconUris, stTitle)
+
+                    val onBmp = stationOnBitmaps[mId] ?: (DynamicThemeManager.loadBitmap(ctx, onUri, 256)
+                        ?: item.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(ctx, it, 256) })
+                    val offBmp = stationOffBitmaps[mId] ?: (DynamicThemeManager.loadBitmap(ctx, offUri, 256)
+                        ?: onBmp)
+
+                    stationOnBitmaps[mId] = onBmp
+                    stationOffBitmaps[mId] = offBmp
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (_binding != null && isAdded) {
+                        for ((mId, views) in stripViewsByMediaId) {
+                            val offBmp = stationOffBitmaps[mId]
+                            if (offBmp != null) {
+                                for (iv in views) iv.setImageBitmap(offBmp)
+                            }
+                        }
+                        for ((mId, iv) in stationIconViews) {
+                            val onBmp = stationOnBitmaps[mId]
+                            if (onBmp != null) iv.setImageBitmap(onBmp)
+                        }
+                        updateDynamicThemePlaybackUi()
+                    }
+                }
+            }
         }
 
         if (stripMode && children.isNotEmpty()) {
@@ -1022,12 +1060,25 @@ class MediaItemListAdapter(
         if (payloads.isEmpty()) {
             holder.item = mediaItem
             holder.titleView.text = mediaItem.mediaMetadata.title
-            val bmp = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(holder.itemView.context, it, 256) }
+            val cachedBmp = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 256) }
                 ?: mediaItem.mediaMetadata.iconBitmap
-            if (bmp != null) {
-                holder.albumArt.setImageBitmap(bmp)
+            if (cachedBmp != null) {
+                holder.albumArt.setImageBitmap(cachedBmp)
             } else {
                 holder.albumArt.setImageResource(R.drawable.outline_radio_24)
+                mediaItem.mediaMetadata.artworkUri?.let { artUri ->
+                    val ctx = holder.itemView.context.applicationContext
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val loaded = DynamicThemeManager.loadBitmap(ctx, artUri, 256)
+                        if (loaded != null) {
+                            withContext(Dispatchers.Main.immediate) {
+                                if (holder.bindingAdapterPosition != androidx.recyclerview.widget.RecyclerView.NO_POSITION) {
+                                    holder.albumArt.setImageBitmap(loaded)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
