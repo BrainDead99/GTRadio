@@ -593,35 +593,43 @@ class Rpf3Archive(
         val inBuf = ByteArray(byteCountToRead)
         readFully(ch, ByteBuffer.wrap(inBuf), sub.dataOffsetInRpf)
 
-        BufferedOutputStream(FileOutputStream(outFile), 65536).use { out ->
+        BufferedOutputStream(FileOutputStream(outFile), 262144).use { out ->
             writeWavHeader(out, pcmBytesLen, sub.sampleRate, 1)
             if (!sub.isCompressed) {
                 out.write(inBuf)
             } else {
-                val state = AdpcmState()
-                val outChunk = ByteArray(8192)
-                var outPos = 0
-                var samplesDecoded = 0
-                for (b in inBuf) {
-                    val v = b.toInt() and 0xFF
-                    if (samplesDecoded < totalSamples) {
-                        val s1 = decodeNibble(v and 0x0F, state).toInt()
-                        outChunk[outPos++] = (s1 and 0xFF).toByte()
-                        outChunk[outPos++] = ((s1 shr 8) and 0xFF).toByte()
-                        samplesDecoded++
+                val stateArr = intArrayOf(0, 0, 0, 0)
+                val pcmBytes = com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecodeRpf3ImaAdpcmToPcm16(
+                    inBuf, 0, 0, inBuf.size, totalSamples, 1, stateArr
+                )
+                if (pcmBytes.isNotEmpty()) {
+                    out.write(pcmBytes)
+                } else {
+                    val state = AdpcmState()
+                    val outChunk = ByteArray(8192)
+                    var outPos = 0
+                    var samplesDecoded = 0
+                    for (b in inBuf) {
+                        val v = b.toInt() and 0xFF
+                        if (samplesDecoded < totalSamples) {
+                            val s1 = decodeNibble(v and 0x0F, state).toInt()
+                            outChunk[outPos++] = (s1 and 0xFF).toByte()
+                            outChunk[outPos++] = ((s1 shr 8) and 0xFF).toByte()
+                            samplesDecoded++
+                        }
+                        if (samplesDecoded < totalSamples) {
+                            val s2 = decodeNibble((v shr 4) and 0x0F, state).toInt()
+                            outChunk[outPos++] = (s2 and 0xFF).toByte()
+                            outChunk[outPos++] = ((s2 shr 8) and 0xFF).toByte()
+                            samplesDecoded++
+                        }
+                        if (outPos >= outChunk.size - 4) {
+                            out.write(outChunk, 0, outPos)
+                            outPos = 0
+                        }
                     }
-                    if (samplesDecoded < totalSamples) {
-                        val s2 = decodeNibble((v shr 4) and 0x0F, state).toInt()
-                        outChunk[outPos++] = (s2 and 0xFF).toByte()
-                        outChunk[outPos++] = ((s2 shr 8) and 0xFF).toByte()
-                        samplesDecoded++
-                    }
-                    if (outPos >= outChunk.size - 4) {
-                        out.write(outChunk, 0, outPos)
-                        outPos = 0
-                    }
+                    if (outPos > 0) out.write(outChunk, 0, outPos)
                 }
-                if (outPos > 0) out.write(outChunk, 0, outPos)
             }
         }
     }
@@ -724,10 +732,11 @@ class Rpf3Archive(
         }
 
         val blockBytes = ByteArray(blockSize)
-        val pcmOutBuf = ByteArray(32768)
-        var pcmOutPos = 0
+        val stateArray = intArrayOf(
+            leftState.valprev, leftState.index, rightState.valprev, rightState.index
+        )
 
-        BufferedOutputStream(FileOutputStream(outFile), 65536).use { out ->
+        BufferedOutputStream(FileOutputStream(outFile), 262144).use { out ->
             writeWavHeader(out, totalPcmBytes, sampleRate, outChannels)
 
             for (b in firstBlock until endBlockExclusive) {
@@ -750,45 +759,18 @@ class Rpf3Archive(
                 if (ch0ByteOff + numBytesPerCh > blockSize) continue
                 if (outChannels == 2 && ch1ByteOff + numBytesPerCh > blockSize) continue
 
-                var decodedInBlk = 0
-                for (i in 0 until numBytesPerCh) {
-                    val bL = blockBytes[ch0ByteOff + i].toInt() and 0xFF
-                    val bR = if (outChannels == 2) (blockBytes[ch1ByteOff + i].toInt() and 0xFF) else 0
-
-                    if (decodedInBlk < ch0Samples) {
-                        val sL1 = decodeNibble(bL and 0x0F, leftState).toInt()
-                        pcmOutBuf[pcmOutPos++] = (sL1 and 0xFF).toByte()
-                        pcmOutBuf[pcmOutPos++] = ((sL1 shr 8) and 0xFF).toByte()
-                        if (outChannels == 2) {
-                            val sR1 = decodeNibble(bR and 0x0F, rightState).toInt()
-                            pcmOutBuf[pcmOutPos++] = (sR1 and 0xFF).toByte()
-                            pcmOutBuf[pcmOutPos++] = ((sR1 shr 8) and 0xFF).toByte()
-                        }
-                        decodedInBlk++
-                    }
-
-                    if (decodedInBlk < ch0Samples) {
-                        val sL2 = decodeNibble((bL shr 4) and 0x0F, leftState).toInt()
-                        pcmOutBuf[pcmOutPos++] = (sL2 and 0xFF).toByte()
-                        pcmOutBuf[pcmOutPos++] = ((sL2 shr 8) and 0xFF).toByte()
-                        if (outChannels == 2) {
-                            val sR2 = decodeNibble((bR shr 4) and 0x0F, rightState).toInt()
-                            pcmOutBuf[pcmOutPos++] = (sR2 and 0xFF).toByte()
-                            pcmOutBuf[pcmOutPos++] = ((sR2 shr 8) and 0xFF).toByte()
-                        }
-                        decodedInBlk++
-                    }
-
-                    if (pcmOutPos >= pcmOutBuf.size - 8) {
-                        out.write(pcmOutBuf, 0, pcmOutPos)
-                        pcmOutPos = 0
-                    }
+                val blockPcm = com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecodeRpf3ImaAdpcmToPcm16(
+                    blockBytes, ch0ByteOff, ch1ByteOff, numBytesPerCh, ch0Samples, outChannels, stateArray
+                )
+                if (blockPcm.isNotEmpty()) {
+                    out.write(blockPcm)
                 }
             }
-            if (pcmOutPos > 0) {
-                out.write(pcmOutBuf, 0, pcmOutPos)
-            }
         }
+        leftState.valprev = stateArray[0]
+        leftState.index = stateArray[1]
+        rightState.valprev = stateArray[2]
+        rightState.index = stateArray[3]
 
         if (endBlockExclusive < numBlocks) {
             chunkStates["${entry.name}_$endBlockExclusive"] = intArrayOf(

@@ -21,4 +21,16 @@ object NativeMp3Decoder {
 
     @JvmStatic
     external fun nativeDecodeMonoMp3WithWarmup(mp3Data: ByteArray, warmupData: ByteArray?): ShortArray
+
+    @JvmStatic
+    external fun nativeDecodeDualMonoMp3BlockToPcmBytes(
+        leftMp3: ByteArray?,
+        leftWarmup: ByteArray?,
+        leftSkip: Int,
+        leftCount: Int,
+        rightMp3: ByteArray?,
+        rightWarmup: ByteArray?,
+        rightSkip: Int,
+        rightCount: Int
+    ): ByteArray
 }

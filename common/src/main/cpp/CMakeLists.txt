@@ -9,6 +9,7 @@ set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 add_library(gtradio_at3 SHARED
     at3_jni.cpp
     minimp3_jni.cpp
+    gen3_turbo_jni.cpp
     ${AT3_DIR}/atrac.cpp
     ${AT3_DIR}/atrac3.cpp
     ${AT3_DIR}/atrac3plus.cpp
@@ -22,8 +23,7 @@ add_library(gtradio_at3 SHARED
 
 target_include_directories(gtradio_at3 PRIVATE ${AT3_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(gtradio_at3 PRIVATE
-    $<$<CONFIG:Release>:-O3>
-    $<$<NOT:$<CONFIG:Release>>:-O2>
+    -O3
     -fPIC
     -Wno-deprecated-declarations
     -Wno-unused-parameter

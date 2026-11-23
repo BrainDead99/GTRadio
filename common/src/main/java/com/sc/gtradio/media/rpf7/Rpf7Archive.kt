@@ -950,7 +950,8 @@ class Rpf7Archive(
         val chCount = Math.max(1, entry.channels)
         val dataEndPos = baseDataOffset + entry.dataChunkSize
 
-        val pcmDataBaos = java.io.ByteArrayOutputStream(blockCount * blkSize * 4)
+        val blockPcmList = ArrayList<ByteArray>(blockCount)
+        var totalPcmBytes = 0
         val prevChannelWarmup = Array<ByteArray?>(chCount) { null }
 
         // If resuming or chunking mid-stream, extract warmup bytes from preceding block to prime bit reservoir
@@ -1037,69 +1038,62 @@ class Rpf7Archive(
 
             // Channel payloads start after header (2048 bytes)
             var curPos = 2048
-            val channelPcm = ArrayList<ShortArray>(chCount)
-
+            val chOffsets = IntArray(chCount)
+            val chSafeLens = IntArray(chCount)
             for (c in 0 until chCount) {
                 val chByteLen = byteLengths[c]
-                val chOffset = curPos
-                // 16-byte alignment for next channel
+                chOffsets[c] = curPos
                 curPos = (curPos + chByteLen + 15) and -16
-
-                val safeLen = Math.max(0, Math.min(chByteLen, actualBlockSize - chOffset))
-                val mp3Payload = ByteArray(safeLen)
-                if (safeLen > 0 && chOffset < actualBlockSize) {
-                    System.arraycopy(blockBytes, chOffset, mp3Payload, 0, safeLen)
-                }
-
-                val decoded = decodeMp3ChannelToPcm(mp3Payload, entry.sampleRate, prevChannelWarmup[c])
-
-                // Save trailing bytes for the next block warmup
-                if (safeLen > 0) {
-                    val warmupSize = Math.min(2048, safeLen)
-                    val warmupBytes = ByteArray(warmupSize)
-                    System.arraycopy(mp3Payload, safeLen - warmupSize, warmupBytes, 0, warmupSize)
-                    prevChannelWarmup[c] = warmupBytes
-                }
-
-                val trimStart = samplesToSkip[c].coerceIn(0, decoded.size)
-                val targetEnd = trimStart + sampleCounts[c]
-                val trimEnd = if (sampleCounts[c] > 0) targetEnd.coerceAtMost(decoded.size) else decoded.size
-                val trimmed = if (trimStart < trimEnd) {
-                    decoded.copyOfRange(trimStart, trimEnd)
-                } else {
-                    decoded
-                }
-                channelPcm.add(trimmed)
+                chSafeLens[c] = Math.max(0, Math.min(chByteLen, actualBlockSize - chOffsets[c]))
             }
 
-            // Interleave PCM frames (Left, Right for stereo, or Mono)
-            if (chCount >= 2) {
-                val left = channelPcm[0]
-                val right = channelPcm[1]
-                val n = Math.min(left.size, right.size)
-                for (f in 0 until n) {
-                    val l = left[f].toInt()
-                    pcmDataBaos.write(l and 0xFF)
-                    pcmDataBaos.write((l ushr 8) and 0xFF)
-                    val r = right[f].toInt()
-                    pcmDataBaos.write(r and 0xFF)
-                    pcmDataBaos.write((r ushr 8) and 0xFF)
+            val leftPayload = ByteArray(chSafeLens[0])
+            if (chSafeLens[0] > 0 && chOffsets[0] < actualBlockSize) {
+                System.arraycopy(blockBytes, chOffsets[0], leftPayload, 0, chSafeLens[0])
+            }
+            val rightPayload = if (chCount >= 2 && chSafeLens[1] > 0 && chOffsets[1] < actualBlockSize) {
+                val rBuf = ByteArray(chSafeLens[1])
+                System.arraycopy(blockBytes, chOffsets[1], rBuf, 0, chSafeLens[1])
+                rBuf
+            } else null
+
+            val blockPcm = NativeMp3Decoder.nativeDecodeDualMonoMp3BlockToPcmBytes(
+                leftPayload,
+                prevChannelWarmup[0],
+                samplesToSkip[0],
+                sampleCounts[0],
+                rightPayload,
+                if (chCount >= 2) prevChannelWarmup[1] else null,
+                if (chCount >= 2) samplesToSkip[1] else 0,
+                if (chCount >= 2) sampleCounts[1] else 0
+            )
+
+            // Save trailing bytes for the next block warmup
+            for (c in 0 until chCount) {
+                val sLen = chSafeLens[c]
+                if (sLen > 0) {
+                    val warmupSize = Math.min(2048, sLen)
+                    val warmupBytes = ByteArray(warmupSize)
+                    val pBuf = if (c == 0) leftPayload else rightPayload
+                    if (pBuf != null && pBuf.size >= sLen) {
+                        System.arraycopy(pBuf, sLen - warmupSize, warmupBytes, 0, warmupSize)
+                        prevChannelWarmup[c] = warmupBytes
+                    }
                 }
-            } else if (channelPcm.isNotEmpty()) {
-                val mono = channelPcm[0]
-                for (f in 0 until mono.size) {
-                    val m = mono[f].toInt()
-                    pcmDataBaos.write(m and 0xFF)
-                    pcmDataBaos.write((m ushr 8) and 0xFF)
-                }
+            }
+
+            if (blockPcm.isNotEmpty()) {
+                blockPcmList.add(blockPcm)
+                totalPcmBytes += blockPcm.size
             }
         }
 
-        // Write final WAV file
-        val pcmBytes = pcmDataBaos.toByteArray()
-        BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
-            writeWavHeader(out, pcmBytes.size, entry.sampleRate, chCount)
-            out.write(pcmBytes)
+        // Write final WAV file with 256 KB buffer and single write per block
+        BufferedOutputStream(FileOutputStream(tempFile), 262144).use { out ->
+            writeWavHeader(out, totalPcmBytes, entry.sampleRate, chCount)
+            for (blockPcm in blockPcmList) {
+                out.write(blockPcm)
+            }
         }
     }
 
@@ -1127,12 +1121,8 @@ class Rpf7Archive(
 
         // Temporary decode buffers (each byte of ADPCM decompresses to 2 PCM samples)
         val rawBlock = ByteArray(blkSize)
-        val maxSamplesPerChannel = Math.max((blkSize / 2048 + 2) * 4088, blkSize * 2 + 8192)
-        val chLeftPcm = ShortArray(maxSamplesPerChannel)
-        val chRightPcm = ShortArray(maxSamplesPerChannel)
-
-        var totalFramesDecoded = 0
-        val pcmDataBaos = java.io.ByteArrayOutputStream(blockCount * blkSize * 4)
+        val blockPcmList = ArrayList<ByteArray>(blockCount)
+        var totalPcmBytes = 0
 
         for (b in 0 until blockCount) {
             val curBlockIdx = startBlock + b
@@ -1169,43 +1159,33 @@ class Rpf7Archive(
             val pad = (2048 - (rpos % 2048)) % 2048
             rpos += pad
 
-            // Decode each channel
-            var ch0Samples = 0
-            var ch1Samples = 0
+            val bcnt0 = blockCounts[0] * 2048
+            val sCount0 = sampleCounts[0]
+            val bcnt1 = if (chCount > 1) blockCounts[1] * 2048 else 0
+            val sCount1 = if (chCount > 1) sampleCounts[1] else 0
 
-            for (c in 0 until chCount) {
-                val bcnt = blockCounts[c] * 2048
-                val sCount = sampleCounts[c]
-
-                if (c == 0) {
-                    ch0Samples = decodeAdpcm(rawBlock, rpos, bcnt, sCount, chLeftPcm, 0)
-                } else if (c == 1) {
-                    ch1Samples = decodeAdpcm(rawBlock, rpos, bcnt, sCount, chRightPcm, 0)
-                }
-                rpos += bcnt
+            val blockPcm = com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecodeImaAdpcmToPcm16(
+                rawBlock,
+                rpos,
+                bcnt0,
+                sCount0,
+                if (chCount > 1) rawBlock else null,
+                rpos + bcnt0,
+                bcnt1,
+                sCount1
+            )
+            if (blockPcm.isNotEmpty()) {
+                blockPcmList.add(blockPcm)
+                totalPcmBytes += blockPcm.size
             }
-
-            // Interleave PCM frames (Left, Right)
-            val frames = if (chCount > 1) Math.min(ch0Samples, ch1Samples) else ch0Samples
-            for (f in 0 until frames) {
-                val l = chLeftPcm[f].toInt()
-                pcmDataBaos.write(l and 0xFF)
-                pcmDataBaos.write((l ushr 8) and 0xFF)
-
-                if (chCount > 1) {
-                    val r = chRightPcm[f].toInt()
-                    pcmDataBaos.write(r and 0xFF)
-                    pcmDataBaos.write((r ushr 8) and 0xFF)
-                }
-            }
-            totalFramesDecoded += frames
         }
 
-        // Write final WAV file
-        val pcmBytes = pcmDataBaos.toByteArray()
-        BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
-            writeWavHeader(out, pcmBytes.size, entry.sampleRate, chCount)
-            out.write(pcmBytes)
+        // Write final WAV file with 256 KB buffer and single write per block
+        BufferedOutputStream(FileOutputStream(tempFile), 262144).use { out ->
+            writeWavHeader(out, totalPcmBytes, entry.sampleRate, chCount)
+            for (blockPcm in blockPcmList) {
+                out.write(blockPcm)
+            }
         }
     }
 
@@ -1263,18 +1243,12 @@ class Rpf7Archive(
                     val pcmBytes: ByteArray = if (subTrack.codec == 0 || subTrack.codec == 1) {
                         clipRaw
                     } else {
-                        val outPcm = ShortArray(subTrack.numSamples + 2048)
-                        val decodedCount = decodeAdpcm(clipRaw, 0, clipRaw.size, subTrack.numSamples, outPcm, 0)
-                        val out = ByteArray(decodedCount * 2)
-                        for (i in 0 until decodedCount) {
-                            val s = outPcm[i].toInt()
-                            out[i * 2] = (s and 0xFF).toByte()
-                            out[i * 2 + 1] = ((s ushr 8) and 0xFF).toByte()
-                        }
-                        out
+                        com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecodeImaAdpcmToPcm16(
+                            clipRaw, 0, clipRaw.size, subTrack.numSamples, null, 0, 0, 0
+                        )
                     }
 
-                    BufferedOutputStream(FileOutputStream(tempFile)).use { out ->
+                    BufferedOutputStream(FileOutputStream(tempFile), 262144).use { out ->
                         writeWavHeader(out, pcmBytes.size, subTrack.sampleRate, 1)
                         out.write(pcmBytes)
                     }

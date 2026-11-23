@@ -25,6 +25,13 @@
     *;
 }
 
+-keep class com.sc.gtradio.media.core.Gen3NativeTurbo {
+    *;
+}
+-keep class com.sc.gtradio.media.core.Gen3NativeTurbo$* {
+    *;
+}
+
 # Media3 / ExoPlayer reflection & audio processor pipeline
 -keep class androidx.media3.** { *; }
 -dontwarn androidx.media3.**

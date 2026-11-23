@@ -352,6 +352,13 @@ object Rpf7Crypto {
         val blockCount = length / 4
         if (blockCount == 0) return
 
+        try {
+            com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecryptAwcXxtea(data, offset, length, awcKey)
+            return
+        } catch (_: Throwable) {
+            // Fallback to pure Kotlin implementation below if native library is unavailable
+        }
+
         val blocks = IntArray(blockCount)
         for (k in 0 until blockCount) {
             val o = offset + k * 4
