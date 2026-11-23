@@ -676,14 +676,20 @@ private val RPF3_INTRO_ALIASES = mapOf(
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
+        val canResumeTrack = director.currentPhase != DirectorPhase.BREAK_BLOCK && lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)
+        if (!canResumeTrack) {
+            setStationOnlyMetadata()
+        }
+
         activeDecodeJob?.cancel()
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             if (!_playing || playGeneration.get() != currentGen) return@launch
             ensureStationIndexed()
-            if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
+            if (canResumeTrack) {
                 val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
                 resumeFromRealTime(elapsedMs, currentGen)
             } else {
+                setStationOnlyMetadata()
                 pickNextSegment()
                 if (currentSegmentUris.isNotEmpty()) {
                     if (!_playing || playGeneration.get() != currentGen) return@launch
@@ -828,6 +834,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 Rpf3ClipRef(song.archive, intro)
             } else null
         }
+        setStationOnlyMetadata()
         when (event) {
             is NextBroadcastEvent.SongSweepItem -> {
                 val item = event.song

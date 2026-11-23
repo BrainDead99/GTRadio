@@ -95,7 +95,7 @@ class Rpf7Archive(
         private const val MAX_CACHE_BYTES = 150L * 1024L * 1024L // 150 MB cap
         private const val TARGET_CACHE_BYTES = 100L * 1024L * 1024L // Evict down to 100 MB
 
-        private val pinnedFileNames = java.util.Collections.synchronizedSet(HashSet<String>())
+        private val pinnedFileNames: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
 
         fun pinFile(fileNameOrUri: String) {
             val name = fileNameOrUri.substringAfterLast('/')
@@ -810,14 +810,17 @@ class Rpf7Archive(
         ensureIndexed()
         val entry = getEntry(entryName) ?: return null
         val actualStart = Math.max(0, startBlock)
-        val actualCount = Math.min(blockCount, entry.numBlocks - actualStart)
-        if (actualCount <= 0) return null
+        val actualBlocks = minOf(blockCount, (entry.numBlocks - actualStart).coerceAtLeast(0))
+        if (actualBlocks <= 0) return null
 
-        val uri = materializeBlockChunkInternal(entry, actualStart, actualCount)
+        val uri = materializeBlockChunkInternal(entry, actualStart, actualBlocks)
 
         // Background prefetch next chunk if more blocks remain
-        if (actualStart + actualCount < entry.numBlocks) {
-            prefetchBlockChunk(entry.name, actualStart + actualCount, getChunkBlocksFor(entry.name))
+        if (actualStart + actualBlocks < entry.numBlocks) {
+            val nextBlocks = minOf(getChunkBlocksFor(entry.name), entry.numBlocks - (actualStart + actualBlocks))
+            if (nextBlocks > 0) {
+                prefetchBlockChunk(entry.name, actualStart + actualBlocks, nextBlocks)
+            }
         }
 
         return uri
@@ -843,10 +846,13 @@ class Rpf7Archive(
     ) {
         val entry = getEntry(entryName) ?: return
         if (startBlock >= entry.numBlocks) return
+        val actualStart = Math.max(0, startBlock)
+        val actualBlocks = minOf(blockCount, (entry.numBlocks - actualStart).coerceAtLeast(0))
+        if (actualBlocks <= 0) return
         prefetchExecutor.execute {
             if (isCancelled?.invoke() == true) return@execute
             try {
-                materializeBlockChunkInternal(entry, startBlock, blockCount)
+                materializeBlockChunkInternal(entry, actualStart, actualBlocks)
             } catch (_: Exception) {}
         }
     }
@@ -856,12 +862,17 @@ class Rpf7Archive(
         startBlock: Int,
         blockCount: Int
     ): Uri? {
+        val totalBlocks = entry.numBlocks
+        val actualStart = Math.max(0, startBlock)
+        val actualBlocks = minOf(blockCount, (totalBlocks - actualStart).coerceAtLeast(0))
+        if (actualBlocks <= 0) return null
+
         val cacheDir = File(context.cacheDir, "rpf7_tracks")
         if (!cacheDir.exists()) cacheDir.mkdirs()
 
         val uriHash = Integer.toHexString(sourceUri.toString().hashCode())
-        val isFullTrack = (startBlock == 0 && blockCount >= entry.numBlocks)
-        val chunkSuffix = if (isFullTrack) "" else "_blk${startBlock}_${blockCount}"
+        val isFullTrack = (actualStart == 0 && actualBlocks >= totalBlocks)
+        val chunkSuffix = if (isFullTrack) "" else "_blk${actualStart}_${actualBlocks}"
         val safeBase = entry.name.removeSuffix(".awc").replace(Regex("[^A-Za-z0-9_]"), "_")
         val safeFileName = "${rpfName.removeSuffix(".rpf")}_${uriHash}_${safeBase}$chunkSuffix.wav"
         val outFile = File(cacheDir, safeFileName)
@@ -891,9 +902,9 @@ class Rpf7Archive(
                 context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                     FileInputStream(pfd.fileDescriptor).channel.use { channel ->
                         if (entry.codec == 7) {
-                            decodeEnhancedMp3MultiChannelBlocks(channel, entry, startBlock, blockCount, keys, tempFile)
+                            decodeEnhancedMp3MultiChannelBlocks(channel, entry, actualStart, actualBlocks, keys, tempFile)
                         } else {
-                            decodeMultiChannelBlocks(channel, entry, startBlock, blockCount, keys, tempFile)
+                            decodeMultiChannelBlocks(channel, entry, actualStart, actualBlocks, keys, tempFile)
                         }
                     }
                 }
