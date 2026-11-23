@@ -993,7 +993,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                     }
                 }
 
-                // 2. Outro overlap and dead air trimming (strictly only on the final chunk of the song!)
+                // 2. Outro overlap (strictly only on the final chunk of the song! Music ducks 0.50f, restores when DJ finishes; song plays naturally to completion)
                 if (isFinalWindow && isFinalChunk && hasValidOutro && markers != null) {
                     // 2a. Voice overlay at outroStartMs: launch DJ voice overlay ducked at 0.50f while song continues playing
                     if (!outroOverlapHandled && pos >= markers.outroStartMs) {
@@ -1023,26 +1023,16 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
                                 val djDur = readAudioDurationMs(context, voiceUri).coerceAtLeast(1000L)
                                 val startWait = System.currentTimeMillis()
-                                val canTrimAtOutroEnd = totalDurationMs > 0L && markers.outroEndMs in (totalDurationMs - 12_000L)..(totalDurationMs - 1_000L)
 
                                 stationScope.launch {
                                     while (isActive && _playing && playGeneration.get() == expectedGen) {
                                         val elapsed = System.currentTimeMillis() - startWait
-                                        val currentPos = player.getCurrentTrackPosition()
                                         val djFinished = elapsed >= djDur || player.djVoiceOverlayPlayer?.isPlaying == false
-                                        val reachedOutroEnd = canTrimAtOutroEnd && currentPos >= markers.outroEndMs
 
-                                        if (djFinished || reachedOutroEnd) {
-                                            if (reachedOutroEnd) {
-                                                withContext(Dispatchers.Main.immediate) {
-                                                    player.setMusicDuckGain(0f, 300L, stationScope)
-                                                    playNext()
-                                                }
-                                            } else {
-                                                // DJ clip finished, restore duck gain and let song finish naturally
-                                                withContext(Dispatchers.Main.immediate) {
-                                                    player.setMusicDuckGain(1.0f, 500L, stationScope)
-                                                }
+                                        if (djFinished) {
+                                            // DJ clip finished, restore duck gain and let song finish naturally to STATE_ENDED
+                                            withContext(Dispatchers.Main.immediate) {
+                                                player.setMusicDuckGain(1.0f, 500L, stationScope)
                                             }
                                             break
                                         }
@@ -1051,26 +1041,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
                                 }
                             }
                         }
-                    }
-
-                    // 2b. Direct song-to-song trimming of trailing dead air:
-                    // ONLY trim if outro_end is verified to be within the last 12 seconds of total duration!
-                    val canTrimAtOutroEnd = totalDurationMs > 0L && markers.outroEndMs in (totalDurationMs - 12_000L)..(totalDurationMs - 1_000L)
-                    if (canTrimAtOutroEnd && pos >= (markers.outroEndMs - 300L) && !outroOverlapHandled) {
-                        outroOverlapHandled = true
-                        GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "${songItem?.trackName}: trimming dead air at ${pos}ms (outroEnd=${markers.outroEndMs}ms, totalDur=${totalDurationMs}ms)"
-                        }
-                        withContext(Dispatchers.Main.immediate) {
-                            player.setMusicDuckGain(0f, 300L, stationScope)
-                        }
-                        delay(300L)
-                        if (_playing && playGeneration.get() == expectedGen) {
-                            withContext(Dispatchers.Main.immediate) {
-                                playNext()
-                            }
-                        }
-                        break
                     }
                 }
             }
@@ -1216,6 +1186,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+        val totalDur = if (uris.isNotEmpty()) getFileDurationMs(uris.last()) else 0L
         val preRoll = plannedPreRollCue
         plannedPreRollCue = null
         val overlayCue = plannedOverlayCue
@@ -1239,11 +1210,11 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 if (!_playing || playGeneration.get() != expectedGen) return@launch
                 withContext(Dispatchers.Main.immediate) {
                     player.setMusicDuckGain(0.50f, 0L, stationScope)
-                    executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen)
+                    executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen, totalDur)
                 }
             }
         } else {
-            executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen)
+            executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen, totalDur)
             if (overlayCue != null && startWindowIndex == 0 && startPositionMs == 0L) {
                 // Case 1: Fits in intro
                 activeOverlayJob?.cancel()
@@ -1274,14 +1245,12 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
     }
 
-    private fun executeStartPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+    private fun executeStartPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get(), totalDur: Long = 0L) {
         mainHandler.post {
             if (!_playing || playGeneration.get() != expectedGen) {
                 GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: startPlayback aborted: generation mismatch or not playing (gen=$expectedGen, cur=${playGeneration.get()})")
                 return@post
             }
-
-            refreshCurrentSegmentMetadata()
 
             if (activeListener != null) {
                 player.exoPlayer.removeListener(activeListener!!)
@@ -1364,7 +1333,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
             // Start look-ahead prefetch monitor for discrete songs
             if (!isContinuousMixStation() && currentSongItem != null) {
-                val totalDur = if (uris.isNotEmpty()) getFileDurationMs(uris.last()) else 0L
                 startLookAheadMonitor(expectedGen, totalDur)
             }
         }

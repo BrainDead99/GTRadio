@@ -6,10 +6,11 @@
 #include "minimp3.h"
 
 extern "C" JNIEXPORT jshortArray JNICALL
-Java_com_sc_gtradio_media_rpf7_NativeMp3Decoder_nativeDecodeMonoMp3(
+Java_com_sc_gtradio_media_rpf7_NativeMp3Decoder_nativeDecodeMonoMp3WithWarmup(
         JNIEnv *env,
         jclass /* clazz */,
-        jbyteArray mp3Data) {
+        jbyteArray mp3Data,
+        jbyteArray warmupData) {
     if (!mp3Data) {
         return env->NewShortArray(0);
     }
@@ -30,6 +31,28 @@ Java_com_sc_gtradio_media_rpf7_NativeMp3Decoder_nativeDecodeMonoMp3(
     mp3d_sample_t pcmFrame[MINIMP3_MAX_SAMPLES_PER_FRAME];
     mp3dec_frame_info_t info;
 
+    // 1. Prime the bit reservoir and MDCT overlap buffer with warmup data if provided
+    if (warmupData) {
+        jsize warmupLen = env->GetArrayLength(warmupData);
+        if (warmupLen > 0) {
+            jbyte *wBytes = env->GetByteArrayElements(warmupData, nullptr);
+            if (wBytes) {
+                const uint8_t *wPtr = reinterpret_cast<const uint8_t *>(wBytes);
+                int wRem = warmupLen;
+                while (wRem > 0) {
+                    mp3dec_decode_frame(&mp3d, wPtr, wRem, pcmFrame, &info);
+                    if (info.frame_bytes <= 0) {
+                        break;
+                    }
+                    wPtr += info.frame_bytes;
+                    wRem -= info.frame_bytes;
+                }
+                env->ReleaseByteArrayElements(warmupData, wBytes, JNI_ABORT);
+            }
+        }
+    }
+
+    // 2. Decode the actual target mp3Data
     const uint8_t *ptr = reinterpret_cast<const uint8_t *>(bytes);
     int remaining = len;
 
@@ -67,4 +90,12 @@ Java_com_sc_gtradio_media_rpf7_NativeMp3Decoder_nativeDecodeMonoMp3(
         env->SetShortArrayRegion(result, 0, outSize, reinterpret_cast<const jshort *>(outSamples.data()));
     }
     return result;
+}
+
+extern "C" JNIEXPORT jshortArray JNICALL
+Java_com_sc_gtradio_media_rpf7_NativeMp3Decoder_nativeDecodeMonoMp3(
+        JNIEnv *env,
+        jclass clazz,
+        jbyteArray mp3Data) {
+    return Java_com_sc_gtradio_media_rpf7_NativeMp3Decoder_nativeDecodeMonoMp3WithWarmup(env, clazz, mp3Data, nullptr);
 }

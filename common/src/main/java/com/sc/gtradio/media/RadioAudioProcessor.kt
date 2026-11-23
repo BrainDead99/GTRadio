@@ -138,7 +138,7 @@ class RadioAudioProcessor(context: Context) : BaseAudioProcessor() {
     }
 
     override fun onFlush() {
-        resetFilterState()
+        // Preserved filter and AGC state across gapless chunk seams and MediaItem transitions.
     }
 
     override fun queueInput(inputBuffer: ByteBuffer) {

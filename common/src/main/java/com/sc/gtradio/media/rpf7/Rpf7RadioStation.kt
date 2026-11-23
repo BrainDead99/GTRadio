@@ -199,6 +199,8 @@ data class Rpf7ClipRef(
     private var activeMixSampleRate: Int = 48000
     private var lastDisplayedMixTrackId: Int = -1
     private var mixPollerRunnable: Runnable? = null
+    private var savedMixAbsMs: Long = 0L
+    private var continuousMixItem: Rpf7SongItem? = null
 
     @Volatile private var prefetchGeneration = 0
     private val playGeneration = AtomicInteger(0)
@@ -568,11 +570,27 @@ data class Rpf7ClipRef(
         prefetchedItem = null
         unpinAllActive()
         pendingBreakClips.clear()
+
+        val isContinuousMix = isContinuousMixStation()
+        if (isContinuousMix && currentSongItem != null) {
+            val exo = player.exoPlayer
+            if (exo.playbackState == Player.STATE_READY) {
+                val curWinIdx = exo.currentMediaItemIndex
+                val curPosMs = exo.currentPosition.coerceAtLeast(0L)
+                val sOff = chunkWindowStartSamples[curWinIdx] ?: activeMixChunkStartSample
+                val sRate = activeMixSampleRate.toLong().coerceAtLeast(1L)
+                val currentSample = sOff + (curPosMs * sRate / 1000L)
+                savedMixAbsMs = (currentSample * 1000L) / sRate
+                continuousMixItem = currentSongItem
+                lastStoppedTimeMs = System.currentTimeMillis()
+            }
+        }
+
         chunkWindowStartSamples.clear()
         chunkWindowFileNames.clear()
         if (!isStationActive) return
         isStationActive = false
-        if (_playing) {
+        if (_playing && !isContinuousMix) {
             val isReady = player.exoPlayer.playbackState == Player.STATE_READY
             if (isReady || lastStoppedTimeMs == 0L) {
                 lastStoppedTimeMs = System.currentTimeMillis()
@@ -617,7 +635,11 @@ data class Rpf7ClipRef(
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             if (!_playing || playGeneration.get() != currentGen) return@launch
             ensureStationIndexed()
-            if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
+            val isContinuousMix = isContinuousMixStation()
+            if (isContinuousMix && savedMixAbsMs > 0L && continuousMixItem != null && lastStoppedTimeMs > 0L) {
+                val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+                resumeContinuousMix(elapsedMs, currentGen)
+            } else if (lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)) {
                 val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
                 resumeFromRealTime(elapsedMs, currentGen)
             } else {
@@ -635,6 +657,59 @@ data class Rpf7ClipRef(
                 }
             }
         }
+    }
+
+    private fun resumeContinuousMix(elapsedMs: Long, expectedGen: Int) {
+        val item = continuousMixItem ?: return
+        val totalSamples = item.archive.getEntryTotalSamples(item.trackName)
+        val sRate = item.archive.getEntrySampleRate(item.trackName).toLong().coerceAtLeast(1L)
+        val totalMixDurationMs = if (totalSamples > 0L) (totalSamples * 1000L) / sRate else 0L
+
+        val targetMixMs = if (totalMixDurationMs > 0L) {
+            (savedMixAbsMs + elapsedMs) % totalMixDurationMs
+        } else {
+            savedMixAbsMs + elapsedMs
+        }
+        val targetSample = (targetMixMs * sRate) / 1000L
+
+        val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
+        val chunkBlocks = item.archive.getChunkBlocksFor(item.trackName)
+
+        val rawBlock = item.archive.getBlockForSample(item.trackName, targetSample)
+        val targetStartBlock = ((rawBlock / chunkBlocks) * chunkBlocks).coerceIn(0, (totalBlocks - chunkBlocks).coerceAtLeast(0))
+
+        val chunkStartSample = item.archive.getChunkStartSample(item.trackName, targetStartBlock)
+        val seekWithinChunkMs = ((targetSample - chunkStartSample).coerceAtLeast(0L) * 1000L) / sRate
+
+        val mainUri = item.archive.materializeBlockChunkUri(item.trackName, targetStartBlock, chunkBlocks) ?: return
+        if (!_playing || playGeneration.get() != expectedGen) return
+
+        pinAudioUri(mainUri)
+        currentSongItem = item
+        lastSegment = RadioSegmentType.Song
+        currentSegmentUris = listOf(mainUri)
+        currentMultiChunkTotalBlocks = totalBlocks
+        currentMultiChunkNextBlock = targetStartBlock + chunkBlocks
+        currentMultiChunksPlayedInRow = 1
+        introItemCount = 0
+
+        val markers = item.archive.readTrackMarkers(item.trackName)
+        if (markers.isNotEmpty()) {
+            activeMixMarkers = markers
+            activeMixChunkStartSample = chunkStartSample
+            activeMixSampleRate = sRate.toInt()
+            lastDisplayedMixTrackId = -1
+        } else {
+            stopMixPoller(clearMarkers = true)
+        }
+
+        chunkWindowStartSamples.clear()
+        chunkWindowFileNames.clear()
+        chunkWindowStartSamples[0] = chunkStartSample
+        chunkWindowFileNames[0] = mainUri.toString()
+        Rpf7Archive.pinFile(mainUri.toString())
+
+        startPlayback(listOf(mainUri), 0, seekWithinChunkMs, expectedGen)
     }
 
     private fun resumeFromRealTime(rawElapsedMs: Long, expectedGen: Int) {
@@ -952,6 +1027,8 @@ data class Rpf7ClipRef(
         lastSegment = RadioSegmentType.Song
         currentSegmentUris = listOf(mainUri)
         pendingBreakClips.clear()
+        savedMixAbsMs = 0L
+        continuousMixItem = item
     }
 
     private fun startLookAheadMonitor(expectedGen: Int, totalDurationMs: Long) {
@@ -985,9 +1062,8 @@ data class Rpf7ClipRef(
                     }
                 }
 
-                // 2. Outro overlap and dead air trimming (strictly only on the final chunk of the song!)
+                // 2. Outro overlap (strictly only on the final chunk of the song! Music ducks 0.50f, restores when DJ finishes; song plays naturally to completion)
                 if (isFinalWindow && isFinalChunk && hasValidOutro && markers != null) {
-                    // 2a. Voice overlay at outroStartMs: launch DJ voice overlay ducked at 0.50f while song continues playing
                     if (!outroOverlapHandled && pos >= markers.outroStartMs) {
                         val pItem = prefetchedItem
                         if (pItem != null && pItem.uris.isNotEmpty()) {
@@ -1015,26 +1091,16 @@ data class Rpf7ClipRef(
 
                                 val djDur = readAudioDurationMs(context, voiceUri).coerceAtLeast(1000L)
                                 val startWait = System.currentTimeMillis()
-                                val canTrimAtOutroEnd = totalDurationMs > 0L && markers.outroEndMs in (totalDurationMs - 12_000L)..(totalDurationMs - 1_000L)
 
                                 stationScope.launch {
                                     while (isActive && _playing && playGeneration.get() == expectedGen) {
                                         val elapsed = System.currentTimeMillis() - startWait
-                                        val currentPos = player.getCurrentTrackPosition()
                                         val djFinished = elapsed >= djDur || player.djVoiceOverlayPlayer?.isPlaying == false
-                                        val reachedOutroEnd = canTrimAtOutroEnd && currentPos >= markers.outroEndMs
 
-                                        if (djFinished || reachedOutroEnd) {
-                                            if (reachedOutroEnd) {
-                                                withContext(Dispatchers.Main.immediate) {
-                                                    player.setMusicDuckGain(0f, 300L, stationScope)
-                                                    playNext()
-                                                }
-                                            } else {
-                                                // DJ clip finished, restore duck gain and let song finish naturally
-                                                withContext(Dispatchers.Main.immediate) {
-                                                    player.setMusicDuckGain(1.0f, 500L, stationScope)
-                                                }
+                                        if (djFinished) {
+                                            // DJ clip finished, restore duck gain and let song finish naturally to STATE_ENDED
+                                            withContext(Dispatchers.Main.immediate) {
+                                                player.setMusicDuckGain(1.0f, 500L, stationScope)
                                             }
                                             break
                                         }
@@ -1043,26 +1109,6 @@ data class Rpf7ClipRef(
                                 }
                             }
                         }
-                    }
-
-                    // 2b. Direct song-to-song trimming of trailing dead air:
-                    // ONLY trim if outro_end is verified to be within the last 12 seconds of total duration!
-                    val canTrimAtOutroEnd = totalDurationMs > 0L && markers.outroEndMs in (totalDurationMs - 12_000L)..(totalDurationMs - 1_000L)
-                    if (canTrimAtOutroEnd && pos >= (markers.outroEndMs - 300L) && !outroOverlapHandled) {
-                        outroOverlapHandled = true
-                        GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "${songItem?.trackName}: trimming dead air at ${pos}ms (outroEnd=${markers.outroEndMs}ms, totalDur=${totalDurationMs}ms)"
-                        }
-                        withContext(Dispatchers.Main.immediate) {
-                            player.setMusicDuckGain(0f, 300L, stationScope)
-                        }
-                        delay(300L)
-                        if (_playing && playGeneration.get() == expectedGen) {
-                            withContext(Dispatchers.Main.immediate) {
-                                playNext()
-                            }
-                        }
-                        break
                     }
                 }
             }
@@ -1240,6 +1286,7 @@ data class Rpf7ClipRef(
     }
 
     private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+        val totalDur = if (uris.isNotEmpty()) getFileDurationMs(uris.last()) else 0L
         val preRoll = plannedPreRollCue
         plannedPreRollCue = null
         val overlayCue = plannedOverlayCue
@@ -1263,11 +1310,11 @@ data class Rpf7ClipRef(
                 if (!_playing || playGeneration.get() != expectedGen) return@launch
                 withContext(Dispatchers.Main.immediate) {
                     player.setMusicDuckGain(0.50f, 0L, stationScope)
-                    executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen)
+                    executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen, totalDur)
                 }
             }
         } else {
-            executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen)
+            executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen, totalDur)
             if (overlayCue != null && startWindowIndex == 0 && startPositionMs == 0L) {
                 // Case 1: Fits in intro
                 activeOverlayJob?.cancel()
@@ -1298,7 +1345,7 @@ data class Rpf7ClipRef(
         }
     }
 
-    private fun executeStartPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+    private fun executeStartPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get(), totalDur: Long = 0L) {
         mainHandler.post {
             if (!_playing || playGeneration.get() != expectedGen) {
                 GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: startPlayback aborted: generation mismatch or not playing (gen=$expectedGen, cur=${playGeneration.get()})")
@@ -1411,7 +1458,6 @@ data class Rpf7ClipRef(
 
             // Start look-ahead prefetch monitor for discrete songs
             if (!isContinuousMixStation() && currentSongItem != null) {
-                val totalDur = if (uris.isNotEmpty()) getFileDurationMs(uris.last()) else 0L
                 startLookAheadMonitor(expectedGen, totalDur)
             }
         }

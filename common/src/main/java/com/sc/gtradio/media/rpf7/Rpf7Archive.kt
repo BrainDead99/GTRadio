@@ -89,7 +89,7 @@ class Rpf7Archive(
 
     companion object {
         const val CHUNK_BLOCKS = 4
-        const val CHUNK_THRESHOLD_BLOCKS = 12
+        const val CHUNK_THRESHOLD_BLOCKS = 16
         private val NO_DJ_MARKERS = DjMarkerWindow()
 
         private const val MAX_CACHE_BYTES = 150L * 1024L * 1024L // 150 MB cap
@@ -552,12 +552,46 @@ class Rpf7Archive(
 
     fun getChunkBlocksFor(entryName: String): Int {
         val entry = getEntry(entryName)
-        return if (entry?.codec == 7) 2 else CHUNK_BLOCKS
+        return if (entry?.codec == 7) 4 else CHUNK_BLOCKS
     }
 
     fun getChunkThresholdFor(entryName: String): Int {
         val entry = getEntry(entryName)
-        return if (entry?.codec == 7) 6 else CHUNK_THRESHOLD_BLOCKS
+        return if (entry?.codec == 7) 16 else CHUNK_THRESHOLD_BLOCKS
+    }
+
+    fun getEntryTotalSamples(entryName: String): Long {
+        ensureIndexed()
+        val cleanName = if (entryName.endsWith(".awc")) entryName else "$entryName.awc"
+        val entry = getEntry(cleanName) ?: return 0L
+        return entry.totalSamples.toLong()
+    }
+
+    fun getBlockForSample(entryName: String, sampleOffset: Long): Int {
+        if (sampleOffset <= 0L) return 0
+        ensureIndexed()
+        val cleanName = if (entryName.endsWith(".awc")) entryName else "$entryName.awc"
+        if (!seekTableCache.containsKey(cleanName)) {
+            readTrackMarkers(cleanName)
+        }
+        val seekTbl = seekTableCache[cleanName]
+        val entry = getEntry(cleanName)
+        val numBlocks = entry?.numBlocks ?: 1
+        if (seekTbl != null && seekTbl.isNotEmpty()) {
+            var blk = 0
+            for (i in 0 until minOf(seekTbl.size, numBlocks)) {
+                if (seekTbl[i] <= sampleOffset) {
+                    blk = i
+                } else {
+                    break
+                }
+            }
+            return blk
+        }
+        if (entry != null && entry.totalSamples > 0 && numBlocks > 0) {
+            return ((sampleOffset * numBlocks.toLong()) / entry.totalSamples.toLong()).toInt().coerceIn(0, numBlocks - 1)
+        }
+        return 0
     }
 
     fun getEntrySampleRate(entryName: String): Int {
@@ -902,6 +936,48 @@ class Rpf7Archive(
         val dataEndPos = baseDataOffset + entry.dataChunkSize
 
         val pcmDataBaos = java.io.ByteArrayOutputStream(blockCount * blkSize * 4)
+        val prevChannelWarmup = Array<ByteArray?>(chCount) { null }
+
+        // If resuming or chunking mid-stream, extract warmup bytes from preceding block to prime bit reservoir
+        if (startBlock > 0) {
+            try {
+                val prevBlockOffset = baseDataOffset + (startBlock - 1).toLong() * blkSize.toLong()
+                val actualPrevSize = Math.min(blkSize.toLong(), dataEndPos - prevBlockOffset).toInt()
+                if (actualPrevSize > 2048) {
+                    val prevBlockBytes = ByteArray(actualPrevSize)
+                    val prevBuf = ByteBuffer.wrap(prevBlockBytes)
+                    channel.position(prevBlockOffset)
+                    if (channel.read(prevBuf) > 0) {
+                        if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
+                            Rpf7Crypto.decryptRsxxtea(prevBlockBytes, 0, actualPrevSize and -4, keys.awcKey)
+                        }
+                        val prevByteLengths = IntArray(chCount)
+                        var dPos = 0
+                        for (c in 0 until chCount) {
+                            if (dPos + 24 <= actualPrevSize) {
+                                prevByteLengths[c] = readIntLe(prevBlockBytes, dPos + 20)
+                            }
+                            dPos += 24
+                        }
+                        var cPos = 2048
+                        for (c in 0 until chCount) {
+                            val chLen = prevByteLengths[c]
+                            val chOff = cPos
+                            cPos = (cPos + chLen + 15) and -16
+                            val safeLen = Math.max(0, Math.min(chLen, actualPrevSize - chOff))
+                            if (safeLen > 0 && chOff < actualPrevSize) {
+                                val warmupSize = Math.min(2048, safeLen)
+                                val warmupBytes = ByteArray(warmupSize)
+                                System.arraycopy(prevBlockBytes, chOff + safeLen - warmupSize, warmupBytes, 0, warmupSize)
+                                prevChannelWarmup[c] = warmupBytes
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                GTRadioLogger.logVerbose("DECODE") { "Failed to extract warmup bytes from block ${startBlock - 1}: ${e.message}" }
+            }
+        }
 
         for (b in 0 until blockCount) {
             val curBlockIdx = startBlock + b
@@ -960,9 +1036,19 @@ class Rpf7Archive(
                     System.arraycopy(blockBytes, chOffset, mp3Payload, 0, safeLen)
                 }
 
-                val decoded = decodeMp3ChannelToPcm(mp3Payload, entry.sampleRate)
+                val decoded = decodeMp3ChannelToPcm(mp3Payload, entry.sampleRate, prevChannelWarmup[c])
+
+                // Save trailing bytes for the next block warmup
+                if (safeLen > 0) {
+                    val warmupSize = Math.min(2048, safeLen)
+                    val warmupBytes = ByteArray(warmupSize)
+                    System.arraycopy(mp3Payload, safeLen - warmupSize, warmupBytes, 0, warmupSize)
+                    prevChannelWarmup[c] = warmupBytes
+                }
+
                 val trimStart = samplesToSkip[c].coerceIn(0, decoded.size)
-                val trimEnd = if (sampleCounts[c] > trimStart) sampleCounts[c].coerceAtMost(decoded.size) else decoded.size
+                val targetEnd = trimStart + sampleCounts[c]
+                val trimEnd = if (sampleCounts[c] > 0) targetEnd.coerceAtMost(decoded.size) else decoded.size
                 val trimmed = if (trimStart < trimEnd) {
                     decoded.copyOfRange(trimStart, trimEnd)
                 } else {
@@ -1002,10 +1088,10 @@ class Rpf7Archive(
         }
     }
 
-    private fun decodeMp3ChannelToPcm(mp3Bytes: ByteArray, sampleRate: Int): ShortArray {
+    private fun decodeMp3ChannelToPcm(mp3Bytes: ByteArray, sampleRate: Int, warmupBytes: ByteArray? = null): ShortArray {
         if (mp3Bytes.isEmpty()) return ShortArray(0)
         return try {
-            NativeMp3Decoder.nativeDecodeMonoMp3(mp3Bytes)
+            NativeMp3Decoder.nativeDecodeMonoMp3WithWarmup(mp3Bytes, warmupBytes)
         } catch (e: Exception) {
             GTRadioLogger.log("Rpf7Archive[$rpfName]: Native MP3 decoding failed", e)
             ShortArray(0)
