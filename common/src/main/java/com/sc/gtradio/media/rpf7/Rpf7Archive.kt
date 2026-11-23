@@ -1,5 +1,6 @@
 package com.sc.gtradio.media.rpf7
 import com.sc.gtradio.media.rpf3.Rpf3Archive
+import com.sc.gtradio.media.core.DjMarkerWindow
 
 
 import android.content.Context
@@ -82,12 +83,14 @@ class Rpf7Archive(
     private val entries = LinkedHashMap<String, Rpf7Entry>()
     private val bankSubTracks = LinkedHashMap<String, Rpf7BankSubTrack>()
     private val trackMarkersCache = ConcurrentHashMap<String, List<Rpf7TrackMarker>>()
+    private val djMarkerCache = ConcurrentHashMap<String, DjMarkerWindow>()
     private val seekTableCache = ConcurrentHashMap<String, LongArray>()
     @Volatile private var indexed = false
 
     companion object {
         const val CHUNK_BLOCKS = 4
         const val CHUNK_THRESHOLD_BLOCKS = 12
+        private val NO_DJ_MARKERS = DjMarkerWindow()
 
         private const val MAX_CACHE_BYTES = 100L * 1024L * 1024L // 100 MB cap
         private const val TARGET_CACHE_BYTES = 65L * 1024L * 1024L // Evict down to 65 MB
@@ -651,6 +654,11 @@ class Rpf7Archive(
                                 if (channel.read(mBuf) >= cSize) {
                                     mBuf.flip()
                                     val numRecs = cSize / 16
+                                    var djIntroStart = -1L
+                                    var djIntroEnd = -1L
+                                    var djOutroStart = -1L
+                                    var djOutroEnd = -1L
+                                    val sampleRate = getEntrySampleRate(cleanName).toLong().coerceAtLeast(1L)
                                     for (r in 0 until numRecs) {
                                         val nameHash = mBuf.int
                                         val rawVal = mBuf.int
@@ -661,7 +669,19 @@ class Rpf7Archive(
                                             val tid = java.lang.Float.intBitsToFloat(rawVal).toInt()
                                             val sOff = sampleOffUint.toLong() and 0xFFFFFFFFL
                                             markers.add(Rpf7TrackMarker(sOff, tid))
+                                        } else if (nameHash == 0x08DBA0F8.toInt()) {
+                                            val sOff = sampleOffUint.toLong() and 0xFFFFFFFFL
+                                            val timeMs = (sOff * 1000L) / sampleRate
+                                            when (rawVal) {
+                                                0x449687BA.toInt() -> djIntroStart = timeMs
+                                                0x2CC6E05E.toInt() -> djIntroEnd = timeMs
+                                                0x7DCE9FA0.toInt() -> djOutroStart = timeMs
+                                                0x71D8DCAD.toInt() -> djOutroEnd = timeMs
+                                            }
                                         }
+                                    }
+                                    if (djIntroStart >= 0L || djIntroEnd > 0L || djOutroStart > 0L || djOutroEnd > 0L) {
+                                        djMarkerCache[cleanName] = DjMarkerWindow(djIntroStart, djIntroEnd, djOutroStart, djOutroEnd)
                                     }
                                 }
                             }
@@ -682,6 +702,15 @@ class Rpf7Archive(
         }
         trackMarkersCache[cleanName] = deduped
         return deduped
+    }
+
+    fun readDjMarkers(awcEntryName: String): DjMarkerWindow? {
+        val cleanName = awcEntryName.lowercase()
+        djMarkerCache[cleanName]?.let { return if (it === NO_DJ_MARKERS) null else it }
+        readTrackMarkers(cleanName)
+        val cached = djMarkerCache[cleanName] ?: NO_DJ_MARKERS
+        djMarkerCache[cleanName] = cached
+        return if (cached === NO_DJ_MARKERS) null else cached
     }
 
     // ------------------------------------------------------------------------

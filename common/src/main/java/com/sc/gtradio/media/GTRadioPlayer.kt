@@ -13,6 +13,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ShuffleOrder
+import com.sc.gtradio.media.core.DjVoiceOverlayPlayer
+import kotlinx.coroutines.*
 import java.util.concurrent.CopyOnWriteArraySet
 
 /**
@@ -229,11 +231,57 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
 
     fun isExoPlayerReady(): Boolean = exoPlayer.playbackState == Player.STATE_READY && exoPlayer.playWhenReady
 
+    var djVoiceOverlayPlayer: DjVoiceOverlayPlayer? = null
+    var isMutedForTuningStatic: Boolean = false
+        private set
+    var musicDuckGain: Float = 1.0f
+        private set
+    private var duckRampJob: Job? = null
+
+    private fun applyEffectiveVolume() {
+        val effectiveVolume = if (isMutedForTuningStatic) 0f else musicDuckGain.coerceIn(0f, 1f)
+        exoPlayer.volume = effectiveVolume
+    }
+
     fun setStreamMuted(muted: Boolean) {
-        exoPlayer.volume = if (muted) 0f else 1f
+        isMutedForTuningStatic = muted
+        applyEffectiveVolume()
+        djVoiceOverlayPlayer?.setMuted(muted)
+    }
+
+    fun setMusicDuckGain(targetGain: Float, rampMs: Long, scope: CoroutineScope) {
+        duckRampJob?.cancel()
+        val startGain = musicDuckGain
+        val target = targetGain.coerceIn(0f, 1f)
+        if (rampMs <= 0L || startGain == target) {
+            musicDuckGain = target
+            applyEffectiveVolume()
+            return
+        }
+        duckRampJob = scope.launch(Dispatchers.Main.immediate) {
+            val steps = (rampMs / 20L).coerceAtLeast(1L).toInt()
+            val stepDelay = rampMs / steps
+            val delta = (target - startGain) / steps
+            for (step in 1..steps) {
+                delay(stepDelay)
+                musicDuckGain = (startGain + delta * step).coerceIn(0f, 1f)
+                applyEffectiveVolume()
+            }
+            musicDuckGain = target
+            applyEffectiveVolume()
+        }
+    }
+
+    fun resetMusicDuckGain() {
+        duckRampJob?.cancel()
+        duckRampJob = null
+        musicDuckGain = 1.0f
+        applyEffectiveVolume()
     }
 
     fun resetForStationSwitch() {
+        resetMusicDuckGain()
+        djVoiceOverlayPlayer?.stopOverlay()
         stopCleanQueue()
         stopInternal()
     }
@@ -276,17 +324,21 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         super.play()
         setTransitionLoading(false)
         notifyPlaybackStateChanged()
+        djVoiceOverlayPlayer?.resume()
     }
 
     fun pauseInternal() {
         radioPlaybackState = RadioState.PAUSED
         super.pause()
         notifyPlaybackStateChanged()
+        djVoiceOverlayPlayer?.pause()
     }
 
     fun stopInternal() {
         radioPlaybackState = RadioState.STOPPED
         super.stop()
+        resetMusicDuckGain()
+        djVoiceOverlayPlayer?.stopOverlay()
         notifyPlaybackStateChanged()
     }
 

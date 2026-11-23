@@ -3,6 +3,7 @@ package com.sc.gtradio.media.rpf3
 import android.content.Context
 import android.net.Uri
 import com.sc.gtradio.common.GTRadioLogger
+import com.sc.gtradio.media.core.DjMarkerWindow
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -50,6 +51,7 @@ class Rpf3Archive(
     private val bankSubTracks = LinkedHashMap<String, Rpf3BankSubTrack>()
     private val chunkStates = ConcurrentHashMap<String, IntArray>()
     private val trackMarkersCache = ConcurrentHashMap<String, List<Rpf3TrackMarker>>()
+    private val djMarkerCache = ConcurrentHashMap<String, DjMarkerWindow>()
     private var indexed = false
 
     companion object {
@@ -58,6 +60,7 @@ class Rpf3Archive(
         private val prefetchExecutor = Executors.newSingleThreadExecutor()
         private val decodeLock = Any()
         @Volatile private var oldCachePurged = false
+        private val NO_DJ_MARKERS = DjMarkerWindow()
 
         private val pinnedFileNames = java.util.Collections.synchronizedSet(HashSet<String>())
 
@@ -350,17 +353,31 @@ class Rpf3Archive(
                                     val markerBytesRead = readFully(ch, recBuf, entry.offset + markerTableOffset + recOffsetRel)
                                     if (markerBytesRead >= 16) {
                                         val actualBuf = ByteBuffer.wrap(recBuf.array(), 0, markerBytesRead).order(ByteOrder.LITTLE_ENDIAN)
+                                        var djIntroStart = -1L
+                                        var djIntroEnd = -1L
+                                        var djOutroStart = -1L
+                                        var djOutroEnd = -1L
                                         while (actualBuf.remaining() >= 16) {
                                             val nameHash = actualBuf.int
-                                            val rawFloatVal = actualBuf.int
+                                            val rawVal = actualBuf.int
                                             actualBuf.int // pad
                                             val timeOffsetUint = actualBuf.int
+                                            val tOff = timeOffsetUint.toLong() and 0xFFFFFFFFL
 
                                             if (nameHash == 0xA6D93246.toInt()) {
-                                                val tid = java.lang.Float.intBitsToFloat(rawFloatVal).toInt()
-                                                val tOff = timeOffsetUint.toLong() and 0xFFFFFFFFL
+                                                val tid = java.lang.Float.intBitsToFloat(rawVal).toInt()
                                                 markers.add(Rpf3TrackMarker(tOff, tid))
+                                            } else if (nameHash == 0x08DBA0F8.toInt()) {
+                                                when (rawVal) {
+                                                    0x449687BA.toInt() -> djIntroStart = tOff
+                                                    0x2CC6E05E.toInt() -> djIntroEnd = tOff
+                                                    0x7DCE9FA0.toInt() -> djOutroStart = tOff
+                                                    0x71D8DCAD.toInt() -> djOutroEnd = tOff
+                                                }
                                             }
+                                        }
+                                        if (djIntroStart >= 0L || djIntroEnd > 0L || djOutroStart > 0L || djOutroEnd > 0L) {
+                                            djMarkerCache[cleanKey] = DjMarkerWindow(djIntroStart, djIntroEnd, djOutroStart, djOutroEnd)
                                         }
                                     }
                                 }
@@ -384,6 +401,15 @@ class Rpf3Archive(
         }
         trackMarkersCache[cleanKey] = deduped
         return deduped
+    }
+
+    fun readDjMarkers(entryName: String): DjMarkerWindow? {
+        val cleanKey = entryName.uppercase()
+        djMarkerCache[cleanKey]?.let { return if (it === NO_DJ_MARKERS) null else it }
+        readTrackMarkers(cleanKey)
+        val cached = djMarkerCache[cleanKey] ?: NO_DJ_MARKERS
+        djMarkerCache[cleanKey] = cached
+        return if (cached === NO_DJ_MARKERS) null else cached
     }
 
     fun getChunkStartMs(entryName: String, startBlock: Int): Long {

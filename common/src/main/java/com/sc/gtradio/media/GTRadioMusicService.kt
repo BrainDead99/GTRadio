@@ -130,8 +130,13 @@ open class GTRadioMusicService : MediaLibraryService() {
             .build()
     }
 
+    val djVoiceOverlayPlayer: DjVoiceOverlayPlayer by lazy {
+        DjVoiceOverlayPlayer(applicationContext)
+    }
+
     private val radioPlayer: GTRadioPlayer by lazy {
         GTRadioPlayer(exoPlayer).apply {
+            djVoiceOverlayPlayer = this@GTRadioMusicService.djVoiceOverlayPlayer
             addListener(playerListener)
             onCleanQueuePrepared = { totalDur ->
                 if (playbackMode == PlaybackMode.TRACKLIST) {
@@ -1536,6 +1541,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         }
         radioPlayer.removeListener(playerListener)
         radioPlayer.release()
+        djVoiceOverlayPlayer.release()
         super.onDestroy()
     }
 }
