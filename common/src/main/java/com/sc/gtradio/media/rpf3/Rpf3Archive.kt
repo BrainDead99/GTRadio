@@ -508,9 +508,9 @@ class Rpf3Archive(
 
         val decodeStart = System.currentTimeMillis()
 
-        // Keep decoded audio cache under 95 MB (total app storage ~115-135 MB) and never delete active/recent files
+        // Keep decoded audio cache under 120 MB (total app storage ~140-160 MB) and never delete active/recent files
         try {
-            val maxCacheBytes = 95L * 1024L * 1024L
+            val maxCacheBytes = 120L * 1024L * 1024L
             val allCached = ArrayList<File>()
             cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
             File(context.cacheDir, "at3_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allCached.addAll(it) }
@@ -528,7 +528,7 @@ class Rpf3Archive(
                 var evictedFiles = 0
                 var evictedBytes = 0L
                 allCached.sortBy { it.lastModified() }
-                val targetBytes = 65L * 1024L * 1024L
+                val targetBytes = 80L * 1024L * 1024L
                 for (f in allCached) {
                     if (totalBytes <= targetBytes) break
                     val ageMs = now - f.lastModified()

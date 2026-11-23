@@ -92,8 +92,8 @@ class Rpf7Archive(
         const val CHUNK_THRESHOLD_BLOCKS = 12
         private val NO_DJ_MARKERS = DjMarkerWindow()
 
-        private const val MAX_CACHE_BYTES = 100L * 1024L * 1024L // 100 MB cap
-        private const val TARGET_CACHE_BYTES = 65L * 1024L * 1024L // Evict down to 65 MB
+        private const val MAX_CACHE_BYTES = 150L * 1024L * 1024L // 150 MB cap
+        private const val TARGET_CACHE_BYTES = 100L * 1024L * 1024L // Evict down to 100 MB
 
         private val pinnedFileNames = java.util.Collections.synchronizedSet(HashSet<String>())
 

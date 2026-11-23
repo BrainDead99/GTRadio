@@ -29,6 +29,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var appBarConfiguration: AppBarConfiguration
     private lateinit var binding: ActivityMainBinding
     private var defaultStatusBarColor: Int = 0
+    private var defaultWindowBackground: android.graphics.drawable.Drawable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,13 +78,27 @@ class MainActivity : AppCompatActivity() {
         if (!::binding.isInitialized) return
         val insetsController = WindowCompat.getInsetsController(window, window.decorView)
         if (enabled) {
+            if (defaultWindowBackground == null) {
+                defaultWindowBackground = window.decorView.background
+            }
+            window.decorView.setBackgroundColor(Color.BLACK)
+            binding.root.setBackgroundColor(Color.BLACK)
             supportActionBar?.hide()
             binding.appBarLayout.visibility = View.GONE
             insetsController.isAppearanceLightStatusBars = false
         } else {
+            if (defaultWindowBackground != null) {
+                window.decorView.background = defaultWindowBackground
+            } else {
+                val typedValue = android.util.TypedValue()
+                theme.resolveAttribute(android.R.attr.windowBackground, typedValue, true)
+                window.decorView.setBackgroundResource(typedValue.resourceId)
+            }
+            binding.root.background = null
             binding.appBarLayout.visibility = View.VISIBLE
             supportActionBar?.show()
-            insetsController.isAppearanceLightStatusBars = true
+            val isNightMode = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
+            insetsController.isAppearanceLightStatusBars = !isNightMode
         }
     }
 

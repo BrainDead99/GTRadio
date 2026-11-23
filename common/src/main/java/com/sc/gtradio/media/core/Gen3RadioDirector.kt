@@ -78,6 +78,7 @@ class Gen3RadioDirector<TSong, TClip>(
     var adsEnabled: Boolean = false
     var newsReportsEnabled: Boolean = false
     var weatherChatterEnabled: Boolean = false
+    var maxAdsPerBreak: Int = 3
 
     // RDHQ clip & song queues
     val songQueue = RandomizedDualHeadQueue<TSong>(emptyList(), rng)
@@ -120,6 +121,7 @@ class Gen3RadioDirector<TSong, TClip>(
         private set
     var nextPlannedAction: String = "INITIAL_SONG"
         private set
+    private var breakScheduled: Boolean = false
 
     val pendingBreakClips = ArrayList<DirectorBreakClip<TClip>>()
 
@@ -140,7 +142,7 @@ class Gen3RadioDirector<TSong, TClip>(
             }
             timeOfDayDjQueue.reset(list)
             GTRadioLogger.logVerbose("DIRECTOR") {
-                "[DIRECTOR] $stationName: Rebuilt TOD queue for $currentBucket (${list.size} clips)"
+                "$stationName: Rebuilt TOD queue for $currentBucket (${list.size} clips)"
             }
         }
     }
@@ -174,12 +176,13 @@ class Gen3RadioDirector<TSong, TClip>(
     fun pickNextEvent(pickIntro: (TSong) -> TClip? = { null }): NextBroadcastEvent<TSong, TClip> {
         rebuildTimeOfDayQueueIfNeeded()
 
-        // 1. If currently in a break block, or sweep is exhausted, prepare a break block if enabled
-        if (songsRemainingInSweep <= 0) {
+        // 1. If sweep is exhausted and break not yet scheduled, prepare a break block if enabled
+        if (songsRemainingInSweep <= 0 && !breakScheduled) {
             if (canRunBreak()) {
-                currentPhase = DirectorPhase.BREAK_BLOCK
                 val breakClips = planBreakBlock()
                 if (breakClips.isNotEmpty()) {
+                    breakScheduled = true
+                    currentPhase = DirectorPhase.BREAK_BLOCK
                     pendingBreakClips.clear()
                     pendingBreakClips.addAll(breakClips)
                     nextPlannedAction = "PLAY_BREAK_BLOCK (${breakClips.size} clips)"
@@ -196,10 +199,19 @@ class Gen3RadioDirector<TSong, TClip>(
             startNewSweep()
         }
 
+        // If a break block was scheduled and we are picking the next event (e.g. look-ahead or after break completes),
+        // we MUST start a new sweep — NEVER two break blocks in a row!
+        if (breakScheduled || songsRemainingInSweep <= 0) {
+            startNewSweep()
+        }
+
         // 2. Check for optional brisk mid-sweep interlude between songs
+        // ~45% probability when next track has no intro clip, ~20% otherwise
         if (currentPhase == DirectorPhase.MUSIC_SWEEP && lastSegmentType == RadioSegmentType.Song && consecutiveSongs >= 1) {
-            // ~20% probability of short Station ID, DJ solo, or TOD clip between songs
-            if (rng.nextInt(100) < 20) {
+            val nextSong = songQueue.peek()
+            val nextSongHasIntro = nextSong != null && !isTalkRadio && pickIntro(nextSong) != null
+            val interludeChance = if (!nextSongHasIntro) 45 else 20
+            if (rng.nextInt(100) < interludeChance) {
                 val interlude = pickMidSweepInterlude()
                 if (interlude != null) {
                     currentPhase = DirectorPhase.INTERLUDE
@@ -212,13 +224,13 @@ class Gen3RadioDirector<TSong, TClip>(
             }
         }
 
-        // 3. Play next song / show in sweep
+        // 3. Play next song / show in sweep (~70–75% DJ intro probability when available)
         currentPhase = DirectorPhase.MUSIC_SWEEP
         if (songQueue.isEmpty()) {
             throw IllegalStateException("Gen3RadioDirector[$stationName]: songQueue is empty")
         }
         val song = songQueue.next()
-        val intro = if (!isTalkRadio && rng.nextInt(100) < 60) pickIntro(song) else null
+        val intro = if (!isTalkRadio && rng.nextInt(100) < 72) pickIntro(song) else null
         songsRemainingInSweep--
         consecutiveSongs++
         lastSegmentType = RadioSegmentType.Song
@@ -238,6 +250,7 @@ class Gen3RadioDirector<TSong, TClip>(
     }
 
     private fun startNewSweep() {
+        breakScheduled = false
         currentPhase = DirectorPhase.MUSIC_SWEEP
         currentSweepLength = pickNewSweepLength()
         songsRemainingInSweep = currentSweepLength
@@ -267,7 +280,8 @@ class Gen3RadioDirector<TSong, TClip>(
                 clips.add(DirectorBreakClip(wClip, RadioSegmentType.WeatherReport, "WEATHER_$targetWeather"))
             }
             if (canAd) {
-                val adCount = if (rng.nextBoolean()) 1 else 2
+                val rawAdCount = if (rng.nextBoolean()) 1 else 2
+                val adCount = minOf(maxAdsPerBreak, rawAdCount)
                 repeat(adCount) { i ->
                     if (advertQueue.isNotEmpty()) {
                         clips.add(DirectorBreakClip(advertQueue.next(), RadioSegmentType.Commercial, "AD_${i + 1}"))
@@ -283,7 +297,8 @@ class Gen3RadioDirector<TSong, TClip>(
                 clips.add(DirectorBreakClip(newsQueue.next(), RadioSegmentType.NewsReport, "NEWS_REPORT"))
             }
             if (canAd) {
-                val adCount = if (rng.nextBoolean()) 1 else 2
+                val rawAdCount = if (rng.nextBoolean()) 1 else 2
+                val adCount = minOf(maxAdsPerBreak, rawAdCount)
                 repeat(adCount) { i ->
                     if (advertQueue.isNotEmpty()) {
                         clips.add(DirectorBreakClip(advertQueue.next(), RadioSegmentType.Commercial, "AD_${i + 1}"))
@@ -291,16 +306,17 @@ class Gen3RadioDirector<TSong, TClip>(
                 }
             }
         } else if (canAd) {
-            // Standard Commercial block: 2-3 Adverts (20% = 1 ad, 50% = 2 ads, 30% = 3 ads)
+            // Standard Commercial block: 1-3 Adverts (capped by maxAdsPerBreak)
             if (toAdQueue.isNotEmpty() && rng.nextInt(100) < 65) {
                 clips.add(DirectorBreakClip(toAdQueue.next(), RadioSegmentType.Announcer, "TO_AD"))
             }
             val rollAdCount = rng.nextInt(100)
-            val adCount = when {
+            val rawAdCount = when {
                 rollAdCount < 20 -> 1
                 rollAdCount < 70 -> 2
                 else -> 3
             }
+            val adCount = minOf(maxAdsPerBreak, rawAdCount)
             repeat(adCount) { i ->
                 if (advertQueue.isNotEmpty()) {
                     clips.add(DirectorBreakClip(advertQueue.next(), RadioSegmentType.Commercial, "AD_${i + 1}"))
@@ -384,7 +400,7 @@ class Gen3RadioDirector<TSong, TClip>(
     private fun logSnapshot() {
         val s = getSnapshot()
         GTRadioLogger.logVerbose("DIRECTOR") {
-            "[DIRECTOR] $stationName: phase=${s.phase}, remaining=${s.songsRemainingInSweep}/${s.sweepLength}, consecutive=${s.consecutiveSongs}, pendingBreaks=${s.pendingBreakQueueSize}, action=${s.nextPlannedAction}"
+            "$stationName: phase=${s.phase}, remaining=${s.songsRemainingInSweep}/${s.sweepLength}, consecutive=${s.consecutiveSongs}, pendingBreaks=${s.pendingBreakQueueSize}, action=${s.nextPlannedAction}"
         }
     }
 

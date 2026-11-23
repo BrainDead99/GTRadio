@@ -39,6 +39,10 @@ data class Rpf3ClipRef(
     val trackKey: String
 )
 
+private val RPF3_INTRO_ALIASES = mapOf(
+    "HEAVENANDHELL" to "HEAVENHELL"
+)
+
 @UnstableApi class Rpf3RadioStation(
     override val stationGroupId: String,
     override val mediaId: String,
@@ -72,9 +76,17 @@ data class Rpf3ClipRef(
         get() = _currentMetadata
 
     private var initialized = false
-    private var isTalkRadio = false
+    private val isTalkRadio: Boolean = run {
+        val k = stationKey.lowercase(Locale.ROOT)
+        val a = stationArchive.rpfName.lowercase(Locale.ROOT)
+        k.contains("wktt") || k.contains("plr") || k.contains("lazlow") ||
+            a.contains("wktt") || a.contains("plr") || a.contains("lazlow")
+    }
 
     private val director by lazy {
+        val isContinuous = isContinuousMixStation()
+        val isAmbient = isAmbientJourneyStation()
+        val suppressExtras = isContinuous || isAmbient || isTalkRadio
         Gen3RadioDirector<Rpf3SongItem, Rpf3ClipRef>(
             context = context,
             era = SeriesEra.GEN3_RPF3,
@@ -82,26 +94,32 @@ data class Rpf3ClipRef(
             isTalkRadio = isTalkRadio,
             rng = rng
         ).also { d ->
-            d.adsEnabled = this.adsEnabled
-            d.weatherChatterEnabled = this.weatherChatterEnabled
-            d.newsReportsEnabled = this.newsReportsEnabled
+            d.adsEnabled = if (suppressExtras) false else this.adsEnabled
+            d.weatherChatterEnabled = if (suppressExtras) false else this.weatherChatterEnabled
+            d.newsReportsEnabled = if (suppressExtras) false else this.newsReportsEnabled
         }
     }
 
     override var adsEnabled: Boolean = adsEnabled
         set(value) {
             field = value
-            director.adsEnabled = value
+            if (!isContinuousMixStation() && !isAmbientJourneyStation() && !isTalkRadio) {
+                director.adsEnabled = value
+            }
         }
     override var weatherChatterEnabled: Boolean = weatherChatterEnabled
         set(value) {
             field = value
-            director.weatherChatterEnabled = value
+            if (!isContinuousMixStation() && !isAmbientJourneyStation() && !isTalkRadio) {
+                director.weatherChatterEnabled = value
+            }
         }
     override var newsReportsEnabled: Boolean = newsReportsEnabled
         set(value) {
             field = value
-            director.newsReportsEnabled = value
+            if (!isContinuousMixStation() && !isAmbientJourneyStation() && !isTalkRadio) {
+                director.newsReportsEnabled = value
+            }
         }
 
     private val morningDjList = ArrayList<Rpf3ClipRef>()
@@ -156,6 +174,7 @@ data class Rpf3ClipRef(
     private var plannedOverlayCue: PlannedOverlayCue? = null
     private var plannedPreRollCue: PlannedPreRollCue? = null
     private var isPrefetching = false
+    private var hasPrefetchedNextSegment = false
     private val activePinnedUris = java.util.Collections.synchronizedSet(HashSet<String>())
     private val pendingBreakClips = ArrayList<DirectorBreakClip<Rpf3ClipRef>>()
 
@@ -202,8 +221,7 @@ data class Rpf3ClipRef(
         if (initialized) return
         initialized = true
 
-        val keyLower = stationKey.lowercase()
-        isTalkRadio = keyLower.contains("wktt") || keyLower.contains("plr") || keyLower.contains("lazlow")
+        val keyLower = stationKey.lowercase(Locale.ROOT)
 
         val ids = ArrayList<Rpf3ClipRef>()
         val solos = ArrayList<Rpf3ClipRef>()
@@ -252,7 +270,8 @@ data class Rpf3ClipRef(
                     eName.startsWith("TO_NEWS") -> toNews.add(ref)
                     eName.startsWith("TO_WEATHER") -> toWeather.add(ref)
                     else -> {
-                        val intros = introMap[eName] ?: emptyList()
+                        val lookupKey = RPF3_INTRO_ALIASES[eName] ?: eName
+                        val intros = introMap[lookupKey] ?: emptyList()
                         songItems.add(Rpf3SongItem(stationArchive, eName, intros))
                     }
                 }
@@ -314,7 +333,8 @@ data class Rpf3ClipRef(
             }
             for (extraName in extraSet) {
                 if (extraTracksArchive.hasEntry(extraName)) {
-                    songItems.add(Rpf3SongItem(extraTracksArchive, extraName, introMap[extraName] ?: emptyList()))
+                    val lookupKey = RPF3_INTRO_ALIASES[extraName] ?: extraName
+                    songItems.add(Rpf3SongItem(extraTracksArchive, extraName, introMap[lookupKey] ?: emptyList()))
                 }
             }
         }
@@ -330,7 +350,8 @@ data class Rpf3ClipRef(
             }
             for (tName in ep1Set) {
                 if (ep1SfxArchive.hasEntry(tName)) {
-                    songItems.add(Rpf3SongItem(ep1SfxArchive, tName, introMap[tName] ?: emptyList()))
+                    val lookupKey = RPF3_INTRO_ALIASES[tName] ?: tName
+                    songItems.add(Rpf3SongItem(ep1SfxArchive, tName, introMap[lookupKey] ?: emptyList()))
                 }
             }
         }
@@ -347,7 +368,8 @@ data class Rpf3ClipRef(
             }
             for (tName in ep2Set) {
                 if (ep2SfxArchive.hasEntry(tName)) {
-                    songItems.add(Rpf3SongItem(ep2SfxArchive, tName, introMap[tName] ?: emptyList()))
+                    val lookupKey = RPF3_INTRO_ALIASES[tName] ?: tName
+                    songItems.add(Rpf3SongItem(ep2SfxArchive, tName, introMap[lookupKey] ?: emptyList()))
                 }
             }
         }
@@ -367,14 +389,38 @@ data class Rpf3ClipRef(
         allSongItems.addAll(songItems)
         director.rebuildTimeOfDayQueueIfNeeded()
 
+        // Authentic Game Config: continuous mixes, ambient journey, and talk stations disable external breaks
+        val isContinuous = isContinuousMixStation()
+        val isAmbient = isAmbientJourneyStation()
+        if (isContinuous || isAmbient || isTalkRadio) {
+            director.adsEnabled = false
+            director.newsReportsEnabled = false
+            director.weatherChatterEnabled = false
+        }
+
+        val isVlad = isVladivostokStation()
+        val isSanJ = isSanJuanStation()
+        if (isVlad || isSanJ) {
+            director.maxAdsPerBreak = 1
+        }
+
         val allAdverts = ArrayList<Rpf3ClipRef>()
-        advertsArchive?.getFileEntries()?.filter { !it.isWaveBank }?.forEach {
+        fun shouldIncludeAd(adName: String): Boolean {
+            val u = adName.uppercase(Locale.ROOT)
+            return when {
+                isVlad -> u.contains("RUSSIAN")
+                isSanJ -> u.contains("SPANISH")
+                else -> !u.contains("RUSSIAN") && !u.contains("SPANISH")
+            }
+        }
+
+        advertsArchive?.getFileEntries()?.filter { !it.isWaveBank && shouldIncludeAd(it.name) }?.forEach {
             allAdverts.add(Rpf3ClipRef(advertsArchive, it.name))
         }
-        ep1SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("AD0") }?.forEach {
+        ep1SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase(Locale.ROOT).startsWith("AD0") && shouldIncludeAd(it.name) }?.forEach {
             allAdverts.add(Rpf3ClipRef(ep1SfxArchive, it.name))
         }
-        ep2SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase().startsWith("AD1") }?.forEach {
+        ep2SfxArchive?.getFileEntries()?.filter { !it.isWaveBank && it.name.uppercase(Locale.ROOT).startsWith("AD1") && shouldIncludeAd(it.name) }?.forEach {
             allAdverts.add(Rpf3ClipRef(ep2SfxArchive, it.name))
         }
         director.advertQueue.reset(allAdverts)
@@ -749,6 +795,7 @@ data class Rpf3ClipRef(
         currentMultiChunkNextBlock = 0
         currentMultiChunkTotalBlocks = 0
         currentMultiChunksPlayedInRow = 0
+        hasPrefetchedNextSegment = false
 
         if (isContinuousMixStation()) {
             prepareContinuousMixSegment()
@@ -819,7 +866,7 @@ data class Rpf3ClipRef(
                         val djStartMs = maxOf(markers!!.effectiveIntroStartMs, markers.introEndMs - djDurMs - 250L)
                         plannedOverlayCue = PlannedOverlayCue(djIntroUri!!, djStartMs, markers.introEndMs)
                         GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "[DJ-OVERLAY] ${item.trackName}: fits-in-intro [${markers.effectiveIntroStartMs}..${markers.introEndMs}ms], djDur=${djDurMs}ms, fireAt=${djStartMs}ms"
+                            "${item.trackName}: fits-in-intro [${markers.effectiveIntroStartMs}..${markers.introEndMs}ms], djDur=${djDurMs}ms, fireAt=${djStartMs}ms"
                         }
                     }
                     canPreRoll -> {
@@ -827,7 +874,7 @@ data class Rpf3ClipRef(
                         val preRollDelayMs = (djDurMs - markers!!.introEndMs + 250L).coerceIn(500L, (djDurMs - 500L).coerceAtLeast(500L))
                         plannedPreRollCue = PlannedPreRollCue(djIntroUri!!, preRollDelayMs, markers.introEndMs)
                         GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "[DJ-OVERLAY] ${item.trackName}: pre-roll djDur=${djDurMs}ms, introEnd=${markers.introEndMs}ms, delay=${preRollDelayMs}ms"
+                            "${item.trackName}: pre-roll djDur=${djDurMs}ms, introEnd=${markers.introEndMs}ms, delay=${preRollDelayMs}ms"
                         }
                     }
                     else -> {
@@ -918,7 +965,6 @@ data class Rpf3ClipRef(
     private fun startLookAheadMonitor(expectedGen: Int, totalDurationMs: Long) {
         lookAheadJob?.cancel()
         isPrefetching = false
-        prefetchedItem = null
         val songItem = currentSongItem
         val markers = songItem?.let { it.archive.readDjMarkers(it.trackName) }
 
@@ -929,11 +975,17 @@ data class Rpf3ClipRef(
                 val pos = player.getCurrentTrackPosition().coerceAtLeast(0L)
                 val remainingMs = totalDurationMs - pos
 
+                val exo = player.exoPlayer
+                val curWinIdx = exo.currentMediaItemIndex
+                val isFinalWindow = curWinIdx >= exo.mediaItemCount - 1
+                val isFinalChunk = currentMultiChunkTotalBlocks <= 0 || currentMultiChunkNextBlock >= currentMultiChunkTotalBlocks
+
                 val hasValidOutro = markers != null && markers.hasOutroWindow && markers.outroStartMs > (markers.introEndMs.coerceAtLeast(0L) + 15_000L)
 
-                // 1. Trigger background prefetch ~25s before end OR 15s before outroStart
+                // 1. Trigger background prefetch ONLY on final chunk window of the song, guarded by hasPrefetchedNextSegment
                 val outroPreloadTrigger = hasValidOutro && pos >= (markers!!.outroStartMs - 15_000L)
-                if (!isPrefetching && (remainingMs in 1..25_000L || outroPreloadTrigger)) {
+                if (isFinalWindow && isFinalChunk && !hasPrefetchedNextSegment && !isPrefetching && (remainingMs in 1..25_000L || outroPreloadTrigger)) {
+                    hasPrefetchedNextSegment = true
                     isPrefetching = true
                     stationScope.launch(StationDispatchers.ioDispatcher) {
                         if (!_playing || playGeneration.get() != expectedGen) return@launch
@@ -941,9 +993,10 @@ data class Rpf3ClipRef(
                     }
                 }
 
-                // 2. Outro overlap and dead air trimming
-                if (hasValidOutro && !outroOverlapHandled && markers != null) {
-                    if (pos >= markers.outroStartMs) {
+                // 2. Outro overlap and dead air trimming (strictly only on the final chunk of the song!)
+                if (isFinalWindow && isFinalChunk && hasValidOutro && markers != null) {
+                    // 2a. Voice overlay at outroStartMs: launch DJ voice overlay ducked at 0.50f while song continues playing
+                    if (!outroOverlapHandled && pos >= markers.outroStartMs) {
                         val pItem = prefetchedItem
                         if (pItem != null && pItem.uris.isNotEmpty()) {
                             val isVoiceLeadIn = pItem.segmentType in listOf(
@@ -956,35 +1009,57 @@ data class Rpf3ClipRef(
                                 outroOverlapHandled = true
                                 val voiceUri = pItem.uris.first()
                                 GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                                    "[DJ-OVERLAY] ${songItem?.trackName}: outro overlap at ${pos}ms -> voice clip '$voiceUri' (${pItem.segmentType})"
-                                }
-                                withContext(Dispatchers.Main.immediate) {
-                                    player.djVoiceOverlayPlayer?.playOverlay(voiceUri, expectedGen.toLong(), player.isMutedForTuningStatic)
-                                    player.setMusicDuckGain(0.50f, 300L, stationScope)
+                                    "${songItem?.trackName}: outro overlap at ${pos}ms -> voice clip '$voiceUri' (${pItem.segmentType})"
                                 }
                                 if (pItem.uris.size > 1) {
                                     prefetchedItem = pItem.copy(uris = pItem.uris.drop(1))
                                 } else {
                                     prefetchedItem = null
                                 }
-                                val fadeMs = if (markers.outroEndMs > pos) (markers.outroEndMs - pos).coerceIn(1000L, 5000L) else 2000L
-                                delay(fadeMs)
-                                if (_playing && playGeneration.get() == expectedGen) {
-                                    withContext(Dispatchers.Main.immediate) {
-                                        player.setMusicDuckGain(0f, 300L, stationScope)
-                                        playNext()
+                                withContext(Dispatchers.Main.immediate) {
+                                    player.djVoiceOverlayPlayer?.playOverlay(voiceUri, expectedGen.toLong(), player.isMutedForTuningStatic)
+                                    player.setMusicDuckGain(0.50f, 300L, stationScope)
+                                }
+
+                                val djDur = readAudioDurationMs(context, voiceUri).coerceAtLeast(1000L)
+                                val startWait = System.currentTimeMillis()
+                                val canTrimAtOutroEnd = totalDurationMs > 0L && markers.outroEndMs in (totalDurationMs - 12_000L)..(totalDurationMs - 1_000L)
+
+                                stationScope.launch {
+                                    while (isActive && _playing && playGeneration.get() == expectedGen) {
+                                        val elapsed = System.currentTimeMillis() - startWait
+                                        val currentPos = player.getCurrentTrackPosition()
+                                        val djFinished = elapsed >= djDur || player.djVoiceOverlayPlayer?.isPlaying == false
+                                        val reachedOutroEnd = canTrimAtOutroEnd && currentPos >= markers.outroEndMs
+
+                                        if (djFinished || reachedOutroEnd) {
+                                            if (reachedOutroEnd) {
+                                                withContext(Dispatchers.Main.immediate) {
+                                                    player.setMusicDuckGain(0f, 300L, stationScope)
+                                                    playNext()
+                                                }
+                                            } else {
+                                                // DJ clip finished, restore duck gain and let song finish naturally
+                                                withContext(Dispatchers.Main.immediate) {
+                                                    player.setMusicDuckGain(1.0f, 500L, stationScope)
+                                                }
+                                            }
+                                            break
+                                        }
+                                        delay(100L)
                                     }
                                 }
-                                break
                             }
                         }
                     }
 
-                    // Direct song-to-song trimming of trailing dead air
-                    if (markers.outroEndMs > 0L && pos >= (markers.outroEndMs - 300L) && !outroOverlapHandled) {
+                    // 2b. Direct song-to-song trimming of trailing dead air:
+                    // ONLY trim if outro_end is verified to be within the last 12 seconds of total duration!
+                    val canTrimAtOutroEnd = totalDurationMs > 0L && markers.outroEndMs in (totalDurationMs - 12_000L)..(totalDurationMs - 1_000L)
+                    if (canTrimAtOutroEnd && pos >= (markers.outroEndMs - 300L) && !outroOverlapHandled) {
                         outroOverlapHandled = true
                         GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "[DJ-OVERLAY] ${songItem?.trackName}: trimming dead air at ${pos}ms (outroEnd=${markers.outroEndMs}ms)"
+                            "${songItem?.trackName}: trimming dead air at ${pos}ms (outroEnd=${markers.outroEndMs}ms, totalDur=${totalDurationMs}ms)"
                         }
                         withContext(Dispatchers.Main.immediate) {
                             player.setMusicDuckGain(0f, 300L, stationScope)
@@ -1077,7 +1152,7 @@ data class Rpf3ClipRef(
                         plannedPreRollCue = pPreRollCue
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
-                        "[DIRECTOR] Rpf3[$stationTitle]: Look-ahead prefetched next song '${item.trackName}' (intro=${event.djIntro != null})"
+                        "Rpf3[$stationTitle]: Look-ahead prefetched next song '${item.trackName}' (intro=${event.djIntro != null})"
                     }
                 } else {
                     pinned.forEach { Rpf3Archive.unpinFile(it) }
@@ -1113,7 +1188,7 @@ data class Rpf3ClipRef(
                         pendingBreakClips = clips
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
-                        "[DIRECTOR] Rpf3[$stationTitle]: Look-ahead prefetched break upfront (${upfrontClips.size} clips, ${clips.size} queued)"
+                        "Rpf3[$stationTitle]: Look-ahead prefetched break upfront (${upfrontClips.size} clips, ${clips.size} queued)"
                     }
                 } else {
                     pinned.forEach { Rpf3Archive.unpinFile(it) }
@@ -1133,7 +1208,7 @@ data class Rpf3ClipRef(
                         segmentType = event.segmentType
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
-                        "[DIRECTOR] Rpf3[$stationTitle]: Look-ahead prefetched interlude '${ref.trackKey}' (${event.segmentType})"
+                        "Rpf3[$stationTitle]: Look-ahead prefetched interlude '${ref.trackKey}' (${event.segmentType})"
                     }
                 }
             }
@@ -1225,6 +1300,9 @@ data class Rpf3ClipRef(
             activeListener = object : Player.Listener {
                 private var alreadyHandled = false
                 override fun onPlaybackStateChanged(state: Int) {
+                    if (state == Player.STATE_READY && activeMixMarkers.isNotEmpty()) {
+                        updateMixTrackMetadata()
+                    }
                     if (!alreadyHandled && state == Player.STATE_ENDED) {
                         alreadyHandled = true
                         player.exoPlayer.removeListener(this)
@@ -1252,7 +1330,7 @@ data class Rpf3ClipRef(
                                 if (_playing && playGeneration.get() == expectedGen) {
                                     player.exoPlayer.addMediaItem(MediaItem.fromUri(uri))
                                     GTRadioLogger.logVerbose("DIRECTOR") {
-                                        "[DIRECTOR] Rpf3[$stationTitle]: Staged queued break clip '${nextClip.clip.trackKey}' (${nextClip.label})"
+                                        "Rpf3[$stationTitle]: Staged queued break clip '${nextClip.clip.trackKey}' (${nextClip.label})"
                                     }
                                 }
                             }
@@ -1293,10 +1371,13 @@ data class Rpf3ClipRef(
     }
 
     private fun startMixPoller(expectedGen: Int = playGeneration.get()) {
-        stopMixPoller()
+        if (activePollerJob?.isActive == true) return
         activePollerJob = stationScope.launch {
             while (isActive && _playing && playGeneration.get() == expectedGen && activeMixMarkers.isNotEmpty()) {
-                updateMixTrackMetadata()
+                val exo = player.exoPlayer
+                if (exo.playbackState == Player.STATE_READY) {
+                    updateMixTrackMetadata()
+                }
                 delay(1000L)
             }
         }
@@ -1312,6 +1393,8 @@ data class Rpf3ClipRef(
 
     private fun updateMixTrackMetadata() {
         if (!_playing || activeMixMarkers.isEmpty()) return
+        val exo = player.exoPlayer
+        if (exo.playbackState != Player.STATE_READY) return
         if (!isMetadataEnabled()) {
             setStationOnlyMetadata()
             return
@@ -1396,6 +1479,24 @@ data class Rpf3ClipRef(
             }
         }
         return false
+    }
+
+    private fun isAmbientJourneyStation(): Boolean {
+        val archName = stationArchive.rpfName.lowercase(Locale.ROOT)
+        val key = stationKey.lowercase(Locale.ROOT)
+        return archName.contains("classical_ambient") || key.contains("classical_ambient")
+    }
+
+    private fun isVladivostokStation(): Boolean {
+        val archName = stationArchive.rpfName.lowercase(Locale.ROOT)
+        val key = stationKey.lowercase(Locale.ROOT)
+        return archName.contains("vladivostok") || key.contains("vladivostok")
+    }
+
+    private fun isSanJuanStation(): Boolean {
+        val archName = stationArchive.rpfName.lowercase(Locale.ROOT)
+        val key = stationKey.lowercase(Locale.ROOT)
+        return archName.contains("san_juan") || key.contains("san_juan")
     }
 
     private fun getDiscreteSongItems(): List<Rpf3SongItem> {

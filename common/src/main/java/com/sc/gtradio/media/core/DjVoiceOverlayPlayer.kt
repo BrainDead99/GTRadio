@@ -122,7 +122,7 @@ class DjVoiceOverlayPlayer(private val context: Context) {
         player.play()
 
         GTRadioLogger.logVerbose("DJ-OVERLAY") {
-            "[DJ-OVERLAY] Playing overlay: $uri (token=$token, muted=$isMuted)"
+            "Playing overlay: $uri (token=$token, muted=$isMuted)"
         }
     }
 

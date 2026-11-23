@@ -40,6 +40,12 @@ class RandomizedDualHeadQueue<T>(
     }
 
     @Synchronized
+    fun peek(): T? {
+        if (queue.isEmpty()) return null
+        return queue[0]
+    }
+
+    @Synchronized
     fun next(): T {
         if (queue.isEmpty()) {
             throw NoSuchElementException("RandomizedDualHeadQueue is empty")
