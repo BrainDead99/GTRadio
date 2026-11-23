@@ -1,6 +1,8 @@
 package com.sc.gtradio.media
 
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.ForwardingPlayer
@@ -50,12 +52,17 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     private val playerListeners = CopyOnWriteArraySet<Player.Listener>()
     private val wrappedListeners = HashMap<Player.Listener, Player.Listener>()
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     var activeSessionMetadata: MediaMetadata = MediaMetadata.EMPTY
         private set
 
     private var isUpdatingMetadata = false
 
     fun updateSessionMetadata(metadata: MediaMetadata) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { updateSessionMetadata(metadata) }
+            return
+        }
         if (isUpdatingMetadata) return
         isUpdatingMetadata = true
         try {
@@ -76,6 +83,10 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     }
 
     fun notifyAvailableCommandsChanged() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { notifyAvailableCommandsChanged() }
+            return
+        }
         val cmds = availableCommands
         for (l in playerListeners) {
             l.onAvailableCommandsChanged(cmds)
@@ -83,6 +94,10 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     }
 
     fun notifyPlaybackStateChanged() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { notifyPlaybackStateChanged() }
+            return
+        }
         val state = playbackState
         val playing = isPlaying
         for (l in playerListeners) {
@@ -96,6 +111,10 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     fun isTransitionLoading(): Boolean = isTransitionLoading
 
     fun setTransitionLoading(loading: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { setTransitionLoading(loading) }
+            return
+        }
         if (isTransitionLoading == loading) return
         val oldState = playbackState
         val oldPwr = playWhenReady

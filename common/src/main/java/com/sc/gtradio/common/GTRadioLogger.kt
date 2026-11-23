@@ -20,6 +20,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 object GTRadioLogger {
     private const val TAG = "GTRadioDiag"
@@ -30,6 +31,8 @@ object GTRadioLogger {
     private const val SESSION_LOG_FILE = "last_session.log"
     private const val MAX_SESSION_LOG_BYTES = 64 * 1024L
     private const val MAX_SESSION_LOG_LINES = 300
+
+    private val crashHandlerInstalled = AtomicBoolean(false)
 
     private val memoryLogs = ArrayDeque<String>(RING_BUFFER_CAPACITY)
     private val artMemoryLogs = ArrayDeque<String>(ART_BUFFER_CAPACITY)
@@ -72,6 +75,23 @@ object GTRadioLogger {
     fun init(context: Context) {
         val ctx = context.applicationContext ?: context
         appContext = ctx
+
+        if (crashHandlerInstalled.compareAndSet(false, true)) {
+            val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+                runCatching {
+                    val ts = fmt.format(Date())
+                    val trace = Log.getStackTraceString(throwable)
+                    val line = "$ts | [FATAL-CRASH] Thread: ${thread.name}\n$trace\n"
+                    val sessionFile = File(ctx.filesDir, SESSION_LOG_FILE)
+                    FileOutputStream(sessionFile, true).use { fos ->
+                        fos.write(line.toByteArray(Charsets.UTF_8))
+                    }
+                }
+                previousHandler?.uncaughtException(thread, throwable)
+            }
+        }
+
         loadPreviousSessionLog(ctx)
         try {
             isVerboseCached = PreferenceManager.getDefaultSharedPreferences(ctx).getBoolean(PREF_VERBOSE_LOGGING, false)
@@ -226,6 +246,26 @@ object GTRadioLogger {
     inline fun logVerbose(category: String, supplier: () -> String) {
         if (!isVerboseEnabled()) return
         log("[$category] ${supplier()}")
+    }
+
+    fun e(message: String, error: Throwable? = null) {
+        log("[ERROR] $message", error)
+    }
+
+    fun e(tag: String, message: String, error: Throwable? = null) {
+        log("[$tag] [ERROR] $message", error)
+    }
+
+    fun w(message: String, error: Throwable? = null) {
+        log("[WARN] $message", error)
+    }
+
+    fun i(message: String) {
+        log("[INFO] $message")
+    }
+
+    fun d(message: String) {
+        log("[DEBUG] $message")
     }
 
     fun checkHistoricalExitReasons(context: Context) {

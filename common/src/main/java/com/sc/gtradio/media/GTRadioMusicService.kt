@@ -7,6 +7,8 @@ import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
@@ -1348,7 +1350,15 @@ open class GTRadioMusicService : MediaLibraryService() {
         if (station != null) {
             station.onMetadataChanged = { updatedMeta ->
                 if (activeStation?.mediaId == station.mediaId) {
-                    radioPlayer.updateSessionMetadata(updatedMeta)
+                    if (Looper.myLooper() == Looper.getMainLooper()) {
+                        radioPlayer.updateSessionMetadata(updatedMeta)
+                    } else {
+                        Handler(Looper.getMainLooper()).post {
+                            if (activeStation?.mediaId == station.mediaId) {
+                                radioPlayer.updateSessionMetadata(updatedMeta)
+                            }
+                        }
+                    }
                 }
             }
             stationCache[station.mediaItem.mediaId] = station

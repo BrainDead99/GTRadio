@@ -22,6 +22,7 @@ import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
 import kotlinx.coroutines.*
+import kotlinx.coroutines.CancellationException
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -495,9 +496,19 @@ private val RPF3_INTRO_ALIASES = mapOf(
         )
     }
 
+    private fun notifyMetadataChanged(metadata: MediaMetadata) {
+        _currentMetadata = metadata
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            onMetadataChanged?.invoke(metadata)
+        } else {
+            mainHandler.post {
+                onMetadataChanged?.invoke(metadata)
+            }
+        }
+    }
+
     private fun setStationOnlyMetadata() {
-        _currentMetadata = buildStationMetadata(stationTitle, "", stationLogo)
-        onMetadataChanged?.invoke(_currentMetadata)
+        notifyMetadataChanged(buildStationMetadata(stationTitle, "", stationLogo))
     }
 
     private fun applySongOrShowMetadata(item: Rpf3SongItem) {
@@ -518,7 +529,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
         if (isTalk) {
             val subtitle = if (displayArtist.isNotBlank() && displayArtist != stationTitle) "$displayArtist • $stationTitle" else stationTitle
-            _currentMetadata = buildStationMetadata(
+            val m = buildStationMetadata(
                 trackTitle = displayTitle,
                 trackSubtitle = subtitle,
                 art = stationLogo,
@@ -526,7 +537,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 cleanArtist = displayArtist,
                 cleanAlbum = ""
             )
-            onMetadataChanged?.invoke(_currentMetadata)
+            notifyMetadataChanged(m)
             return
         }
 
@@ -543,8 +554,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                             val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
                             val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
                             val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
-                            _currentMetadata = buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb)
-                            onMetadataChanged?.invoke(_currentMetadata)
+                            notifyMetadataChanged(buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb))
                         }
                     }
                 }
@@ -553,8 +563,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
         val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
         val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
-        _currentMetadata = buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum)
-        onMetadataChanged?.invoke(_currentMetadata)
+        notifyMetadataChanged(buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum))
     }
 
     private var isStationActive = false
@@ -580,7 +589,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     private fun refreshCurrentSegmentMetadata() {
-        updateMetadataForWindowIndex(player.exoPlayer.currentMediaItemIndex)
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            updateMetadataForWindowIndex(player.exoPlayer.currentMediaItemIndex)
+        } else {
+            mainHandler.post {
+                updateMetadataForWindowIndex(player.exoPlayer.currentMediaItemIndex)
+            }
+        }
     }
 
     private fun getFileDurationMs(uri: Uri): Long {
@@ -614,6 +629,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     override fun stop() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { stop() }
+            return
+        }
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: stop() called (gen=$gen)")
         activeDecodeJob?.cancel()
@@ -653,6 +672,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     override fun release() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { release() }
+            return
+        }
         stop()
         stationScope.cancel()
     }
@@ -668,6 +691,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     override fun play() {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { play() }
+            return
+        }
         val currentGen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: play() called (gen=$currentGen)")
         isStationActive = true
@@ -683,25 +710,33 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
         activeDecodeJob?.cancel()
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
-            if (!_playing || playGeneration.get() != currentGen) return@launch
-            ensureStationIndexed()
-            if (canResumeTrack) {
-                val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-                resumeFromRealTime(elapsedMs, currentGen)
-            } else {
-                setStationOnlyMetadata()
-                pickNextSegment()
-                if (currentSegmentUris.isNotEmpty()) {
-                    if (!_playing || playGeneration.get() != currentGen) return@launch
-                    val lastIdx = currentSegmentUris.size - 1
-                    val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
-                    val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
-                        rng.nextInt(25_000).toLong()
-                    } else {
-                        0L
+            try {
+                if (!_playing || playGeneration.get() != currentGen) return@launch
+                ensureStationIndexed()
+                if (canResumeTrack) {
+                    val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+                    resumeFromRealTime(elapsedMs, currentGen)
+                } else {
+                    withContext(Dispatchers.Main.immediate) {
+                        setStationOnlyMetadata()
                     }
-                    startPlayback(currentSegmentUris, 0, startOffset, currentGen)
+                    pickNextSegment()
+                    if (currentSegmentUris.isNotEmpty()) {
+                        if (!_playing || playGeneration.get() != currentGen) return@launch
+                        val lastIdx = currentSegmentUris.size - 1
+                        val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
+                        val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
+                            rng.nextInt(25_000).toLong()
+                        } else {
+                            0L
+                        }
+                        startPlayback(currentSegmentUris, 0, startOffset, currentGen)
+                    }
                 }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Throwable) {
+                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: activeDecodeJob error", e)
             }
         }
     }
@@ -789,10 +824,16 @@ private val RPF3_INTRO_ALIASES = mapOf(
         player.resetMusicDuckGain()
         activeDecodeJob?.cancel()
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
-            if (!_playing || playGeneration.get() != currentGen) return@launch
-            if (advanceMultiChunkOrPickNext()) {
+            try {
                 if (!_playing || playGeneration.get() != currentGen) return@launch
-                startPlayback(currentSegmentUris, 0, 0L, currentGen)
+                if (advanceMultiChunkOrPickNext()) {
+                    if (!_playing || playGeneration.get() != currentGen) return@launch
+                    startPlayback(currentSegmentUris, 0, 0L, currentGen)
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Throwable) {
+                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: playNext decode error", e)
             }
         }
     }
@@ -995,8 +1036,14 @@ private val RPF3_INTRO_ALIASES = mapOf(
                     hasPrefetchedNextSegment = true
                     isPrefetching = true
                     stationScope.launch(StationDispatchers.ioDispatcher) {
-                        if (!_playing || playGeneration.get() != expectedGen) return@launch
-                        prefetchNextEvent(expectedGen)
+                        try {
+                            if (!_playing || playGeneration.get() != expectedGen) return@launch
+                            prefetchNextEvent(expectedGen)
+                        } catch (ce: CancellationException) {
+                            throw ce
+                        } catch (e: Throwable) {
+                            GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: prefetchNextEvent error", e)
+                        }
                     }
                 }
 
@@ -1299,16 +1346,22 @@ private val RPF3_INTRO_ALIASES = mapOf(
                     if (pendingBreakClips.isNotEmpty()) {
                         val nextClip = pendingBreakClips.removeAt(0)
                         stationScope.launch(StationDispatchers.ioDispatcher) {
-                            if (!_playing || playGeneration.get() != expectedGen) return@launch
-                            val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey) ?: return@launch
-                            pinAudioUri(uri)
-                            withContext(Dispatchers.Main.immediate) {
-                                if (_playing && playGeneration.get() == expectedGen) {
-                                    player.exoPlayer.addMediaItem(MediaItem.fromUri(uri))
-                                    GTRadioLogger.logVerbose("DIRECTOR") {
-                                        "Rpf3[$stationTitle]: Staged queued break clip '${nextClip.clip.trackKey}' (${nextClip.label})"
+                            try {
+                                if (!_playing || playGeneration.get() != expectedGen) return@launch
+                                val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey) ?: return@launch
+                                pinAudioUri(uri)
+                                withContext(Dispatchers.Main.immediate) {
+                                    if (_playing && playGeneration.get() == expectedGen) {
+                                        player.exoPlayer.addMediaItem(MediaItem.fromUri(uri))
+                                        GTRadioLogger.logVerbose("DIRECTOR") {
+                                            "Rpf3[$stationTitle]: Staged queued break clip '${nextClip.clip.trackKey}' (${nextClip.label})"
+                                        }
                                     }
                                 }
+                            } catch (ce: CancellationException) {
+                                throw ce
+                            } catch (e: Throwable) {
+                                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: staged break clip decode error", e)
                             }
                         }
                     }
@@ -1411,8 +1464,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                                 val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
                                 val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
                                 val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
-                                _currentMetadata = buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb)
-                                onMetadataChanged?.invoke(_currentMetadata)
+                                notifyMetadataChanged(buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb))
                             }
                         }
                     }
@@ -1420,8 +1472,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
             }
             val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
             val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
-            _currentMetadata = buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum)
-            onMetadataChanged?.invoke(_currentMetadata)
+            notifyMetadataChanged(buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum))
         } else {
             setStationOnlyMetadata()
         }

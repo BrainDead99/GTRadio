@@ -97,21 +97,25 @@ class Rpf7Archive(
 
         private val pinnedFileNames: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
 
-        fun pinFile(fileNameOrUri: String) {
-            val name = fileNameOrUri.substringAfterLast('/')
-            pinnedFileNames.add(name)
+        fun pinFile(fileNameOrUri: String?) {
+            val name = fileNameOrUri?.substringAfterLast('/') ?: return
+            if (name.isNotEmpty()) {
+                pinnedFileNames.add(name)
+            }
         }
 
-        fun unpinFile(fileNameOrUri: String) {
-            val name = fileNameOrUri.substringAfterLast('/')
-            pinnedFileNames.remove(name)
+        fun unpinFile(fileNameOrUri: String?) {
+            val name = fileNameOrUri?.substringAfterLast('/') ?: return
+            if (name.isNotEmpty()) {
+                pinnedFileNames.remove(name)
+            }
         }
 
         fun clearPinnedFiles() {
             pinnedFileNames.clear()
         }
 
-        fun isPinned(fileName: String): Boolean = pinnedFileNames.contains(fileName)
+        fun isPinned(fileName: String?): Boolean = if (fileName != null) pinnedFileNames.contains(fileName) else false
 
         private val prefetchExecutor = Executors.newSingleThreadExecutor()
         private val decodeLock = Any()
