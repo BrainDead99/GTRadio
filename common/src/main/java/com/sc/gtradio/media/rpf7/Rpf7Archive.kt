@@ -404,10 +404,16 @@ class Rpf7Archive(
                 val chunks = allChunksByStream.getOrNull(sIdx) ?: continue
                 for (chunk in chunks) {
                     if (chunk.type == 0x48) { // StreamFormat chunk
-                        val sfBuf = ByteBuffer.allocate(Math.min(chunk.size, 128)).order(ByteOrder.LITTLE_ENDIAN)
-                        channel.position(rpfOffset + chunk.offset)
-                        channel.read(sfBuf)
-                        sfBuf.flip()
+                        val readLen = Math.min(chunk.size, 128)
+                        val sfBuf = if (wholeFileEncrypted && chunk.offset + readLen <= rawHdr.size) {
+                            ByteBuffer.wrap(rawHdr, chunk.offset, readLen).order(ByteOrder.LITTLE_ENDIAN)
+                        } else {
+                            val b = ByteBuffer.allocate(readLen).order(ByteOrder.LITTLE_ENDIAN)
+                            channel.position(rpfOffset + chunk.offset)
+                            channel.read(b)
+                            b.flip()
+                            b
+                        }
                         if (sfBuf.remaining() >= 12) {
                             blkCount = sfBuf.int
                             blkSize = sfBuf.int
@@ -952,6 +958,7 @@ class Rpf7Archive(
 
         val blockPcmList = ArrayList<ByteArray>(blockCount)
         var totalPcmBytes = 0
+        var detectedSampleRate: Int? = null
         val prevChannelWarmup = Array<ByteArray?>(chCount) { null }
 
         // If resuming or chunking mid-stream, extract warmup bytes from preceding block to prime bit reservoir
@@ -1051,6 +1058,9 @@ class Rpf7Archive(
             if (chSafeLens[0] > 0 && chOffsets[0] < actualBlockSize) {
                 System.arraycopy(blockBytes, chOffsets[0], leftPayload, 0, chSafeLens[0])
             }
+            if (detectedSampleRate == null && leftPayload.size >= 4) {
+                detectedSampleRate = detectMp3SampleRate(leftPayload)
+            }
             val rightPayload = if (chCount >= 2 && chSafeLens[1] > 0 && chOffsets[1] < actualBlockSize) {
                 val rBuf = ByteArray(chSafeLens[1])
                 System.arraycopy(blockBytes, chOffsets[1], rBuf, 0, chSafeLens[1])
@@ -1088,13 +1098,72 @@ class Rpf7Archive(
             }
         }
 
+        val wavSampleRate = detectedSampleRate ?: entry.sampleRate.takeIf { it > 0 } ?: 48000
+        if (detectedSampleRate != null && detectedSampleRate != entry.sampleRate) {
+            GTRadioLogger.logVerbose("DECODE") {
+                "RPF7 MP3 sample rate for ${entry.name}: header=${entry.sampleRate}Hz -> actual=${detectedSampleRate}Hz"
+            }
+        }
+
         // Write final WAV file with 256 KB buffer and single write per block
         BufferedOutputStream(FileOutputStream(tempFile), 262144).use { out ->
-            writeWavHeader(out, totalPcmBytes, entry.sampleRate, chCount)
+            writeWavHeader(out, totalPcmBytes, wavSampleRate, chCount)
             for (blockPcm in blockPcmList) {
                 out.write(blockPcm)
             }
         }
+    }
+
+    /**
+     * Parses MPEG Layer III frame sync headers to detect the native decoded sample rate
+     * matching minimp3's info.hz so mono/stereo WAV headers never play at a mismatched pitch.
+     */
+    private fun detectMp3SampleRate(mp3Bytes: ByteArray): Int? {
+        val mpeg1Bitrates = intArrayOf(0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0)
+        val mpeg2Bitrates = intArrayOf(0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0)
+        val scanLimit = minOf(mp3Bytes.size - 4, 2048)
+        for (i in 0..scanLimit) {
+            val b0 = mp3Bytes[i].toInt() and 0xFF
+            val b1 = mp3Bytes[i + 1].toInt() and 0xFF
+            if (b0 != 0xFF || (b1 and 0xE0) != 0xE0) continue
+
+            val versionBits = (b1 ushr 3) and 0x03
+            val layerBits = (b1 ushr 1) and 0x03
+            if (versionBits == 1 || layerBits != 1) continue
+
+            val b2 = mp3Bytes[i + 2].toInt() and 0xFF
+            val bitrateIdx = (b2 ushr 4) and 0x0F
+            val srIdx = (b2 ushr 2) and 0x03
+            val padding = (b2 ushr 1) and 0x01
+            if (bitrateIdx == 0 || bitrateIdx == 15 || srIdx == 3) continue
+
+            val hz = when (versionBits) {
+                3 -> intArrayOf(44100, 48000, 32000)[srIdx]
+                2 -> intArrayOf(22050, 24000, 16000)[srIdx]
+                else -> intArrayOf(11025, 12000, 8000)[srIdx]
+            }
+            val kbps = if (versionBits == 3) mpeg1Bitrates[bitrateIdx] else mpeg2Bitrates[bitrateIdx]
+            if (kbps <= 0) continue
+
+            val frameSize = (if (versionBits == 3) 144 else 72) * (kbps * 1000) / hz + padding
+            if (frameSize < 24) continue
+
+            val nextPos = i + frameSize
+            if (nextPos + 4 <= mp3Bytes.size) {
+                val n0 = mp3Bytes[nextPos].toInt() and 0xFF
+                val n1 = mp3Bytes[nextPos + 1].toInt() and 0xFF
+                val n2 = mp3Bytes[nextPos + 2].toInt() and 0xFF
+                val nVer = (n1 ushr 3) and 0x03
+                val nLayer = (n1 ushr 1) and 0x03
+                val nSrIdx = (n2 ushr 2) and 0x03
+                if (n0 == 0xFF && (n1 and 0xE0) == 0xE0 && nVer == versionBits && nLayer == 1 && nSrIdx == srIdx) {
+                    return hz
+                }
+            } else if (i == 0) {
+                return hz
+            }
+        }
+        return null
     }
 
     private fun decodeMp3ChannelToPcm(mp3Bytes: ByteArray, sampleRate: Int, warmupBytes: ByteArray? = null): ShortArray {
@@ -1182,7 +1251,7 @@ class Rpf7Archive(
 
         // Write final WAV file with 256 KB buffer and single write per block
         BufferedOutputStream(FileOutputStream(tempFile), 262144).use { out ->
-            writeWavHeader(out, totalPcmBytes, entry.sampleRate, chCount)
+            writeWavHeader(out, totalPcmBytes, entry.sampleRate.takeIf { it > 0 } ?: 48000, chCount)
             for (blockPcm in blockPcmList) {
                 out.write(blockPcm)
             }
@@ -1249,7 +1318,8 @@ class Rpf7Archive(
                     }
 
                     BufferedOutputStream(FileOutputStream(tempFile), 262144).use { out ->
-                        writeWavHeader(out, pcmBytes.size, subTrack.sampleRate, 1)
+                        val bankRate = subTrack.sampleRate.takeIf { it > 0 } ?: 48000
+                        writeWavHeader(out, pcmBytes.size, bankRate, 1)
                         out.write(pcmBytes)
                     }
                 }

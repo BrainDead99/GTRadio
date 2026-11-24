@@ -125,21 +125,42 @@ data class Rpf7ClipRef(
     private var lastSegment = RadioSegmentType.None
     private var activeListener: Player.Listener? = null
 
+    private data class ChunkPlaybackMeta(
+        val item: Rpf7SongItem,
+        val startBlock: Int,
+        val loopEpoch: Int,
+        val startSample: Long,
+        val uri: Uri
+    )
+
+    private data class NextChunkTarget(
+        val item: Rpf7SongItem,
+        val startBlock: Int,
+        val totalBlocks: Int,
+        val loopEpoch: Int,
+        val chunkBlocks: Int
+    )
+
     private var currentSegmentUris: List<Uri> = emptyList()
     private var currentSongItem: Rpf7SongItem? = null
-    private var currentMultiChunkNextBlock: Int = 0
-    private var currentMultiChunkTotalBlocks: Int = 0
+    private var nextChunkItem: Rpf7SongItem? = null
+    private var nextChunkStartBlock: Int = 0
+    private var nextChunkTotalBlocks: Int = 0
+    private var nextChunkLoopEpoch: Int = 0
     private var currentMultiChunksPlayedInRow: Int = 0
+    private var hasStartedContinuousMix: Boolean = false
     private var introItemCount = 0
     private var hasPrefetchedNextSegment: Boolean = false
-    private val chunkStartSampleByMediaId = ConcurrentHashMap<String, Long>()
+    private val chunkMetaByMediaId = ConcurrentHashMap<String, ChunkPlaybackMeta>()
     private val chunkMediaIdByUri = ConcurrentHashMap<Uri, String>()
-    private val chunkFileNameByMediaId = ConcurrentHashMap<String, String>()
-    private val queuedChunkStartBlocks: MutableSet<Int> = ConcurrentHashMap.newKeySet<Int>()
+    private val queuedChunkKeys: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
     private var activeChunkPrefetchJob: Job? = null
 
-    private fun buildChunkMediaId(entryName: String, startBlock: Int): String =
-        "rpf7_chunk_${entryName}_$startBlock"
+    private fun buildChunkKey(entryName: String, loopEpoch: Int, startBlock: Int): String =
+        "${entryName.lowercase(Locale.ROOT)}_${loopEpoch}_$startBlock"
+
+    private fun buildChunkMediaId(entryName: String, loopEpoch: Int, startBlock: Int): String =
+        "rpf7_chunk_${entryName}_${loopEpoch}_$startBlock"
 
     private data class PlannedOverlayCue(
         val djUri: Uri,
@@ -328,11 +349,12 @@ data class Rpf7ClipRef(
         allSongItems.addAll(songItems)
         director.rebuildTimeOfDayQueueIfNeeded()
 
-        // 4. Index Adverts and News with exact pool routing
+        // 4. Index Adverts and News with exact pool routing (excluding TV-only commercial stems)
         val allAdverts = ArrayList<Rpf7ClipRef>()
         if (stationConfig.advertPool != Rpf7AdvertPool.NONE) {
             advertsArchive?.getFileEntries()?.forEach { entry ->
                 val stem = entry.name.lowercase(Locale.ROOT).removeSuffix(".awc")
+                if (Rpf7RadioDirector.isTvAdvertStem(stem)) return@forEach
                 val isEligible = when (stationConfig.advertPool) {
                     Rpf7AdvertPool.COUNTRY -> stem in COUNTRY_AD_STEMS
                     Rpf7AdvertPool.GENERAL -> stem !in COUNTRY_ONLY_AD_STEMS
@@ -343,7 +365,7 @@ data class Rpf7ClipRef(
                 }
             }
         }
-        director.advertQueue.reset(allAdverts)
+        director.resetAdverts(allAdverts) { it.trackKey }
 
         val allNews = ArrayList<Rpf7ClipRef>()
         if (stationConfig.allowsNews) {
@@ -581,14 +603,12 @@ data class Rpf7ClipRef(
         player.resetMusicDuckGain()
         activeChunkPrefetchJob?.cancel()
         activeChunkPrefetchJob = null
-        queuedChunkStartBlocks.clear()
         stopMixPoller(clearMarkers = true)
         lookAheadJob?.cancel()
         lookAheadJob = null
         isPrefetching = false
         prefetchedItem?.pinnedFiles?.forEach { Rpf7Archive.unpinFile(it) }
         prefetchedItem = null
-        unpinAllActive()
         pendingBreakClips.clear()
 
         val isContinuousMix = isContinuousMixStation()
@@ -596,23 +616,21 @@ data class Rpf7ClipRef(
             val exo = player.exoPlayer
             if (exo.playbackState == Player.STATE_READY) {
                 val mediaId = exo.currentMediaItem?.mediaId
-                val sOff = if (mediaId != null) chunkStartSampleByMediaId[mediaId] else null
-                if (sOff != null) {
+                val chunkMeta = if (mediaId != null) chunkMetaByMediaId[mediaId] else null
+                if (chunkMeta != null) {
                     val rawPosMs = exo.currentPosition.coerceAtLeast(0L)
                     val curPosMs = if (exo.duration > 0) rawPosMs.coerceAtMost(exo.duration) else rawPosMs
-                    val sRate = activeMixSampleRate.toLong().coerceAtLeast(1L)
-                    val currentSample = sOff + (curPosMs * sRate / 1000L)
+                    val sRate = chunkMeta.item.archive.getEntrySampleRate(chunkMeta.item.trackName).toLong().coerceAtLeast(1L)
+                    val currentSample = chunkMeta.startSample + (curPosMs * sRate / 1000L)
                     savedMixAbsMs = (currentSample * 1000L) / sRate
-                    continuousMixItem = currentSongItem
+                    continuousMixItem = chunkMeta.item
                     lastStoppedTimeMs = System.currentTimeMillis()
                 }
             }
         }
 
-        chunkFileNameByMediaId.values.forEach { Rpf7Archive.unpinFile(it) }
-        chunkFileNameByMediaId.clear()
-        chunkStartSampleByMediaId.clear()
-        chunkMediaIdByUri.clear()
+        clearChunkTracking(cancelPrefetch = false)
+        unpinAllActive()
         if (!isStationActive) return
         isStationActive = false
         if (_playing && !isContinuousMix) {
@@ -668,11 +686,11 @@ data class Rpf7ClipRef(
 
         activeChunkPrefetchJob?.cancel()
         activeChunkPrefetchJob = null
-        queuedChunkStartBlocks.clear()
+        queuedChunkKeys.clear()
 
         val isContinuousMix = isContinuousMixStation()
         val canResumeMix = isContinuousMix && savedMixAbsMs > 0L && continuousMixItem != null && lastStoppedTimeMs > 0L
-        val canResumeTrack = director.currentPhase != Gen3DirectorPhase.BREAK_BLOCK && lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)
+        val canResumeTrack = !isContinuousMix && director.currentPhase != Gen3DirectorPhase.BREAK_BLOCK && lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)
         if (!canResumeMix && !canResumeTrack) {
             setStationOnlyMetadata()
         }
@@ -713,44 +731,145 @@ data class Rpf7ClipRef(
         }
     }
 
+    private fun isMixItem(item: Rpf7SongItem?): Boolean {
+        val trackMix = item?.let { Rpf7MetadataRepository.getTrackMeta(it.trackName).isContinuousMix } ?: false
+        return isContinuousMixStation() || trackMix
+    }
+
+    private fun getSortedContinuousMixParts(): List<Rpf7SongItem> {
+        val mixTagged = allSongItems.filter { Rpf7MetadataRepository.getTrackMeta(it.trackName).isContinuousMix }
+        val pool = if (mixTagged.isNotEmpty()) mixTagged else allSongItems
+        return pool.sortedBy { it.trackName.lowercase(Locale.ROOT) }
+    }
+
+    private fun isValidWavOrAudioFile(uri: Uri?): Boolean {
+        val path = uri?.path ?: return false
+        val f = File(path)
+        return f.exists() && f.length() > 44L
+    }
+
+    private fun materializeValidChunkUri(item: Rpf7SongItem, startBlock: Int, chunkBlocks: Int): Uri? {
+        val first = item.archive.materializeBlockChunkUri(item.trackName, startBlock, chunkBlocks)
+        if (isValidWavOrAudioFile(first)) return first
+        // Retry exact same startBlock if cache file was evicted or incomplete; never skip ahead.
+        val retry = item.archive.materializeBlockChunkUri(item.trackName, startBlock, chunkBlocks)
+        return if (isValidWavOrAudioFile(retry)) retry else null
+    }
+
+    private fun registerChunkMetadata(item: Rpf7SongItem, startBlock: Int, loopEpoch: Int, uri: Uri): String {
+        val chunkMediaId = buildChunkMediaId(item.trackName, loopEpoch, startBlock)
+        val sOff = item.archive.getChunkStartSample(item.trackName, startBlock)
+        chunkMetaByMediaId[chunkMediaId] = ChunkPlaybackMeta(item, startBlock, loopEpoch, sOff, uri)
+        chunkMediaIdByUri[uri] = chunkMediaId
+        return chunkMediaId
+    }
+
+    private fun clearChunkTracking(cancelPrefetch: Boolean = true) {
+        if (cancelPrefetch) {
+            activeChunkPrefetchJob?.cancel()
+            activeChunkPrefetchJob = null
+        }
+        queuedChunkKeys.clear()
+        for (meta in chunkMetaByMediaId.values) {
+            unpinAudioUri(meta.uri)
+        }
+        chunkMetaByMediaId.clear()
+        chunkMediaIdByUri.clear()
+    }
+
+    private fun unpinIfUnusedByPlayer(uri: Uri) {
+        val uriStr = uri.toString()
+        val exo = player.exoPlayer
+        val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
+        for (i in curIdx until exo.mediaItemCount) {
+            if (exo.getMediaItemAt(i).localConfiguration?.uri?.toString() == uriStr) {
+                return
+            }
+        }
+        unpinAudioUri(uri)
+    }
+
+    private fun resetChunkCursor() {
+        nextChunkItem = null
+        nextChunkStartBlock = 0
+        nextChunkTotalBlocks = 0
+        nextChunkLoopEpoch = 0
+        currentMultiChunksPlayedInRow = 0
+    }
+
+    private fun resolveNextChunkTarget(): NextChunkTarget? {
+        val item = nextChunkItem ?: currentSongItem ?: return null
+        val totalBlocks = nextChunkTotalBlocks.takeIf { it > 0 } ?: item.archive.getEntryBlockCount(item.trackName)
+        val isMix = isMixItem(item)
+        if (nextChunkStartBlock < totalBlocks) {
+            val chunkBlocks = if (isMix) MIX_CHUNK_BLOCKS else item.archive.getChunkBlocksFor(item.trackName)
+            return NextChunkTarget(item, nextChunkStartBlock, totalBlocks, nextChunkLoopEpoch, chunkBlocks)
+        }
+        if (isMix) {
+            val parts = getSortedContinuousMixParts()
+            val nextItem = if (parts.size > 1) {
+                val curIdx = parts.indexOfFirst { it.trackName.equals(item.trackName, ignoreCase = true) }
+                parts[if (curIdx >= 0) (curIdx + 1) % parts.size else 0]
+            } else {
+                item
+            }
+            val nextTotal = nextItem.archive.getEntryBlockCount(nextItem.trackName)
+            return NextChunkTarget(nextItem, 0, nextTotal, nextChunkLoopEpoch + 1, MIX_CHUNK_BLOCKS)
+        }
+        return null
+    }
+
     private fun resumeContinuousMix(elapsedMs: Long, expectedGen: Int) {
-        val item = continuousMixItem ?: return
+        var item = continuousMixItem ?: return
+        var absMs = savedMixAbsMs + elapsedMs
+        val parts = getSortedContinuousMixParts()
+        if (parts.size > 1) {
+            var guard = 0
+            while (guard < parts.size) {
+                val pSamples = item.archive.getEntryTotalSamples(item.trackName)
+                val pRate = item.archive.getEntrySampleRate(item.trackName).toLong().coerceAtLeast(1L)
+                val pDurMs = if (pSamples > 0L) (pSamples * 1000L) / pRate else 0L
+                if (pDurMs <= 0L || absMs < pDurMs) break
+                absMs -= pDurMs
+                val idx = parts.indexOfFirst { it.trackName.equals(item.trackName, ignoreCase = true) }
+                item = parts[if (idx >= 0) (idx + 1) % parts.size else 0]
+                guard++
+            }
+        }
+
         val totalSamples = item.archive.getEntryTotalSamples(item.trackName)
         val sRate = item.archive.getEntrySampleRate(item.trackName).toLong().coerceAtLeast(1L)
         val totalMixDurationMs = if (totalSamples > 0L) (totalSamples * 1000L) / sRate else 0L
 
-        val targetMixMs = if (totalMixDurationMs > 0L) {
-            (savedMixAbsMs + elapsedMs) % totalMixDurationMs
-        } else {
-            savedMixAbsMs + elapsedMs
-        }
+        val targetMixMs = if (totalMixDurationMs > 0L) absMs % totalMixDurationMs else absMs
         val targetSample = (targetMixMs * sRate) / 1000L
 
         val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
         val chunkBlocks = MIX_CHUNK_BLOCKS
 
         val rawBlock = item.archive.getBlockForSample(item.trackName, targetSample)
-        val targetStartBlock = ((rawBlock / chunkBlocks) * chunkBlocks).coerceIn(0, (totalBlocks - chunkBlocks).coerceAtLeast(0))
+        val maxAlignedBlock = ((totalBlocks - 1) / chunkBlocks).coerceAtLeast(0) * chunkBlocks
+        val targetStartBlock = ((rawBlock / chunkBlocks) * chunkBlocks).coerceIn(0, maxAlignedBlock)
 
-        if (!queuedChunkStartBlocks.add(targetStartBlock)) return
+        val chunkKey = buildChunkKey(item.trackName, 0, targetStartBlock)
+        if (!queuedChunkKeys.add(chunkKey)) return
 
         val chunkStartSample = item.archive.getChunkStartSample(item.trackName, targetStartBlock)
         val seekWithinChunkMs = ((targetSample - chunkStartSample).coerceAtLeast(0L) * 1000L) / sRate
 
-        val mainUri = item.archive.materializeBlockChunkUri(item.trackName, targetStartBlock, chunkBlocks) ?: return
+        val mainUri = materializeValidChunkUri(item, targetStartBlock, chunkBlocks) ?: return
         if (!_playing || playGeneration.get() != expectedGen) return
 
-        val chunkMediaId = buildChunkMediaId(item.trackName, targetStartBlock)
-        chunkStartSampleByMediaId[chunkMediaId] = chunkStartSample
-        chunkMediaIdByUri[mainUri] = chunkMediaId
-        chunkFileNameByMediaId[chunkMediaId] = mainUri.toString()
-
         pinAudioUri(mainUri)
+        registerChunkMetadata(item, targetStartBlock, 0, mainUri)
+        hasStartedContinuousMix = true
         currentSongItem = item
         lastSegment = RadioSegmentType.Song
         currentSegmentUris = listOf(mainUri)
-        currentMultiChunkTotalBlocks = totalBlocks
-        currentMultiChunkNextBlock = targetStartBlock + chunkBlocks
+        nextChunkItem = item
+        nextChunkTotalBlocks = totalBlocks
+        nextChunkLoopEpoch = 0
+        nextChunkStartBlock = targetStartBlock + chunkBlocks
         currentMultiChunksPlayedInRow = 1
         introItemCount = 0
 
@@ -763,8 +882,6 @@ data class Rpf7ClipRef(
         } else {
             stopMixPoller(clearMarkers = true)
         }
-
-        Rpf7Archive.pinFile(mainUri.toString())
 
         startPlayback(listOf(mainUri), 0, seekWithinChunkMs, expectedGen)
     }
@@ -794,6 +911,7 @@ data class Rpf7ClipRef(
                 val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
                 if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
                     if (!_playing || playGeneration.get() != expectedGen) return
+                    for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
                     startPlayback(currentSegmentUris, i, posMs + remainingMs, expectedGen)
                     return
                 } else {
@@ -816,33 +934,36 @@ data class Rpf7ClipRef(
     }
 
     private fun advanceMultiChunkOrPickNext(): Boolean {
-        val item = currentSongItem
-        if (lastSegment == RadioSegmentType.Song && item != null &&
-            currentMultiChunkNextBlock in 1 until currentMultiChunkTotalBlocks
-        ) {
-            val isContinuousMix = isContinuousMixStation() || Rpf7MetadataRepository.getTrackMeta(item.trackName).isContinuousMix
-            val maxChunksBeforeBreak = if (isContinuousMix) 6 else 100
-            val chunkBlocks = if (isContinuousMix) MIX_CHUNK_BLOCKS else item.archive.getChunkBlocksFor(item.trackName)
-            if (currentMultiChunksPlayedInRow < maxChunksBeforeBreak) {
-                val nextStart = currentMultiChunkNextBlock
-                if (queuedChunkStartBlocks.add(nextStart)) {
-                    val nextUri = item.archive.materializeBlockChunkUri(
-                        item.trackName,
-                        nextStart,
-                        chunkBlocks
-                    )
-                    if (nextUri != null) {
-                        val chunkMediaId = buildChunkMediaId(item.trackName, nextStart)
-                        val nextSample = item.archive.getChunkStartSample(item.trackName, nextStart)
-                        chunkStartSampleByMediaId[chunkMediaId] = nextSample
-                        chunkMediaIdByUri[nextUri] = chunkMediaId
-                        chunkFileNameByMediaId[chunkMediaId] = nextUri.toString()
-                        pinAudioUri(nextUri)
-                        currentMultiChunkNextBlock += chunkBlocks
-                        currentMultiChunksPlayedInRow += 1
-                        currentSegmentUris = listOf(nextUri)
-                        return true
+        if (lastSegment == RadioSegmentType.Song && currentSongItem != null) {
+            val target = resolveNextChunkTarget()
+            if (target != null) {
+                val chunkKey = buildChunkKey(target.item.trackName, target.loopEpoch, target.startBlock)
+                val nextUri = materializeValidChunkUri(target.item, target.startBlock, target.chunkBlocks)
+                if (nextUri != null && queuedChunkKeys.add(chunkKey)) {
+                    pinAudioUri(nextUri)
+                    registerChunkMetadata(target.item, target.startBlock, target.loopEpoch, nextUri)
+                    if (target.item != currentSongItem) {
+                        currentSongItem = target.item
+                        if (isMixItem(target.item)) {
+                            val markers = target.item.archive.readTrackMarkers(target.item.trackName)
+                            if (markers.isNotEmpty()) {
+                                activeMixMarkers = markers
+                                activeMixSampleRate = target.item.archive.getEntrySampleRate(target.item.trackName)
+                                lastDisplayedMixTrackId = -1
+                            } else {
+                                stopMixPoller(clearMarkers = true)
+                            }
+                        }
                     }
+                    activeMixChunkStartSample = chunkMetaByMediaId[chunkMediaIdByUri[nextUri]]?.startSample ?: 0L
+                    nextChunkItem = target.item
+                    nextChunkTotalBlocks = target.totalBlocks
+                    nextChunkLoopEpoch = target.loopEpoch
+                    nextChunkStartBlock = target.startBlock + target.chunkBlocks
+                    currentMultiChunksPlayedInRow += 1
+                    currentSegmentUris = listOf(nextUri)
+                    introItemCount = 0
+                    return true
                 }
             }
         }
@@ -855,6 +976,8 @@ data class Rpf7ClipRef(
         if (!_playing) return
         activeOverlayJob?.cancel()
         activeOverlayJob = null
+        activeChunkPrefetchJob?.cancel()
+        activeChunkPrefetchJob = null
         player.resetMusicDuckGain()
         activeDecodeJob?.cancel()
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
@@ -873,17 +996,12 @@ data class Rpf7ClipRef(
     }
 
     private fun pickNextSegment() {
-        currentMultiChunkNextBlock = 0
-        currentMultiChunkTotalBlocks = 0
-        currentMultiChunksPlayedInRow = 0
+        resetChunkCursor()
         hasPrefetchedNextSegment = false
-        activeChunkPrefetchJob?.cancel()
-        activeChunkPrefetchJob = null
-        queuedChunkStartBlocks.clear()
-        chunkFileNameByMediaId.values.forEach { Rpf7Archive.unpinFile(it) }
-        chunkFileNameByMediaId.clear()
-        chunkStartSampleByMediaId.clear()
-        chunkMediaIdByUri.clear()
+        clearChunkTracking(cancelPrefetch = true)
+        for (u in currentSegmentUris) {
+            unpinAudioUri(u)
+        }
 
         val isContinuousMix = isContinuousMixStation() || (currentSongItem != null && Rpf7MetadataRepository.getTrackMeta(currentSongItem!!.trackName).isContinuousMix)
         if (isContinuousMix && allSongItems.isNotEmpty()) {
@@ -908,20 +1026,18 @@ data class Rpf7ClipRef(
                 val totalBlocks = prefetched.songItem.archive.getEntryBlockCount(prefetched.songItem.trackName)
                 val chunkBlocks = prefetched.songItem.archive.getChunkBlocksFor(prefetched.songItem.trackName)
                 val chunkThreshold = prefetched.songItem.archive.getChunkThresholdFor(prefetched.songItem.trackName)
-                currentMultiChunkTotalBlocks = totalBlocks
-                currentMultiChunkNextBlock = if (totalBlocks > chunkThreshold) chunkBlocks else totalBlocks
+                nextChunkItem = prefetched.songItem
+                nextChunkTotalBlocks = totalBlocks
+                nextChunkLoopEpoch = 0
+                nextChunkStartBlock = if (totalBlocks > chunkThreshold) chunkBlocks else totalBlocks
                 currentMultiChunksPlayedInRow = 1
                 if (totalBlocks > chunkThreshold) {
-                    val sOff = prefetched.songItem.archive.getChunkStartSample(prefetched.songItem.trackName, 0)
-                    val chunkMediaId = buildChunkMediaId(prefetched.songItem.trackName, 0)
-                    chunkStartSampleByMediaId[chunkMediaId] = sOff
                     val lastUri = currentSegmentUris.lastOrNull()
                     if (lastUri != null) {
-                        chunkMediaIdByUri[lastUri] = chunkMediaId
-                        chunkFileNameByMediaId[chunkMediaId] = lastUri.toString()
-                        Rpf7Archive.pinFile(lastUri.toString())
+                        pinAudioUri(lastUri)
+                        registerChunkMetadata(prefetched.songItem, 0, 0, lastUri)
                     }
-                    queuedChunkStartBlocks.add(0)
+                    queuedChunkKeys.add(buildChunkKey(prefetched.songItem.trackName, 0, 0))
                 }
             }
             return
@@ -1017,19 +1133,16 @@ data class Rpf7ClipRef(
                 }
 
                 if (totalBlocks > chunkThreshold && mainUri != null) {
-                    val sOff = item.archive.getChunkStartSample(item.trackName, 0)
-                    val chunkMediaId = buildChunkMediaId(item.trackName, 0)
-                    chunkStartSampleByMediaId[chunkMediaId] = sOff
-                    chunkMediaIdByUri[mainUri] = chunkMediaId
-                    chunkFileNameByMediaId[chunkMediaId] = mainUri.toString()
-                    Rpf7Archive.pinFile(mainUri.toString())
-                    queuedChunkStartBlocks.add(0)
+                    registerChunkMetadata(item, 0, 0, mainUri)
+                    queuedChunkKeys.add(buildChunkKey(item.trackName, 0, 0))
                 }
                 currentSegmentUris = uris
                 currentSongItem = item
                 lastSegment = RadioSegmentType.Song
-                currentMultiChunkTotalBlocks = totalBlocks
-                currentMultiChunkNextBlock = if (totalBlocks > chunkThreshold) chunkBlocks else totalBlocks
+                nextChunkItem = item
+                nextChunkTotalBlocks = totalBlocks
+                nextChunkLoopEpoch = 0
+                nextChunkStartBlock = if (totalBlocks > chunkThreshold) chunkBlocks else totalBlocks
                 currentMultiChunksPlayedInRow = 1
                 pendingBreakClips.clear()
             }
@@ -1073,27 +1186,46 @@ data class Rpf7ClipRef(
     }
 
     private fun prepareContinuousMixSegment() {
-        val item = allSongItems[rng.nextInt(allSongItems.size)]
-        val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
+        val parts = getSortedContinuousMixParts()
+        if (parts.isEmpty()) return
+        val item: Rpf7SongItem
+        val startBlk: Int
         val chunkBlocks = MIX_CHUNK_BLOCKS
-        val chunkThreshold = item.archive.getChunkThresholdFor(item.trackName)
-        val startBlk = if (totalBlocks > chunkBlocks * 2) {
-            (rng.nextInt(totalBlocks / chunkBlocks) * chunkBlocks).coerceAtMost(totalBlocks - chunkBlocks)
+        if (!hasStartedContinuousMix) {
+            item = parts[rng.nextInt(parts.size)]
+            val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
+            val alignedBuckets = ((totalBlocks - 1) / chunkBlocks).coerceAtLeast(0)
+            startBlk = if (totalBlocks > chunkBlocks * 2 && alignedBuckets > 0) {
+                rng.nextInt(alignedBuckets + 1) * chunkBlocks
+            } else {
+                0
+            }
+            hasStartedContinuousMix = true
         } else {
-            0
+            val prev = currentSongItem
+            item = if (parts.size > 1 && prev != null) {
+                val idx = parts.indexOfFirst { it.trackName.equals(prev.trackName, ignoreCase = true) }
+                parts[if (idx >= 0) (idx + 1) % parts.size else 0]
+            } else {
+                prev ?: parts[0]
+            }
+            startBlk = 0
         }
-        if (!queuedChunkStartBlocks.add(startBlk)) return
-        val mainUri = item.archive.materializeBlockChunkUri(item.trackName, startBlk, chunkBlocks) ?: return
+
+        val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
+        val loopEpoch = 0
+        val chunkKey = buildChunkKey(item.trackName, loopEpoch, startBlk)
+        if (!queuedChunkKeys.add(chunkKey)) return
+        val mainUri = materializeValidChunkUri(item, startBlk, chunkBlocks) ?: return
         pinAudioUri(mainUri)
-        currentMultiChunkTotalBlocks = totalBlocks
-        currentMultiChunkNextBlock = startBlk + chunkBlocks
+        nextChunkItem = item
+        nextChunkTotalBlocks = totalBlocks
+        nextChunkLoopEpoch = loopEpoch
+        nextChunkStartBlock = startBlk + chunkBlocks
         currentMultiChunksPlayedInRow = 1
 
-        val chunkMediaId = buildChunkMediaId(item.trackName, startBlk)
+        registerChunkMetadata(item, startBlk, loopEpoch, mainUri)
         val sOff = item.archive.getChunkStartSample(item.trackName, startBlk)
-        chunkStartSampleByMediaId[chunkMediaId] = sOff
-        chunkMediaIdByUri[mainUri] = chunkMediaId
-        chunkFileNameByMediaId[chunkMediaId] = mainUri.toString()
 
         val markers = item.archive.readTrackMarkers(item.trackName)
         if (markers.isNotEmpty()) {
@@ -1106,8 +1238,6 @@ data class Rpf7ClipRef(
         }
 
         introItemCount = 0
-        Rpf7Archive.pinFile(mainUri.toString())
-
         currentSongItem = item
         lastSegment = RadioSegmentType.Song
         currentSegmentUris = listOf(mainUri)
@@ -1127,12 +1257,13 @@ data class Rpf7ClipRef(
             while (isActive && _playing && playGeneration.get() == expectedGen) {
                 delay(250L)
                 val pos = player.getCurrentTrackPosition().coerceAtLeast(0L)
-                val remainingMs = totalDurationMs - pos
+                val liveTotalDurMs = player.getDurationMs().takeIf { it > 0L } ?: totalDurationMs
+                val remainingMs = liveTotalDurMs - pos
 
                 val exo = player.exoPlayer
                 val curWinIdx = exo.currentMediaItemIndex
                 val isFinalWindow = curWinIdx >= exo.mediaItemCount - 1
-                val isFinalChunk = currentMultiChunkTotalBlocks <= 0 || currentMultiChunkNextBlock >= currentMultiChunkTotalBlocks
+                val isFinalChunk = nextChunkTotalBlocks <= 0 || (nextChunkStartBlock >= nextChunkTotalBlocks && !isMixItem(songItem))
 
                 val hasValidOutro = markers != null && markers.hasOutroWindow && markers.outroStartMs > (markers.introEndMs.coerceAtLeast(0L) + 15_000L)
 
@@ -1362,36 +1493,65 @@ data class Rpf7ClipRef(
     }
 
     private fun prefetchAndQueueNextChunk(expectedGen: Int = playGeneration.get()) {
-        val item = currentSongItem ?: return
-        val totalBlocks = currentMultiChunkTotalBlocks
-        val nextBlock = currentMultiChunkNextBlock
-        val isContinuousMix = isContinuousMixStation() || Rpf7MetadataRepository.getTrackMeta(item.trackName).isContinuousMix
-        val maxChunks = if (isContinuousMix) 6 else 100
-        val chunkBlocks = if (isContinuousMix) MIX_CHUNK_BLOCKS else item.archive.getChunkBlocksFor(item.trackName)
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { prefetchAndQueueNextChunk(expectedGen) }
+            return
+        }
+        if (!_playing || playGeneration.get() != expectedGen) return
+        if (lastSegment != RadioSegmentType.Song || currentSongItem == null) return
 
-        if (currentMultiChunksPlayedInRow >= maxChunks || nextBlock >= totalBlocks) return
-        if (!queuedChunkStartBlocks.add(nextBlock)) return
+        val exo = player.exoPlayer
+        val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
+        val aheadCount = (exo.mediaItemCount - 1) - curIdx
+        if (aheadCount >= 1) return
+        if (activeChunkPrefetchJob?.isActive == true) return
 
-        currentMultiChunkNextBlock = nextBlock + chunkBlocks
-        currentMultiChunksPlayedInRow += 1
+        val target = resolveNextChunkTarget() ?: return
+        val chunkKey = buildChunkKey(target.item.trackName, target.loopEpoch, target.startBlock)
+        if (queuedChunkKeys.contains(chunkKey)) return
 
-        activeChunkPrefetchJob?.cancel()
         activeChunkPrefetchJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
                 if (!_playing || playGeneration.get() != expectedGen) return@launch
-                val nextUri = item.archive.materializeBlockChunkUri(item.trackName, nextBlock, chunkBlocks) ?: return@launch
+                val nextUri = materializeValidChunkUri(target.item, target.startBlock, target.chunkBlocks) ?: return@launch
                 if (!_playing || playGeneration.get() != expectedGen) return@launch
-                val nextStartSample = item.archive.getChunkStartSample(item.trackName, nextBlock)
-                val chunkMediaId = buildChunkMediaId(item.trackName, nextBlock)
-                chunkStartSampleByMediaId[chunkMediaId] = nextStartSample
-                chunkMediaIdByUri[nextUri] = chunkMediaId
-                chunkFileNameByMediaId[chunkMediaId] = nextUri.toString()
-                Rpf7Archive.pinFile(nextUri.toString())
 
-                val mediaItem = MediaItem.Builder().setUri(nextUri).setMediaId(chunkMediaId).build()
+                // Pin BEFORE addMediaItem() so LRU eviction never deletes queued chunks
+                pinAudioUri(nextUri)
+
                 withContext(Dispatchers.Main.immediate) {
-                    if (_playing && playGeneration.get() == expectedGen) {
-                        player.exoPlayer.addMediaItem(mediaItem)
+                    if (!_playing || playGeneration.get() != expectedGen ||
+                        lastSegment != RadioSegmentType.Song || currentSongItem == null
+                    ) {
+                        unpinIfUnusedByPlayer(nextUri)
+                        return@withContext
+                    }
+                    if (!queuedChunkKeys.add(chunkKey)) {
+                        unpinIfUnusedByPlayer(nextUri)
+                        return@withContext
+                    }
+
+                    val chunkMediaId = registerChunkMetadata(target.item, target.startBlock, target.loopEpoch, nextUri)
+                    val mediaItem = MediaItem.Builder().setUri(nextUri).setMediaId(chunkMediaId).build()
+                    player.exoPlayer.addMediaItem(mediaItem)
+
+                    if (!isMixItem(target.item)) {
+                        currentSegmentUris = currentSegmentUris + nextUri
+                    }
+
+                    nextChunkItem = target.item
+                    nextChunkTotalBlocks = target.totalBlocks
+                    nextChunkLoopEpoch = target.loopEpoch
+                    nextChunkStartBlock = target.startBlock + target.chunkBlocks
+                    currentMultiChunksPlayedInRow += 1
+
+                    val remainingAhead = (player.exoPlayer.mediaItemCount - 1) - player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
+                    if (remainingAhead < 1) {
+                        mainHandler.post {
+                            if (_playing && playGeneration.get() == expectedGen) {
+                                prefetchAndQueueNextChunk(expectedGen)
+                            }
+                        }
                     }
                 }
             } catch (ce: CancellationException) {
@@ -1403,7 +1563,7 @@ data class Rpf7ClipRef(
     }
 
     private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
-        val totalDur = if (uris.isNotEmpty()) getFileDurationMs(uris.last()) else 0L
+        val totalDur = if (uris.isNotEmpty()) uris.sumOf { getFileDurationMs(it) } else 0L
         val preRoll = plannedPreRollCue
         plannedPreRollCue = null
         val overlayCue = plannedOverlayCue
@@ -1500,7 +1660,7 @@ data class Rpf7ClipRef(
                 override fun onPlaybackStateChanged(state: Int) {
                     if (state == Player.STATE_READY && activeMixMarkers.isNotEmpty()) {
                         val mediaId = player.exoPlayer.currentMediaItem?.mediaId
-                        if (mediaId != null && chunkStartSampleByMediaId.containsKey(mediaId)) {
+                        if (mediaId != null && chunkMetaByMediaId.containsKey(mediaId)) {
                             updateMixTrackMetadata()
                         }
                     }
@@ -1521,31 +1681,52 @@ data class Rpf7ClipRef(
                 }
 
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    val currentMediaId = mediaItem?.mediaId ?: player.exoPlayer.currentMediaItem?.mediaId
-                    if (currentMediaId != null && currentMediaId.startsWith("rpf7_chunk_")) {
-                        chunkStartSampleByMediaId[currentMediaId]?.let { sOff ->
-                            activeMixChunkStartSample = sOff
-                        }
-                        val curBlock = currentMediaId.substringAfterLast('_').toIntOrNull()
-                        if (curBlock != null) {
-                            val oldEntries = chunkFileNameByMediaId.entries.filter { (mId, _) ->
-                                val blk = mId.substringAfterLast('_').toIntOrNull()
-                                blk != null && blk < curBlock
+                    val exo = player.exoPlayer
+                    val currentMediaId = mediaItem?.mediaId ?: exo.currentMediaItem?.mediaId
+                    if (currentMediaId != null) {
+                        val meta = chunkMetaByMediaId[currentMediaId]
+                        if (meta != null) {
+                            if (meta.item != currentSongItem) {
+                                currentSongItem = meta.item
+                                if (isMixItem(meta.item)) {
+                                    val markers = meta.item.archive.readTrackMarkers(meta.item.trackName)
+                                    if (markers.isNotEmpty()) {
+                                        activeMixMarkers = markers
+                                        activeMixSampleRate = meta.item.archive.getEntrySampleRate(meta.item.trackName)
+                                        lastDisplayedMixTrackId = -1
+                                    } else {
+                                        stopMixPoller(clearMarkers = true)
+                                    }
+                                }
                             }
-                            for ((mId, uriStr) in oldEntries) {
-                                chunkFileNameByMediaId.remove(mId)
-                                chunkStartSampleByMediaId.remove(mId)
-                                Rpf7Archive.unpinFile(uriStr)
-                            }
+                            activeMixChunkStartSample = meta.startSample
                         }
                     }
-                    val curIdx = player.exoPlayer.currentMediaItemIndex
+
+                    // Unpin ONLY chunks that ExoPlayer has transitioned past and are no longer active/queued
+                    val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
+                    val activeMediaIds = HashSet<String>()
+                    val activeUriStrings = HashSet<String>()
+                    for (i in curIdx until exo.mediaItemCount) {
+                        val mi = exo.getMediaItemAt(i)
+                        if (mi.mediaId.isNotEmpty()) activeMediaIds.add(mi.mediaId)
+                        mi.localConfiguration?.uri?.toString()?.let { activeUriStrings.add(it) }
+                    }
+                    val pastEntries = chunkMetaByMediaId.entries.filter { (mId, _) -> mId !in activeMediaIds }
+                    for ((mId, meta) in pastEntries) {
+                        chunkMetaByMediaId.remove(mId)
+                        queuedChunkKeys.remove(buildChunkKey(meta.item.trackName, meta.loopEpoch, meta.startBlock))
+                        if (meta.uri.toString() !in activeUriStrings) {
+                            unpinAudioUri(meta.uri)
+                        }
+                    }
+
                     updateMetadataForWindowIndex(curIdx, expectedGen)
 
                     // Staged Break Decoding: while current clip plays, stage next queued break clip
                     stageNextPendingBreakClip(expectedGen)
 
-                    if (currentSongItem != null && currentMultiChunkTotalBlocks > 0 && isContinuousMixStation()) {
+                    if (lastSegment == RadioSegmentType.Song && currentSongItem != null && nextChunkTotalBlocks > 0) {
                         prefetchAndQueueNextChunk(expectedGen)
                     }
                 }
@@ -1578,7 +1759,7 @@ data class Rpf7ClipRef(
                 stopMixPoller(clearMarkers = false)
             }
 
-            if (currentMultiChunkTotalBlocks > 0 && currentMultiChunkNextBlock < currentMultiChunkTotalBlocks && isContinuousMixStation()) {
+            if (lastSegment == RadioSegmentType.Song && currentSongItem != null && nextChunkTotalBlocks > 0) {
                 prefetchAndQueueNextChunk(expectedGen)
             }
 
@@ -1688,7 +1869,7 @@ data class Rpf7ClipRef(
             while (isActive && _playing && playGeneration.get() == expectedGen && activeMixMarkers.isNotEmpty()) {
                 val exo = player.exoPlayer
                 val mediaId = exo.currentMediaItem?.mediaId
-                if (exo.playbackState == Player.STATE_READY && mediaId != null && chunkStartSampleByMediaId.containsKey(mediaId)) {
+                if (exo.playbackState == Player.STATE_READY && mediaId != null && chunkMetaByMediaId.containsKey(mediaId)) {
                     updateMixTrackMetadata()
                 }
                 delay(1000L)
@@ -1707,11 +1888,21 @@ data class Rpf7ClipRef(
     }
 
     private fun updateMixTrackMetadata() {
-        if (!_playing || activeMixMarkers.isEmpty()) return
+        if (!_playing) return
         val exo = player.exoPlayer
         if (exo.playbackState != Player.STATE_READY) return
         val mediaId = exo.currentMediaItem?.mediaId ?: return
-        val baseSample = chunkStartSampleByMediaId[mediaId] ?: return
+        val chunkMeta = chunkMetaByMediaId[mediaId] ?: return
+        if (chunkMeta.item != currentSongItem || activeMixMarkers.isEmpty()) {
+            val markers = chunkMeta.item.archive.readTrackMarkers(chunkMeta.item.trackName)
+            if (markers.isNotEmpty()) {
+                currentSongItem = chunkMeta.item
+                activeMixMarkers = markers
+                activeMixSampleRate = chunkMeta.item.archive.getEntrySampleRate(chunkMeta.item.trackName)
+            }
+        }
+        if (activeMixMarkers.isEmpty()) return
+        val baseSample = chunkMeta.startSample
         if (!isMetadataEnabled()) {
             setStationOnlyMetadata()
             return

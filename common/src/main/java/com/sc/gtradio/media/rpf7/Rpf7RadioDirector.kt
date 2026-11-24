@@ -316,4 +316,22 @@ class Rpf7RadioDirector<TSong, TClip>(
             "Rpf7[$stationName]: phase=$currentPhase, sweepRemaining=$songsRemainingInSweep/$currentSweepLength, action=$nextPlannedAction"
         }
     }
+
+    fun resetAdverts(items: List<TClip>, trackKeyExtractor: (TClip) -> String) {
+        val eligible = items.filter { !isTvAdvertStem(trackKeyExtractor(it)) }
+        advertQueue.reset(eligible)
+    }
+
+    companion object {
+        /**
+         * Returns true for low-bitrate in-game TV commercials (e.g. mono_tv_ad_*)
+         * that must be excluded from FM radio commercial breaks.
+         */
+        fun isTvAdvertStem(nameOrStem: String): Boolean {
+            val stem = nameOrStem.lowercase(Locale.ROOT).removeSuffix(".awc")
+            return stem.startsWith("mono_tv_ad_") ||
+                stem.contains("_tv_ad_") ||
+                stem.startsWith("tv_ad_")
+        }
+    }
 }
