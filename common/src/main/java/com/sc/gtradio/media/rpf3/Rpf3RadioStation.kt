@@ -84,41 +84,50 @@ private val RPF3_INTRO_ALIASES = mapOf(
             a.contains("wktt") || a.contains("plr") || a.contains("lazlow")
     }
 
+    private val isContinuousMix: Boolean get() = isContinuousMixStation()
+    private val isAmbient: Boolean get() = isAmbientJourneyStation()
+    private val isNoCommercial: Boolean get() = isTalkRadio || isContinuousMix || isAmbient
+
+    private val maxAds: Int get() {
+        val isVlad = isVladivostokStation()
+        val isSanJ = isSanJuanStation()
+        return if (isVlad || isSanJ) 1 else 2
+    }
+
     private val director by lazy {
-        val isContinuous = isContinuousMixStation()
-        val isAmbient = isAmbientJourneyStation()
-        val suppressExtras = isContinuous || isAmbient || isTalkRadio
-        Gen3RadioDirector<Rpf3SongItem, Rpf3ClipRef>(
+        Rpf3RadioDirector<Rpf3SongItem, Rpf3ClipRef>(
             context = context,
-            era = SeriesEra.GEN3_RPF3,
             stationName = stationTitle,
             isTalkRadio = isTalkRadio,
+            isContinuousMix = isContinuousMix,
+            isNoCommercialStation = isNoCommercial,
+            maxAdsPerBreak = maxAds,
             rng = rng
         ).also { d ->
-            d.adsEnabled = if (suppressExtras) false else this.adsEnabled
-            d.weatherChatterEnabled = if (suppressExtras) false else this.weatherChatterEnabled
-            d.newsReportsEnabled = if (suppressExtras) false else this.newsReportsEnabled
+            d.adsEnabled = if (isNoCommercial) false else this.adsEnabled
+            d.weatherChatterEnabled = if (isNoCommercial) false else this.weatherChatterEnabled
+            d.newsReportsEnabled = if (isNoCommercial) false else this.newsReportsEnabled
         }
     }
 
     override var adsEnabled: Boolean = adsEnabled
         set(value) {
             field = value
-            if (!isContinuousMixStation() && !isAmbientJourneyStation() && !isTalkRadio) {
+            if (!isNoCommercial) {
                 director.adsEnabled = value
             }
         }
     override var weatherChatterEnabled: Boolean = weatherChatterEnabled
         set(value) {
             field = value
-            if (!isContinuousMixStation() && !isAmbientJourneyStation() && !isTalkRadio) {
+            if (!isNoCommercial) {
                 director.weatherChatterEnabled = value
             }
         }
     override var newsReportsEnabled: Boolean = newsReportsEnabled
         set(value) {
             field = value
-            if (!isContinuousMixStation() && !isAmbientJourneyStation() && !isTalkRadio) {
+            if (!isNoCommercial) {
                 director.newsReportsEnabled = value
             }
         }
@@ -161,10 +170,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private data class PrefetchedBroadcastItem(
         val uris: List<Uri>,
         val pinnedFiles: List<String>,
-        val event: NextBroadcastEvent<Rpf3SongItem, Rpf3ClipRef>,
+        val event: Gen3BroadcastEvent<Rpf3SongItem, Rpf3ClipRef>,
         val songItem: Rpf3SongItem?,
         val segmentType: RadioSegmentType,
-        val pendingBreakClips: List<DirectorBreakClip<Rpf3ClipRef>>? = null,
+        val pendingBreakClips: List<StandaloneBreakClip<Rpf3ClipRef>>? = null,
         val plannedOverlayCue: PlannedOverlayCue? = null,
         val plannedPreRollCue: PlannedPreRollCue? = null
     )
@@ -177,7 +186,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private var isPrefetching = false
     private var hasPrefetchedNextSegment = false
     private val activePinnedUris = java.util.Collections.synchronizedSet(HashSet<String>())
-    private val pendingBreakClips = ArrayList<DirectorBreakClip<Rpf3ClipRef>>()
+    private val pendingBreakClips = ArrayList<StandaloneBreakClip<Rpf3ClipRef>>()
+    private var activeBreakStagingJob: Job? = null
+    @Volatile
+    private var isOutroOverlaySpeaking: Boolean = false
 
     private fun pinAudioUri(uri: Uri) {
         val uriStr = uri.toString()
@@ -653,6 +665,9 @@ private val RPF3_INTRO_ALIASES = mapOf(
         prefetchedItem = null
         unpinAllActive()
         pendingBreakClips.clear()
+        activeBreakStagingJob?.cancel()
+        activeBreakStagingJob = null
+        isOutroOverlaySpeaking = false
         if (!isStationActive) return
         isStationActive = false
         if (_playing) {
@@ -703,7 +718,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
 
-        val canResumeTrack = director.currentPhase != DirectorPhase.BREAK_BLOCK && lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)
+        val canResumeTrack = director.currentPhase != Gen3DirectorPhase.BREAK_BLOCK && lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)
         if (!canResumeTrack) {
             setStationOnlyMetadata()
         }
@@ -877,15 +892,15 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
         setStationOnlyMetadata()
         when (event) {
-            is NextBroadcastEvent.SongSweepItem -> {
+            is Gen3BroadcastEvent.SongEvent -> {
                 val item = event.song
                 val uris = ArrayList<Uri>()
                 val markers = item.archive.readDjMarkers(item.trackName)
 
                 var djIntroUri: Uri? = null
                 var djDurMs = 0L
-                if (event.djIntro != null) {
-                    val u = materializeClip(event.djIntro.trackKey)
+                if (event.songIntroOverlay != null) {
+                    val u = materializeClip(event.songIntroOverlay.trackKey)
                     if (u != null) {
                         pinAudioUri(u)
                         djIntroUri = u
@@ -943,30 +958,26 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 currentMultiChunksPlayedInRow = 1
                 pendingBreakClips.clear()
             }
-            is NextBroadcastEvent.BreakBlockItem -> {
-                val clips = ArrayList(event.clips)
-                val upfrontClips = ArrayList<DirectorBreakClip<Rpf3ClipRef>>()
-                if (clips.isNotEmpty() && clips[0].segmentType in listOf(RadioSegmentType.Announcer, RadioSegmentType.DJChatter)) {
-                    upfrontClips.add(clips.removeAt(0))
-                }
-                if (clips.isNotEmpty()) {
-                    upfrontClips.add(clips.removeAt(0))
-                }
+            is Gen3BroadcastEvent.BreakBlockEvent -> {
                 val uris = ArrayList<Uri>()
-                for (c in upfrontClips) {
-                    val u = c.clip.archive.materializeAudioUri(c.clip.trackKey)
+                val clips = ArrayList(event.standaloneClips)
+                if (clips.isNotEmpty()) {
+                    val first = clips.removeAt(0)
+                    val u = first.clip.archive.materializeAudioUri(first.clip.trackKey)
                     if (u != null) {
                         uris.add(u)
                         pinAudioUri(u)
                     }
+                    lastSegment = first.segmentType
+                } else {
+                    lastSegment = RadioSegmentType.Commercial
                 }
                 currentSegmentUris = uris
                 currentSongItem = null
-                lastSegment = upfrontClips.firstOrNull()?.segmentType ?: RadioSegmentType.Commercial
                 pendingBreakClips.clear()
                 pendingBreakClips.addAll(clips)
             }
-            is NextBroadcastEvent.MidSweepInterludeItem -> {
+            is Gen3BroadcastEvent.InterludeEvent -> {
                 val ref = event.clip
                 val u = ref.archive.materializeAudioUri(ref.trackKey)
                 if (u != null) {
@@ -1047,51 +1058,59 @@ private val RPF3_INTRO_ALIASES = mapOf(
                     }
                 }
 
-                // 2. Outro overlap (strictly only on the final chunk of the song! Music ducks 0.50f, restores when DJ finishes; song plays naturally to completion)
+                // 2. Outro overlap (strictly only on the final chunk of the song! Music ducks 0.60f, restores when DJ finishes; song plays naturally to completion)
                 if (isFinalWindow && isFinalChunk && hasValidOutro && markers != null) {
-                    // 2a. Voice overlay at outroStartMs: launch DJ voice overlay ducked at 0.50f while song continues playing
                     if (!outroOverlapHandled && pos >= markers.outroStartMs) {
                         val pItem = prefetchedItem
-                        if (pItem != null && pItem.uris.isNotEmpty()) {
-                            val isVoiceLeadIn = pItem.segmentType in listOf(
-                                RadioSegmentType.Announcer, RadioSegmentType.DJChatter,
-                                RadioSegmentType.NewsReport, RadioSegmentType.WeatherReport
-                            ) || pItem.event is NextBroadcastEvent.MidSweepInterludeItem ||
-                               (pItem.event is NextBroadcastEvent.BreakBlockItem && pItem.uris.isNotEmpty())
-
-                            if (isVoiceLeadIn) {
-                                outroOverlapHandled = true
-                                val voiceUri = pItem.uris.first()
-                                GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                                    "${songItem?.trackName}: outro overlap at ${pos}ms -> voice clip '$voiceUri' (${pItem.segmentType})"
-                                }
-                                if (pItem.uris.size > 1) {
-                                    prefetchedItem = pItem.copy(uris = pItem.uris.drop(1))
-                                } else {
-                                    prefetchedItem = null
-                                }
-                                withContext(Dispatchers.Main.immediate) {
-                                    player.djVoiceOverlayPlayer?.playOverlay(voiceUri, expectedGen.toLong(), player.isMutedForTuningStatic)
-                                    player.setMusicDuckGain(0.50f, 300L, stationScope)
-                                }
-
-                                val djDur = readAudioDurationMs(context, voiceUri).coerceAtLeast(1000L)
-                                val startWait = System.currentTimeMillis()
-
-                                stationScope.launch {
-                                    while (isActive && _playing && playGeneration.get() == expectedGen) {
-                                        val elapsed = System.currentTimeMillis() - startWait
-                                        val djFinished = elapsed >= djDur || player.djVoiceOverlayPlayer?.isPlaying == false
-
-                                        if (djFinished) {
-                                            // DJ clip finished, restore duck gain and let song finish naturally to STATE_ENDED
-                                            withContext(Dispatchers.Main.immediate) {
-                                                player.setMusicDuckGain(1.0f, 500L, stationScope)
+                        if (pItem != null) {
+                            when (val ev = pItem.event) {
+                                is Gen3BroadcastEvent.BreakBlockEvent -> {
+                                    val leadIn = ev.outroDryLeadIn
+                                    if (leadIn != null) {
+                                        outroOverlapHandled = true
+                                        val voiceUri = leadIn.archive.materializeAudioUri(leadIn.trackKey)
+                                        if (voiceUri != null) {
+                                            pinAudioUri(voiceUri)
+                                            isOutroOverlaySpeaking = true
+                                            GTRadioLogger.logVerbose("DJ-OVERLAY") {
+                                                "${songItem?.trackName}: outro overlap dry lead-in at ${pos}ms -> '$voiceUri' (${ev.outroLeadInRole})"
                                             }
-                                            break
+                                            withContext(Dispatchers.Main.immediate) {
+                                                player.djVoiceOverlayPlayer?.playOverlay(voiceUri, expectedGen.toLong(), player.isMutedForTuningStatic) {
+                                                    isOutroOverlaySpeaking = false
+                                                    unpinAudioUri(voiceUri)
+                                                    player.setMusicDuckGain(1.0f, 500L, stationScope)
+                                                }
+                                                player.setMusicDuckGain(0.60f, 300L, stationScope)
+                                            }
                                         }
-                                        delay(100L)
                                     }
+                                }
+                                is Gen3BroadcastEvent.InterludeEvent -> {
+                                    if (ev.isDryOverlayEligible) {
+                                        val voiceUri = ev.clip.archive.materializeAudioUri(ev.clip.trackKey)
+                                        val djDur = if (voiceUri != null) readAudioDurationMs(context, voiceUri) else 0L
+                                        if (voiceUri != null && djDur in 1..12_000L) {
+                                            outroOverlapHandled = true
+                                            pinAudioUri(voiceUri)
+                                            prefetchedItem = null // Consumed as overlay, don't replay in System 2
+                                            isOutroOverlaySpeaking = true
+                                            GTRadioLogger.logVerbose("DJ-OVERLAY") {
+                                                "${songItem?.trackName}: outro overlap chatter at ${pos}ms -> '$voiceUri' (${ev.role})"
+                                            }
+                                            withContext(Dispatchers.Main.immediate) {
+                                                player.djVoiceOverlayPlayer?.playOverlay(voiceUri, expectedGen.toLong(), player.isMutedForTuningStatic) {
+                                                    isOutroOverlaySpeaking = false
+                                                    unpinAudioUri(voiceUri)
+                                                    player.setMusicDuckGain(1.0f, 500L, stationScope)
+                                                }
+                                                player.setMusicDuckGain(0.60f, 300L, stationScope)
+                                            }
+                                        }
+                                    }
+                                }
+                                is Gen3BroadcastEvent.SongEvent -> {
+                                    // Songs never overlay preceding songs at outro
                                 }
                             }
                         }
@@ -1110,7 +1129,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
             } else null
         }
         when (event) {
-            is NextBroadcastEvent.SongSweepItem -> {
+            is Gen3BroadcastEvent.SongEvent -> {
                 val item = event.song
                 val uris = ArrayList<Uri>()
                 val pinned = ArrayList<String>()
@@ -1118,8 +1137,8 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
                 var djIntroUri: Uri? = null
                 var djDurMs = 0L
-                if (event.djIntro != null) {
-                    val u = materializeClip(event.djIntro.trackKey)
+                if (event.songIntroOverlay != null) {
+                    val u = materializeClip(event.songIntroOverlay.trackKey)
                     if (u != null) {
                         val p = u.toString()
                         pinned.add(p)
@@ -1176,25 +1195,19 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         plannedPreRollCue = pPreRollCue
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
-                        "Rpf3[$stationTitle]: Look-ahead prefetched next song '${item.trackName}' (intro=${event.djIntro != null})"
+                        "Rpf3[$stationTitle]: Look-ahead prefetched next song '${item.trackName}' (intro=${event.songIntroOverlay != null})"
                     }
                 } else {
                     pinned.forEach { Rpf3Archive.unpinFile(it) }
                 }
             }
-            is NextBroadcastEvent.BreakBlockItem -> {
-                val clips = ArrayList(event.clips)
-                val upfrontClips = ArrayList<DirectorBreakClip<Rpf3ClipRef>>()
-                if (clips.isNotEmpty() && clips[0].segmentType in listOf(RadioSegmentType.Announcer, RadioSegmentType.DJChatter)) {
-                    upfrontClips.add(clips.removeAt(0))
-                }
-                if (clips.isNotEmpty()) {
-                    upfrontClips.add(clips.removeAt(0))
-                }
+            is Gen3BroadcastEvent.BreakBlockEvent -> {
+                val clips = ArrayList(event.standaloneClips)
                 val uris = ArrayList<Uri>()
                 val pinned = ArrayList<String>()
-                for (c in upfrontClips) {
-                    val u = c.clip.archive.materializeAudioUri(c.clip.trackKey)
+                if (clips.isNotEmpty()) {
+                    val first = clips.removeAt(0)
+                    val u = first.clip.archive.materializeAudioUri(first.clip.trackKey)
                     if (u != null) {
                         uris.add(u)
                         val p = u.toString()
@@ -1208,17 +1221,17 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         pinnedFiles = pinned,
                         event = event,
                         songItem = null,
-                        segmentType = upfrontClips.first().segmentType,
+                        segmentType = event.standaloneClips.first().segmentType,
                         pendingBreakClips = clips
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
-                        "Rpf3[$stationTitle]: Look-ahead prefetched break upfront (${upfrontClips.size} clips, ${clips.size} queued)"
+                        "Rpf3[$stationTitle]: Look-ahead prefetched break upfront (${uris.size} clips, ${clips.size} queued, dryLeadIn=${event.outroDryLeadIn != null})"
                     }
                 } else {
                     pinned.forEach { Rpf3Archive.unpinFile(it) }
                 }
             }
-            is NextBroadcastEvent.MidSweepInterludeItem -> {
+            is Gen3BroadcastEvent.InterludeEvent -> {
                 val ref = event.clip
                 val u = ref.archive.materializeAudioUri(ref.trackKey)
                 if (u != null && _playing && playGeneration.get() == expectedGen) {
@@ -1232,7 +1245,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         segmentType = event.segmentType
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
-                        "Rpf3[$stationTitle]: Look-ahead prefetched interlude '${ref.trackKey}' (${event.segmentType})"
+                        "Rpf3[$stationTitle]: Look-ahead prefetched interlude '${ref.trackKey}' (${event.role}, dryEligible=${event.isDryOverlayEligible})"
                     }
                 }
             }
@@ -1263,7 +1276,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 }
                 if (!_playing || playGeneration.get() != expectedGen) return@launch
                 withContext(Dispatchers.Main.immediate) {
-                    player.setMusicDuckGain(0.50f, 0L, stationScope)
+                    player.setMusicDuckGain(0.60f, 0L, stationScope)
                     executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen, totalDur)
                 }
             }
@@ -1280,7 +1293,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         if (!overlayFired && pos >= overlayCue.djStartMs) {
                             overlayFired = true
                             withContext(Dispatchers.Main.immediate) {
-                                player.setMusicDuckGain(0.50f, 300L, stationScope)
+                                player.setMusicDuckGain(0.60f, 300L, stationScope)
                                 player.djVoiceOverlayPlayer?.playOverlay(overlayCue.djUri, expectedGen.toLong(), player.isMutedForTuningStatic) {
                                     player.setMusicDuckGain(1.0f, 400L, stationScope)
                                     unpinAudioUri(overlayCue.djUri)
@@ -1330,10 +1343,14 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         alreadyHandled = true
                         player.exoPlayer.removeListener(this)
                         if (_playing && playGeneration.get() == expectedGen) {
-                            if (pendingBreakClips.isEmpty() && director.currentPhase == DirectorPhase.BREAK_BLOCK) {
-                                director.onBreakCompleted()
+                            if (pendingBreakClips.isNotEmpty() || activeBreakStagingJob?.isActive == true) {
+                                stageAndPlayRemainingBreakClip(expectedGen)
+                            } else {
+                                if (director.currentPhase == Gen3DirectorPhase.BREAK_BLOCK) {
+                                    director.onBreakCompleted()
+                                }
+                                onSongOrSegmentEnded(expectedGen)
                             }
-                            playNext()
                         }
                     }
                 }
@@ -1342,29 +1359,8 @@ private val RPF3_INTRO_ALIASES = mapOf(
                     val curIdx = player.exoPlayer.currentMediaItemIndex
                     updateMetadataForWindowIndex(curIdx, expectedGen)
 
-                    // Staged Break Decoding: while Clip #1 plays, decode Clip #2; while Clip #2 plays, decode remaining
-                    if (pendingBreakClips.isNotEmpty()) {
-                        val nextClip = pendingBreakClips.removeAt(0)
-                        stationScope.launch(StationDispatchers.ioDispatcher) {
-                            try {
-                                if (!_playing || playGeneration.get() != expectedGen) return@launch
-                                val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey) ?: return@launch
-                                pinAudioUri(uri)
-                                withContext(Dispatchers.Main.immediate) {
-                                    if (_playing && playGeneration.get() == expectedGen) {
-                                        player.exoPlayer.addMediaItem(MediaItem.fromUri(uri))
-                                        GTRadioLogger.logVerbose("DIRECTOR") {
-                                            "Rpf3[$stationTitle]: Staged queued break clip '${nextClip.clip.trackKey}' (${nextClip.label})"
-                                        }
-                                    }
-                                }
-                            } catch (ce: CancellationException) {
-                                throw ce
-                            } catch (e: Throwable) {
-                                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: staged break clip decode error", e)
-                            }
-                        }
-                    }
+                    // Staged Break Decoding: while current clip plays, stage next queued break clip
+                    stageNextPendingBreakClip(expectedGen)
                 }
 
                 override fun onPlayerError(error: PlaybackException) {
@@ -1385,6 +1381,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
             player.prepare()
             player.playInternal()
 
+            if (pendingBreakClips.isNotEmpty()) {
+                stageNextPendingBreakClip(expectedGen)
+            }
+
             if (activeMixMarkers.isNotEmpty()) {
                 startMixPoller(expectedGen)
             } else {
@@ -1394,6 +1394,94 @@ private val RPF3_INTRO_ALIASES = mapOf(
             // Start look-ahead prefetch monitor for discrete songs
             if (!isContinuousMixStation() && currentSongItem != null) {
                 startLookAheadMonitor(expectedGen, totalDur)
+            }
+        }
+    }
+
+    private fun onSongOrSegmentEnded(expectedGen: Int) {
+        if (!_playing || playGeneration.get() != expectedGen) return
+        if (isOutroOverlaySpeaking) {
+            stationScope.launch {
+                var elapsed = 0L
+                while (isActive && _playing && isOutroOverlaySpeaking && elapsed < 6000L) {
+                    delay(50L)
+                    elapsed += 50L
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (_playing && playGeneration.get() == expectedGen) {
+                        player.resetMusicDuckGain()
+                        playNext()
+                    }
+                }
+            }
+        } else {
+            player.resetMusicDuckGain()
+            playNext()
+        }
+    }
+
+    private fun stageNextPendingBreakClip(expectedGen: Int = playGeneration.get()) {
+        if (pendingBreakClips.isEmpty() || !_playing || playGeneration.get() != expectedGen) return
+        val nextClip = pendingBreakClips.removeAt(0)
+        activeBreakStagingJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            try {
+                if (!_playing || playGeneration.get() != expectedGen) return@launch
+                val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey) ?: return@launch
+                pinAudioUri(uri)
+                withContext(Dispatchers.Main.immediate) {
+                    if (_playing && playGeneration.get() == expectedGen) {
+                        player.exoPlayer.addMediaItem(MediaItem.fromUri(uri))
+                        GTRadioLogger.logVerbose("DIRECTOR") {
+                            "Rpf3[$stationTitle]: Staged queued break clip '${nextClip.clip.trackKey}' (${nextClip.role})"
+                        }
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Throwable) {
+                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: staged break clip decode error", e)
+            }
+        }
+    }
+
+    private fun stageAndPlayRemainingBreakClip(expectedGen: Int) {
+        stationScope.launch(StationDispatchers.ioDispatcher) {
+            try {
+                activeBreakStagingJob?.join()
+                if (!_playing || playGeneration.get() != expectedGen) return@launch
+                if (pendingBreakClips.isEmpty()) {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (_playing && playGeneration.get() == expectedGen) {
+                            if (director.currentPhase == Gen3DirectorPhase.BREAK_BLOCK) {
+                                director.onBreakCompleted()
+                            }
+                            playNext()
+                        }
+                    }
+                    return@launch
+                }
+                val nextClip = pendingBreakClips.removeAt(0)
+                val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey)
+                if (uri != null) {
+                    pinAudioUri(uri)
+                    withContext(Dispatchers.Main.immediate) {
+                        if (_playing && playGeneration.get() == expectedGen) {
+                            currentSegmentUris = listOf(uri)
+                            lastSegment = nextClip.segmentType
+                            executeStartPlayback(listOf(uri), 0, 0L, expectedGen, getFileDurationMs(uri))
+                        }
+                    }
+                } else {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (_playing && playGeneration.get() == expectedGen) {
+                            stageAndPlayRemainingBreakClip(expectedGen)
+                        }
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Throwable) {
+                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: stageAndPlayRemainingBreakClip error", e)
             }
         }
     }
