@@ -995,7 +995,7 @@ class Rpf7Archive(
                 val warmup = prevWarmupByChannel ?: if (blockIdx > 0) {
                     extractCodec7WarmupFromBlock(ch, entry, baseDataOffset, dataEndPos, blkSize, chCount, blockIdx - 1, keys)
                 } else {
-                    Array(chCount) { null }
+                    arrayOfNulls<ByteArray?>(chCount)
                 }
                 return decodeCodec7BlockBytes(
                     blockBytes = blockBytes,
