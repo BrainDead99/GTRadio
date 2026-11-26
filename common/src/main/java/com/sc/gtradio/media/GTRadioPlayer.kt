@@ -256,10 +256,15 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     var musicDuckGain: Float = 1.0f
         private set
     private var duckRampJob: Job? = null
+    private var switchFadeGain: Float = 1.0f
+    private var switchFadeJob: Job? = null
+
+    fun getSwitchFadeGain(): Float = switchFadeGain
 
     private fun applyEffectiveVolume() {
-        val effectiveVolume = if (isMutedForTuningStatic) 0f else musicDuckGain.coerceIn(0f, 1f)
-        exoPlayer.volume = effectiveVolume
+        val effective = if (isMutedForTuningStatic) 0f else (musicDuckGain * switchFadeGain).coerceIn(0f, 1f)
+        exoPlayer.volume = effective
+        djVoiceOverlayPlayer?.setFadeGain(switchFadeGain)
     }
 
     fun setStreamMuted(muted: Boolean) {
@@ -298,8 +303,54 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         applyEffectiveVolume()
     }
 
-    fun resetForStationSwitch() {
+    suspend fun fadeSwitchGain(targetGain: Float, durationMs: Long) {
+        switchFadeJob?.cancel()
+        val target = targetGain.coerceIn(0f, 1f)
+        withContext(Dispatchers.Main.immediate) {
+            if (durationMs <= 0L || switchFadeGain == target) {
+                switchFadeJob = null
+                switchFadeGain = target
+                applyEffectiveVolume()
+                return@withContext
+            }
+            val startGain = switchFadeGain
+            val steps = (durationMs / 16L).coerceAtLeast(1L).toInt()
+            val stepDelay = (durationMs / steps).coerceAtLeast(1L)
+            val delta = (target - startGain) / steps
+            val fadeJob = launch {
+                for (step in 1..steps) {
+                    delay(stepDelay)
+                    switchFadeGain = (startGain + delta * step).coerceIn(0f, 1f)
+                    applyEffectiveVolume()
+                }
+                switchFadeGain = target
+                applyEffectiveVolume()
+            }
+            switchFadeJob = fadeJob
+            try {
+                fadeJob.join()
+            } finally {
+                if (switchFadeJob === fadeJob) {
+                    switchFadeJob = null
+                }
+            }
+        }
+    }
+
+    fun setSwitchFadeGainImmediate(gain: Float) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { setSwitchFadeGainImmediate(gain) }
+            return
+        }
+        switchFadeJob?.cancel()
+        switchFadeJob = null
+        switchFadeGain = gain.coerceIn(0f, 1f)
+        applyEffectiveVolume()
+    }
+
+    fun resetForStationSwitch(keepFadeMuted: Boolean = false) {
         resetMusicDuckGain()
+        setSwitchFadeGainImmediate(if (keepFadeMuted) 0f else 1.0f)
         djVoiceOverlayPlayer?.stopOverlay()
         stopCleanQueue()
         stopInternal()

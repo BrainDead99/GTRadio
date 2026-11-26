@@ -29,6 +29,7 @@ class DjVoiceOverlayPlayer(private val context: Context) {
     private var activeCallback: (() -> Unit)? = null
     private var activeListener: Player.Listener? = null
     private var isMuted: Boolean = false
+    private var fadeGain: Float = 1.0f
     private var activeUri: Uri? = null
 
     val isPlaying: Boolean
@@ -78,7 +79,7 @@ class DjVoiceOverlayPlayer(private val context: Context) {
         this.isMuted = isMuted
 
         val player = getOrCreatePlayer()
-        val effectiveVolume = if (this.isMuted) 0f else 1.0f
+        val effectiveVolume = if (this.isMuted) 0f else fadeGain.coerceIn(0f, 1f)
         player.volume = effectiveVolume
 
         var callbackFired = false
@@ -135,7 +136,20 @@ class DjVoiceOverlayPlayer(private val context: Context) {
             return
         }
         isMuted = muted
-        exoPlayer?.volume = if (muted) 0f else 1.0f
+        exoPlayer?.volume = if (muted) 0f else fadeGain.coerceIn(0f, 1f)
+    }
+
+    /**
+     * Applies the smooth station-switch fade multiplier without interfering with mute state.
+     */
+    fun setFadeGain(gain: Float) {
+        val clamped = gain.coerceIn(0f, 1f)
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { setFadeGain(clamped) }
+            return
+        }
+        fadeGain = clamped
+        exoPlayer?.volume = if (isMuted) 0f else fadeGain
     }
 
     /**

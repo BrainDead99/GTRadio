@@ -141,10 +141,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private val allSongItems = ArrayList<Rpf3SongItem>()
     private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activeDecodeJob: Job? = null
+    private var seamlessPrepareJob: Job? = null
     private var activeCleanJob: Job? = null
     private var activePollerJob: Job? = null
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val playGeneration = java.util.concurrent.atomic.AtomicInteger(0)
+
+    override val supportsSeamlessPrepare: Boolean get() = true
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -218,30 +221,53 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private var plannedPreRollCue: PlannedPreRollCue? = null
     private var isPrefetching = false
     private var hasPrefetchedNextSegment = false
-    private val activePinnedUris: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
+    private val activePinnedCounts = ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicInteger>()
     private val pendingBreakClips = ArrayList<StandaloneBreakClip<Rpf3ClipRef>>()
     private var activeBreakStagingJob: Job? = null
     @Volatile
     private var isOutroOverlaySpeaking: Boolean = false
+    @Volatile
+    private var seamlessPrepareActive: Boolean = false
+    private var seamlessPreparePrevHasStartedMix: Boolean? = null
+    private var seamlessPreparePrevSavedMixAbsMs: Long? = null
+
+    private data class PreparedPlayback(
+        val uris: List<Uri>,
+        val startWindowIndex: Int,
+        val startPositionMs: Long,
+        val totalDurMs: Long,
+        val preRoll: PlannedPreRollCue?,
+        val overlayCue: PlannedOverlayCue?
+    )
 
     private fun pinAudioUri(uri: Uri) {
         val uriStr = uri.toString()
-        activePinnedUris.add(uriStr)
+        activePinnedCounts.compute(uriStr) { _, existing ->
+            (existing ?: java.util.concurrent.atomic.AtomicInteger(0)).apply { incrementAndGet() }
+        }
         Rpf3Archive.pinFile(uriStr)
     }
 
     private fun unpinAudioUri(uri: Uri) {
         val uriStr = uri.toString()
-        activePinnedUris.remove(uriStr)
-        Rpf3Archive.unpinFile(uriStr)
+        var decremented = false
+        activePinnedCounts.computeIfPresent(uriStr) { _, counter ->
+            decremented = true
+            if (counter.decrementAndGet() <= 0) null else counter
+        }
+        if (decremented) {
+            Rpf3Archive.unpinFile(uriStr)
+        }
     }
 
     private fun unpinAllActive() {
-        for (u in activePinnedUris) {
-            Rpf3Archive.unpinFile(u)
+        val snapshot = activePinnedCounts.entries.toList()
+        activePinnedCounts.clear()
+        for ((u, counter) in snapshot) {
+            repeat(counter.get().coerceAtLeast(0)) {
+                Rpf3Archive.unpinFile(u)
+            }
         }
-        activePinnedUris.clear()
-        Rpf3Archive.clearPinnedFiles()
     }
 
     private var lastStoppedTimeMs: Long = 0L
@@ -673,6 +699,92 @@ private val RPF3_INTRO_ALIASES = mapOf(
         return dur
     }
 
+    override fun cancelSeamlessPrepare() {
+        playGeneration.incrementAndGet()
+        seamlessPrepareJob?.cancel()
+        seamlessPrepareJob = null
+        if (seamlessPrepareActive) {
+            seamlessPrepareActive = false
+            seamlessPreparePrevHasStartedMix?.let { hasStartedContinuousMix = it }
+            seamlessPreparePrevHasStartedMix = null
+            seamlessPreparePrevSavedMixAbsMs?.let { savedMixAbsMs = it }
+            seamlessPreparePrevSavedMixAbsMs = null
+            plannedOverlayCue = null
+            plannedPreRollCue = null
+            clearChunkTracking(cancelPrefetch = false)
+            unpinAllActive()
+        }
+    }
+
+    override fun prepareForSeamlessTakeOver(
+        onReady: (commit: () -> Unit) -> Unit,
+        onFailed: () -> Unit
+    ) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { prepareForSeamlessTakeOver(onReady, onFailed) }
+            return
+        }
+        cancelSeamlessPrepare()
+        val currentGen = playGeneration.incrementAndGet()
+        seamlessPreparePrevHasStartedMix = hasStartedContinuousMix
+        seamlessPreparePrevSavedMixAbsMs = savedMixAbsMs
+        seamlessPrepareActive = true
+        queuedChunkKeys.clear()
+
+        seamlessPrepareJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            try {
+                val isValid = { playGeneration.get() == currentGen && isActive }
+                if (!isValid()) return@launch
+                ensureStationIndexed()
+                if (!isValid()) return@launch
+                val prepared = resolvePlaybackForStart(emitMetadata = false, isValid = isValid)
+                if (!isValid()) return@launch
+                if (prepared == null || prepared.uris.isEmpty()) {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (playGeneration.get() == currentGen) {
+                            cancelSeamlessPrepare()
+                            onFailed()
+                        }
+                    }
+                    return@launch
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    if (playGeneration.get() != currentGen) return@withContext
+                    seamlessPrepareJob = null
+                    onReady {
+                        if (playGeneration.get() != currentGen) return@onReady
+                        val commitGen = playGeneration.incrementAndGet()
+                        GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: seamless commit() (gen=$commitGen)")
+                        seamlessPrepareActive = false
+                        seamlessPreparePrevHasStartedMix = null
+                        seamlessPreparePrevSavedMixAbsMs = null
+                        isStationActive = true
+                        _playing = true
+                        activeChunkPrefetchJob?.cancel()
+                        activeChunkPrefetchJob = null
+                        player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
+                        player.repeatMode = Player.REPEAT_MODE_OFF
+                        player.playWhenReady = false
+                        if (prepared.preRoll != null && prepared.startWindowIndex == 0 && prepared.startPositionMs == 0L) {
+                            setStationOnlyMetadata()
+                        }
+                        launchPreparedPlayback(prepared, commitGen)
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (e: Throwable) {
+                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: seamless prepare error", e)
+                withContext(Dispatchers.Main.immediate) {
+                    if (playGeneration.get() == currentGen) {
+                        cancelSeamlessPrepare()
+                        onFailed()
+                    }
+                }
+            }
+        }
+    }
+
     override fun stop() {
         if (Looper.myLooper() != Looper.getMainLooper()) {
             mainHandler.post { stop() }
@@ -680,6 +792,15 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: stop() called (gen=$gen)")
+        seamlessPrepareJob?.cancel()
+        seamlessPrepareJob = null
+        if (seamlessPrepareActive) {
+            seamlessPrepareActive = false
+            seamlessPreparePrevHasStartedMix?.let { hasStartedContinuousMix = it }
+            seamlessPreparePrevHasStartedMix = null
+            seamlessPreparePrevSavedMixAbsMs?.let { savedMixAbsMs = it }
+            seamlessPreparePrevSavedMixAbsMs = null
+        }
         activeDecodeJob?.cancel()
         activeDecodeJob = null
         activeCleanJob?.cancel()
@@ -765,6 +886,11 @@ private val RPF3_INTRO_ALIASES = mapOf(
             mainHandler.post { play() }
             return
         }
+        seamlessPrepareJob?.cancel()
+        seamlessPrepareJob = null
+        seamlessPrepareActive = false
+        seamlessPreparePrevHasStartedMix = null
+        seamlessPreparePrevSavedMixAbsMs = null
         val currentGen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: play() called (gen=$currentGen)")
         isStationActive = true
@@ -787,30 +913,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
         activeDecodeJob?.cancel()
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
-                if (!_playing || playGeneration.get() != currentGen) return@launch
+                val isValid = { _playing && playGeneration.get() == currentGen }
+                if (!isValid()) return@launch
                 ensureStationIndexed()
-                if (canResumeMix) {
-                    val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-                    resumeContinuousMix(elapsedMs, currentGen)
-                } else if (canResumeTrack) {
-                    val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-                    resumeFromRealTime(elapsedMs, currentGen)
-                } else {
-                    withContext(Dispatchers.Main.immediate) {
-                        setStationOnlyMetadata()
-                    }
-                    pickNextSegment()
-                    if (currentSegmentUris.isNotEmpty()) {
-                        if (!_playing || playGeneration.get() != currentGen) return@launch
-                        val lastIdx = currentSegmentUris.size - 1
-                        val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
-                        val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
-                            rng.nextInt(25_000).toLong()
-                        } else {
-                            0L
-                        }
-                        startPlayback(currentSegmentUris, 0, startOffset, currentGen)
-                    }
+                if (!isValid()) return@launch
+                val prepared = resolvePlaybackForStart(emitMetadata = true, isValid = isValid)
+                if (prepared != null && isValid()) {
+                    launchPreparedPlayback(prepared, currentGen)
                 }
             } catch (ce: CancellationException) {
                 throw ce
@@ -820,7 +929,50 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
     }
 
-    private fun resumeFromRealTime(rawElapsedMs: Long, expectedGen: Int) {
+    private suspend fun resolvePlaybackForStart(
+        emitMetadata: Boolean,
+        isValid: () -> Boolean
+    ): PreparedPlayback? {
+        val isMix = isContinuousMixStation()
+        val canResumeMix = isMix && savedMixAbsMs > 0L && continuousMixItem != null && lastStoppedTimeMs > 0L
+        val canResumeTrack = !isMix && director.currentPhase != Gen3DirectorPhase.BREAK_BLOCK && lastStoppedTimeMs > 0L && areSegmentFilesValid(currentSegmentUris)
+        if (canResumeMix) {
+            val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+            return resolveContinuousMixPrepared(elapsedMs, isValid)
+        }
+        if (canResumeTrack) {
+            val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+            return resolveResumeFromRealTimePrepared(elapsedMs, emitMetadata, isValid)
+        }
+        if (emitMetadata) {
+            withContext(Dispatchers.Main.immediate) {
+                if (isValid()) {
+                    setStationOnlyMetadata()
+                }
+            }
+        }
+        pickNextSegment(emitMetadata)
+        if (currentSegmentUris.isEmpty() || !isValid()) return null
+        val lastIdx = currentSegmentUris.size - 1
+        val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
+        val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
+            rng.nextInt(25_000).toLong()
+        } else {
+            0L
+        }
+        val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+        val preRoll = plannedPreRollCue
+        plannedPreRollCue = null
+        val overlay = plannedOverlayCue
+        plannedOverlayCue = null
+        return PreparedPlayback(currentSegmentUris, 0, startOffset, totalDur, preRoll, overlay)
+    }
+
+    private fun resolveResumeFromRealTimePrepared(
+        rawElapsedMs: Long,
+        emitMetadata: Boolean,
+        isValid: () -> Boolean
+    ): PreparedPlayback? {
         var remainingMs = rawElapsedMs
         for (u in currentSegmentUris) {
             getFileDurationMs(u)
@@ -843,16 +995,20 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 val durMs = getFileDurationMs(uri)
                 val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
                 if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
-                    if (!_playing || playGeneration.get() != expectedGen) return
+                    if (!isValid()) return null
                     for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
-                    startPlayback(currentSegmentUris, i, posMs + remainingMs, expectedGen)
-                    return
+                    val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+                    val preRoll = plannedPreRollCue
+                    plannedPreRollCue = null
+                    val overlay = plannedOverlayCue
+                    plannedOverlayCue = null
+                    return PreparedPlayback(currentSegmentUris, i, posMs + remainingMs, totalDur, preRoll, overlay)
                 } else {
                     remainingMs -= timeLeftMs
                     posMs = 0L
                 }
             }
-            if (!advanceMultiChunkOrPickNext()) break
+            if (!advanceMultiChunkOrPickNext(emitMetadata)) break
             winIdx = 0
             posMs = 0L
             for (u in currentSegmentUris) {
@@ -860,10 +1016,15 @@ private val RPF3_INTRO_ALIASES = mapOf(
             }
         }
 
-        if (currentSegmentUris.isNotEmpty()) {
-            if (!_playing || playGeneration.get() != expectedGen) return
-            startPlayback(currentSegmentUris, 0, 0L, expectedGen)
+        if (currentSegmentUris.isNotEmpty() && isValid()) {
+            val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+            val preRoll = plannedPreRollCue
+            plannedPreRollCue = null
+            val overlay = plannedOverlayCue
+            plannedOverlayCue = null
+            return PreparedPlayback(currentSegmentUris, 0, 0L, totalDur, preRoll, overlay)
         }
+        return null
     }
 
     private fun isMixEntryName(trackName: String): Boolean {
@@ -991,8 +1152,11 @@ private val RPF3_INTRO_ALIASES = mapOf(
         return lastStartMs + (remainingBlocks * avgBlockMs).toLong()
     }
 
-    private fun resumeContinuousMix(elapsedMs: Long, expectedGen: Int) {
-        var item = continuousMixItem ?: return
+    private fun resolveContinuousMixPrepared(
+        elapsedMs: Long,
+        isValid: () -> Boolean
+    ): PreparedPlayback? {
+        var item = continuousMixItem ?: return null
         var absMs = savedMixAbsMs + elapsedMs
         val parts = getMixSeriesPartsFor(item)
         if (parts.size > 1) {
@@ -1025,10 +1189,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
 
         val chunkKey = buildChunkKey(item.trackName, 0, targetStartBlock)
-        if (!queuedChunkKeys.add(chunkKey)) return
+        if (!queuedChunkKeys.add(chunkKey)) return null
 
-        val mainUri = materializeValidChunkUri(item, targetStartBlock, chunkBlocks) ?: return
-        if (!_playing || playGeneration.get() != expectedGen) return
+        val mainUri = materializeValidChunkUri(item, targetStartBlock, chunkBlocks) ?: return null
+        if (!isValid()) return null
 
         val fileDur = getFileDurationMs(mainUri)
         val seekWithinChunkMs = (targetMixMs - chunkStartMs).coerceIn(0L, (fileDur - 500L).coerceAtLeast(0L))
@@ -1055,10 +1219,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
             stopMixPoller(clearMarkers = true)
         }
 
-        startPlayback(listOf(mainUri), 0, seekWithinChunkMs, expectedGen)
+        return PreparedPlayback(listOf(mainUri), 0, seekWithinChunkMs, fileDur, null, null)
     }
 
-    private fun advanceMultiChunkOrPickNext(): Boolean {
+    private fun advanceMultiChunkOrPickNext(emitMetadata: Boolean = true): Boolean {
         if (lastSegment == RadioSegmentType.Song && currentSongItem != null) {
             val target = resolveNextChunkTarget()
             if (target != null) {
@@ -1091,7 +1255,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 }
             }
         }
-        pickNextSegment()
+        pickNextSegment(emitMetadata)
         return currentSegmentUris.isNotEmpty()
     }
 
@@ -1107,7 +1271,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
                 if (!_playing || playGeneration.get() != currentGen) return@launch
-                if (advanceMultiChunkOrPickNext()) {
+                if (advanceMultiChunkOrPickNext(emitMetadata = true)) {
                     if (!_playing || playGeneration.get() != currentGen) return@launch
                     startPlayback(currentSegmentUris, 0, 0L, currentGen)
                 }
@@ -1119,7 +1283,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
     }
 
-    private fun pickNextSegment() {
+    private fun pickNextSegment(emitMetadata: Boolean = true) {
         resetChunkCursor()
         hasPrefetchedNextSegment = false
         clearChunkTracking(cancelPrefetch = true)
@@ -1169,7 +1333,9 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 Rpf3ClipRef(song.archive, intro)
             } else null
         }
-        setStationOnlyMetadata()
+        if (emitMetadata) {
+            setStationOnlyMetadata()
+        }
         when (event) {
             is Gen3BroadcastEvent.SongEvent -> {
                 val item = event.song
@@ -1642,12 +1808,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
     }
 
-    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
-        val totalDur = if (uris.isNotEmpty()) uris.sumOf { getFileDurationMs(it) } else 0L
-        val preRoll = plannedPreRollCue
-        plannedPreRollCue = null
-        val overlayCue = plannedOverlayCue
-        plannedOverlayCue = null
+    private fun launchPreparedPlayback(prepared: PreparedPlayback, expectedGen: Int) {
+        val uris = prepared.uris
+        val startWindowIndex = prepared.startWindowIndex
+        val startPositionMs = prepared.startPositionMs
+        val totalDur = prepared.totalDurMs
+        val preRoll = prepared.preRoll
+        val overlayCue = prepared.overlayCue
 
         if (preRoll != null && startWindowIndex == 0 && startPositionMs == 0L) {
             // Case 2: Pre-roll
@@ -1702,144 +1869,161 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
     }
 
+    private fun startPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get()) {
+        val totalDur = if (uris.isNotEmpty()) uris.sumOf { getFileDurationMs(it) } else 0L
+        val preRoll = plannedPreRollCue
+        plannedPreRollCue = null
+        val overlayCue = plannedOverlayCue
+        plannedOverlayCue = null
+        launchPreparedPlayback(
+            PreparedPlayback(uris, startWindowIndex, startPositionMs, totalDur, preRoll, overlayCue),
+            expectedGen
+        )
+    }
+
     private fun executeStartPlayback(uris: List<Uri>, startWindowIndex: Int, startPositionMs: Long, expectedGen: Int = playGeneration.get(), totalDur: Long = 0L) {
-        mainHandler.post {
+        val commitBlock = {
             if (!_playing || playGeneration.get() != expectedGen) {
                 GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: startPlayback aborted: generation mismatch or not playing (gen=$expectedGen, cur=${playGeneration.get()})")
-                return@post
-            }
-
-            if (activeListener != null) {
-                player.exoPlayer.removeListener(activeListener!!)
-                activeListener = null
-            }
-
-            player.exoPlayer.clearMediaItems()
-            for (u in uris) {
-                val chunkMediaId = chunkMediaIdByUri[u]
-                val item = if (chunkMediaId != null) {
-                    MediaItem.Builder().setUri(u).setMediaId(chunkMediaId).build()
-                } else {
-                    MediaItem.fromUri(u)
+            } else {
+                if (activeListener != null) {
+                    player.exoPlayer.removeListener(activeListener!!)
+                    activeListener = null
                 }
-                player.exoPlayer.addMediaItem(item)
-            }
-            if (startWindowIndex > 0 || startPositionMs > 0L) {
-                player.exoPlayer.seekTo(startWindowIndex, startPositionMs)
-            }
-            updateMetadataForWindowIndex(startWindowIndex, expectedGen)
 
-            activeListener = object : Player.Listener {
-                private var alreadyHandled = false
-                override fun onPlaybackStateChanged(state: Int) {
-                    if (state == Player.STATE_READY && activeMixMarkers.isNotEmpty()) {
-                        val mediaId = player.exoPlayer.currentMediaItem?.mediaId
-                        if (mediaId != null && chunkMetaByMediaId.containsKey(mediaId)) {
-                            updateMixTrackMetadata()
-                        }
+                player.exoPlayer.clearMediaItems()
+                for (u in uris) {
+                    val chunkMediaId = chunkMediaIdByUri[u]
+                    val item = if (chunkMediaId != null) {
+                        MediaItem.Builder().setUri(u).setMediaId(chunkMediaId).build()
+                    } else {
+                        MediaItem.fromUri(u)
                     }
-                    if (!alreadyHandled && state == Player.STATE_ENDED) {
-                        alreadyHandled = true
-                        player.exoPlayer.removeListener(this)
-                        if (_playing && playGeneration.get() == expectedGen) {
-                            if (pendingBreakClips.isNotEmpty() || activeBreakStagingJob?.isActive == true) {
-                                stageAndPlayRemainingBreakClip(expectedGen)
-                            } else {
-                                if (director.currentPhase == Gen3DirectorPhase.BREAK_BLOCK) {
-                                    director.onBreakCompleted()
+                    player.exoPlayer.addMediaItem(item)
+                }
+                if (startWindowIndex > 0 || startPositionMs > 0L) {
+                    player.exoPlayer.seekTo(startWindowIndex, startPositionMs)
+                }
+                updateMetadataForWindowIndex(startWindowIndex, expectedGen)
+
+                activeListener = object : Player.Listener {
+                    private var alreadyHandled = false
+                    override fun onPlaybackStateChanged(state: Int) {
+                        if (state == Player.STATE_READY && activeMixMarkers.isNotEmpty()) {
+                            val mediaId = player.exoPlayer.currentMediaItem?.mediaId
+                            if (mediaId != null && chunkMetaByMediaId.containsKey(mediaId)) {
+                                updateMixTrackMetadata()
+                            }
+                        }
+                        if (!alreadyHandled && state == Player.STATE_ENDED) {
+                            alreadyHandled = true
+                            player.exoPlayer.removeListener(this)
+                            if (_playing && playGeneration.get() == expectedGen) {
+                                if (pendingBreakClips.isNotEmpty() || activeBreakStagingJob?.isActive == true) {
+                                    stageAndPlayRemainingBreakClip(expectedGen)
+                                } else {
+                                    if (director.currentPhase == Gen3DirectorPhase.BREAK_BLOCK) {
+                                        director.onBreakCompleted()
+                                    }
+                                    onSongOrSegmentEnded(expectedGen)
                                 }
-                                onSongOrSegmentEnded(expectedGen)
                             }
                         }
                     }
-                }
 
-                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                    val exo = player.exoPlayer
-                    val currentMediaId = mediaItem?.mediaId ?: exo.currentMediaItem?.mediaId
-                    if (currentMediaId != null) {
-                        val meta = chunkMetaByMediaId[currentMediaId]
-                        if (meta != null) {
-                            if (meta.item != currentSongItem) {
-                                currentSongItem = meta.item
-                                if (isMixItem(meta.item)) {
-                                    val markers = meta.item.archive.readTrackMarkers(meta.item.trackName)
-                                    if (markers.isNotEmpty()) {
-                                        activeMixMarkers = markers
-                                        lastDisplayedMixTrackId = -1
-                                    } else {
-                                        stopMixPoller(clearMarkers = true)
+                    override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                        val exo = player.exoPlayer
+                        val currentMediaId = mediaItem?.mediaId ?: exo.currentMediaItem?.mediaId
+                        if (currentMediaId != null) {
+                            val meta = chunkMetaByMediaId[currentMediaId]
+                            if (meta != null) {
+                                if (meta.item != currentSongItem) {
+                                    currentSongItem = meta.item
+                                    if (isMixItem(meta.item)) {
+                                        val markers = meta.item.archive.readTrackMarkers(meta.item.trackName)
+                                        if (markers.isNotEmpty()) {
+                                            activeMixMarkers = markers
+                                            lastDisplayedMixTrackId = -1
+                                        } else {
+                                            stopMixPoller(clearMarkers = true)
+                                        }
                                     }
                                 }
+                                activeMixChunkStartMs = meta.startMs
                             }
-                            activeMixChunkStartMs = meta.startMs
+                        }
+
+                        // Unpin ONLY chunks that ExoPlayer has transitioned past and are no longer active/queued
+                        val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
+                        val activeMediaIds = HashSet<String>()
+                        val activeUriStrings = HashSet<String>()
+                        for (i in curIdx until exo.mediaItemCount) {
+                            val mi = exo.getMediaItemAt(i)
+                            if (mi.mediaId.isNotEmpty()) activeMediaIds.add(mi.mediaId)
+                            mi.localConfiguration?.uri?.toString()?.let { activeUriStrings.add(it) }
+                        }
+                        val pastEntries = chunkMetaByMediaId.entries.filter { (mId, _) -> mId !in activeMediaIds }
+                        for ((mId, meta) in pastEntries) {
+                            chunkMetaByMediaId.remove(mId)
+                            queuedChunkKeys.remove(buildChunkKey(meta.item.trackName, meta.loopEpoch, meta.startBlock))
+                            if (meta.uri.toString() !in activeUriStrings) {
+                                unpinAudioUri(meta.uri)
+                            }
+                        }
+
+                        updateMetadataForWindowIndex(curIdx, expectedGen)
+
+                        // Staged Break Decoding: while current clip plays, stage next queued break clip
+                        stageNextPendingBreakClip(expectedGen)
+
+                        if (lastSegment == RadioSegmentType.Song && currentSongItem != null && nextChunkTotalBlocks > 0) {
+                            prefetchAndQueueNextChunk(expectedGen)
                         }
                     }
 
-                    // Unpin ONLY chunks that ExoPlayer has transitioned past and are no longer active/queued
-                    val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
-                    val activeMediaIds = HashSet<String>()
-                    val activeUriStrings = HashSet<String>()
-                    for (i in curIdx until exo.mediaItemCount) {
-                        val mi = exo.getMediaItemAt(i)
-                        if (mi.mediaId.isNotEmpty()) activeMediaIds.add(mi.mediaId)
-                        mi.localConfiguration?.uri?.toString()?.let { activeUriStrings.add(it) }
-                    }
-                    val pastEntries = chunkMetaByMediaId.entries.filter { (mId, _) -> mId !in activeMediaIds }
-                    for ((mId, meta) in pastEntries) {
-                        chunkMetaByMediaId.remove(mId)
-                        queuedChunkKeys.remove(buildChunkKey(meta.item.trackName, meta.loopEpoch, meta.startBlock))
-                        if (meta.uri.toString() !in activeUriStrings) {
-                            unpinAudioUri(meta.uri)
+                    override fun onPlayerError(error: PlaybackException) {
+                        GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
+                        if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
+                            alreadyHandled = true
+                            player.exoPlayer.removeListener(this)
+                            mainHandler.post {
+                                if (_playing && playGeneration.get() == expectedGen) {
+                                    playNext()
+                                }
+                            }
                         }
                     }
+                }
+                player.exoPlayer.addListener(activeListener!!)
+                if (_playing && playGeneration.get() == expectedGen) {
+                    player.prepare()
+                    player.playInternal()
 
-                    updateMetadataForWindowIndex(curIdx, expectedGen)
+                    if (pendingBreakClips.isNotEmpty()) {
+                        stageNextPendingBreakClip(expectedGen)
+                    }
 
-                    // Staged Break Decoding: while current clip plays, stage next queued break clip
-                    stageNextPendingBreakClip(expectedGen)
+                    if (activeMixMarkers.isNotEmpty()) {
+                        startMixPoller(expectedGen)
+                    } else {
+                        stopMixPoller(clearMarkers = false)
+                    }
 
                     if (lastSegment == RadioSegmentType.Song && currentSongItem != null && nextChunkTotalBlocks > 0) {
                         prefetchAndQueueNextChunk(expectedGen)
                     }
-                }
 
-                override fun onPlayerError(error: PlaybackException) {
-                    GTRadioLogger.log("Rpf3RadioStation[$stationTitle]: ExoPlayer error on track: ${error.message}", error)
-                    if (!alreadyHandled && _playing && playGeneration.get() == expectedGen) {
-                        alreadyHandled = true
-                        player.exoPlayer.removeListener(this)
-                        mainHandler.post {
-                            if (_playing && playGeneration.get() == expectedGen) {
-                                playNext()
-                            }
-                        }
+                    // Start look-ahead prefetch monitor for discrete songs
+                    if (!isContinuousMixStation() && currentSongItem != null) {
+                        startLookAheadMonitor(expectedGen, totalDur)
                     }
                 }
             }
-            player.exoPlayer.addListener(activeListener!!)
-            if (!_playing || playGeneration.get() != expectedGen) return@post
-            player.prepare()
-            player.playInternal()
-
-            if (pendingBreakClips.isNotEmpty()) {
-                stageNextPendingBreakClip(expectedGen)
-            }
-
-            if (activeMixMarkers.isNotEmpty()) {
-                startMixPoller(expectedGen)
-            } else {
-                stopMixPoller(clearMarkers = false)
-            }
-
-            if (lastSegment == RadioSegmentType.Song && currentSongItem != null && nextChunkTotalBlocks > 0) {
-                prefetchAndQueueNextChunk(expectedGen)
-            }
-
-            // Start look-ahead prefetch monitor for discrete songs
-            if (!isContinuousMixStation() && currentSongItem != null) {
-                startLookAheadMonitor(expectedGen, totalDur)
-            }
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            commitBlock()
+        } else {
+            mainHandler.post(commitBlock)
         }
     }
 

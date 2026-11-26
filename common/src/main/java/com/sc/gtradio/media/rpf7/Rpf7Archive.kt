@@ -16,6 +16,7 @@ import java.nio.channels.FileChannel
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Metadata record for a continuous-mix sample-accurate trackid marker inside an AWC chunk 0xBD.
@@ -86,6 +87,7 @@ class Rpf7Archive(
     private val djMarkerCache = ConcurrentHashMap<String, DjMarkerWindow>()
     private val seekTableCache = ConcurrentHashMap<String, LongArray>()
     @Volatile private var indexed = false
+    val isIndexed: Boolean get() = indexed
 
     companion object {
         const val CHUNK_BLOCKS = 4
@@ -95,27 +97,30 @@ class Rpf7Archive(
         private const val MAX_CACHE_BYTES = 150L * 1024L * 1024L // 150 MB cap
         private const val TARGET_CACHE_BYTES = 100L * 1024L * 1024L // Evict down to 100 MB
 
-        private val pinnedFileNames: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
+        private val pinnedFileCounts = ConcurrentHashMap<String, AtomicInteger>()
 
         fun pinFile(fileNameOrUri: String?) {
             val name = fileNameOrUri?.substringAfterLast('/') ?: return
-            if (name.isNotEmpty()) {
-                pinnedFileNames.add(name)
+            if (name.isEmpty()) return
+            pinnedFileCounts.compute(name) { _, existing ->
+                (existing ?: AtomicInteger(0)).apply { incrementAndGet() }
             }
         }
 
         fun unpinFile(fileNameOrUri: String?) {
             val name = fileNameOrUri?.substringAfterLast('/') ?: return
-            if (name.isNotEmpty()) {
-                pinnedFileNames.remove(name)
+            if (name.isEmpty()) return
+            pinnedFileCounts.computeIfPresent(name) { _, counter ->
+                if (counter.decrementAndGet() <= 0) null else counter
             }
         }
 
         fun clearPinnedFiles() {
-            pinnedFileNames.clear()
+            pinnedFileCounts.clear()
         }
 
-        fun isPinned(fileName: String?): Boolean = if (fileName != null) pinnedFileNames.contains(fileName) else false
+        fun isPinned(fileName: String?): Boolean =
+            if (fileName != null) (pinnedFileCounts[fileName]?.get() ?: 0) > 0 else false
 
         private val prefetchExecutor = Executors.newSingleThreadExecutor()
         private val decodeLock = Any()
@@ -218,29 +223,40 @@ class Rpf7Archive(
     @Synchronized
     fun ensureIndexed() {
         if (indexed) return
-        indexed = true
 
         val keys = Rpf7KeyManager.getKeys(context)
         if (keys == null) {
-            GTRadioLogger.log("Rpf7Archive[$rpfName]: GTA V keys not unlocked. Indexing skipped.")
+            GTRadioLogger.log("Rpf7Archive[$rpfName]: Keys not unlocked. Indexing skipped.")
             return
         }
 
         try {
+            entries.clear()
+            bankSubTracks.clear()
+            var ok = false
             context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
                 FileInputStream(pfd.fileDescriptor).channel.use { channel ->
-                    indexRpf(channel, keys)
+                    ok = indexRpf(channel, keys)
                 }
             }
-            GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
+            if (ok) {
+                indexed = true
+                GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
+            } else {
+                entries.clear()
+                bankSubTracks.clear()
+                GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexing incomplete; deferred for retry")
+            }
         } catch (e: Exception) {
+            entries.clear()
+            bankSubTracks.clear()
             GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexing failed", e)
         }
     }
 
-    private fun indexRpf(channel: FileChannel, keys: Rpf7KeySet) {
+    private fun indexRpf(channel: FileChannel, keys: Rpf7KeySet): Boolean {
         val fileSize = channel.size()
-        if (fileSize < 16) return
+        if (fileSize < 16) return false
 
         val hdrBuf = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
         channel.position(0)
@@ -250,14 +266,14 @@ class Rpf7Archive(
         val magic = hdrBuf.int
         if (magic != 0x52504637) { // "RPF7"
             GTRadioLogger.log("Rpf7Archive[$rpfName]: Invalid RPF7 magic: 0x${Integer.toHexString(magic)}")
-            return
+            return false
         }
 
         val entryCount = hdrBuf.int
         val namesLength = hdrBuf.int
         val enc = hdrBuf.int
 
-        if (entryCount <= 0 || namesLength <= 0) return
+        if (entryCount <= 0 || namesLength <= 0) return false
 
         val entriesEnc = ByteArray(entryCount * 16)
         val namesEnc = ByteArray(namesLength)
@@ -315,6 +331,7 @@ class Rpf7Archive(
                 }
             }
         }
+        return true
     }
 
     private fun indexAwcEntry(
@@ -824,6 +841,11 @@ class Rpf7Archive(
         if (actualBlocks <= 0) return null
 
         val uri = materializeBlockChunkInternal(entry, actualStart, actualBlocks)
+        if (uri != null && uri.scheme == "file") {
+            uri.path?.let { path ->
+                runCatching { File(path).setLastModified(System.currentTimeMillis()) }
+            }
+        }
 
         // Background prefetch next chunk if more blocks remain
         if (actualStart + actualBlocks < entry.numBlocks) {
@@ -1391,13 +1413,6 @@ class Rpf7Archive(
     private fun cleanCacheIfNeeded(cacheDir: File, currentSafeFileName: String) {
         val allFiles = ArrayList<File>()
         cacheDir.listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
-        File(context.cacheDir, "at3_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
-        File(context.cacheDir, "gen2_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
-        File(context.cacheDir, "rpf3_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
-        File(context.cacheDir, "gta5_rpf_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
-        File(context.cacheDir, "gta4_rpf_tracks_v3").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
-        File(context.cacheDir, "sa_stream_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
-        File(context.cacheDir, "sa_raw_tracks").listFiles()?.filter { !it.name.endsWith(".tmp") }?.let { allFiles.addAll(it) }
         if (allFiles.isEmpty()) return
         var totalBytes = 0L
         for (f in allFiles) totalBytes += f.length()

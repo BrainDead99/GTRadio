@@ -6,6 +6,8 @@ import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
@@ -54,10 +56,14 @@ class Gen1RawRadioStation(
         Gen1MetadataRepository.ensureLoaded(context)
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activePrepareJob: Job? = null
+    private var seamlessPrepareJob: Job? = null
     private var activePollerJob: Job? = null
     private val playGeneration = AtomicInteger(0)
+
+    override val supportsSeamlessPrepare: Boolean get() = true
 
     private var _playing = false
     private var activeCueKey: String = "__INIT__"
@@ -209,8 +215,115 @@ class Gen1RawRadioStation(
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedPositionMs: Long = 0L
 
+    private data class PreparedGen1Playback(
+        val mediaSource: ProgressiveMediaSource,
+        val liveOffsetMs: Long
+    )
+
+    private fun buildMediaSource(): ProgressiveMediaSource {
+        val dataSourceFactory = AdfXorDataSource.Factory(
+            context = context,
+            xorMask = if (isXorAdf) 0x22 else 0x00
+        )
+        val extractorsFactory = DefaultExtractorsFactory()
+            .setConstantBitrateSeekingEnabled(true)
+
+        val mediaItemBuilder = MediaItem.Builder().setUri(sourceUri)
+        if (isXorAdf) {
+            mediaItemBuilder.setMimeType(MimeTypes.AUDIO_MPEG)
+        } else {
+            mediaItemBuilder.setMimeType(MimeTypes.AUDIO_WAV)
+        }
+
+        return ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
+            .createMediaSource(mediaItemBuilder.build())
+    }
+
+    private fun computeLiveOffsetMs(durMs: Long): Long {
+        return if (durMs > 0L) {
+            if (lastStoppedTimeMs > 0L) {
+                val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+                (stoppedPositionMs + elapsedMs) % durMs
+            } else {
+                (System.currentTimeMillis() % durMs).coerceIn(0L, (durMs - 5_000L).coerceAtLeast(0L))
+            }
+        } else {
+            0L
+        }
+    }
+
+    override fun cancelSeamlessPrepare() {
+        playGeneration.incrementAndGet()
+        seamlessPrepareJob?.cancel()
+        seamlessPrepareJob = null
+    }
+
+    override fun prepareForSeamlessTakeOver(
+        onReady: (commit: () -> Unit) -> Unit,
+        onFailed: () -> Unit
+    ) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { prepareForSeamlessTakeOver(onReady, onFailed) }
+            return
+        }
+        val prepToken = playGeneration.incrementAndGet()
+        seamlessPrepareJob?.cancel()
+        seamlessPrepareJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            try {
+                val mediaSource = buildMediaSource()
+                val durMs = estimateDurationMs()
+                if (prepToken != playGeneration.get() || !isActive) return@launch
+                val liveOffsetMs = computeLiveOffsetMs(durMs)
+                val prepared = PreparedGen1Playback(mediaSource, liveOffsetMs)
+                withContext(Dispatchers.Main.immediate) {
+                    if (prepToken != playGeneration.get()) return@withContext
+                    seamlessPrepareJob = null
+                    onReady {
+                        if (prepToken != playGeneration.get()) return@onReady
+                        val commitToken = playGeneration.incrementAndGet()
+                        GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: seamless commit() (file=$fileName, isXorAdf=$isXorAdf, token=$commitToken)")
+                        isStationActive = true
+                        _playing = true
+                        activeCueKey = "__INIT__"
+                        activePrepareJob?.cancel()
+                        activePrepareJob = null
+                        activePollerJob?.cancel()
+                        activePollerJob = null
+
+                        player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
+                        player.repeatMode = Player.REPEAT_MODE_ONE
+                        player.playWhenReady = false
+                        player.setMediaSource(prepared.mediaSource)
+                        if (prepared.liveOffsetMs > 0L) {
+                            player.exoPlayer.seekTo(0, prepared.liveOffsetMs)
+                        }
+                        player.prepare()
+                        player.playInternal()
+                        updateDynamicMetadataFromPosition()
+                        startPoller(commitToken)
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                GTRadioLogger.e("Gen1RawRadioStation[$stationTitle]: seamless prepare error", t)
+                withContext(Dispatchers.Main.immediate) {
+                    if (prepToken == playGeneration.get()) {
+                        seamlessPrepareJob = null
+                        onFailed()
+                    }
+                }
+            }
+        }
+    }
+
     override fun stop() {
-        if (!isStationActive) return
+        seamlessPrepareJob?.cancel()
+        seamlessPrepareJob = null
+        if (!isStationActive) {
+            playGeneration.incrementAndGet()
+            return
+        }
         isStationActive = false
         _playing = false
         playGeneration.incrementAndGet()
@@ -229,6 +342,8 @@ class Gen1RawRadioStation(
     }
 
     override fun play() {
+        seamlessPrepareJob?.cancel()
+        seamlessPrepareJob = null
         val token = playGeneration.incrementAndGet()
         GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: play() called (file=$fileName, isXorAdf=$isXorAdf, token=$token)")
         isStationActive = true
@@ -243,22 +358,7 @@ class Gen1RawRadioStation(
         player.repeatMode = Player.REPEAT_MODE_ONE
         player.playWhenReady = false
 
-        val dataSourceFactory = AdfXorDataSource.Factory(
-            context = context,
-            xorMask = if (isXorAdf) 0x22 else 0x00
-        )
-        val extractorsFactory = DefaultExtractorsFactory()
-            .setConstantBitrateSeekingEnabled(true)
-
-        val mediaItemBuilder = MediaItem.Builder().setUri(sourceUri)
-        if (isXorAdf) {
-            mediaItemBuilder.setMimeType(MimeTypes.AUDIO_MPEG)
-        } else {
-            mediaItemBuilder.setMimeType(MimeTypes.AUDIO_WAV)
-        }
-
-        val mediaSource = ProgressiveMediaSource.Factory(dataSourceFactory, extractorsFactory)
-            .createMediaSource(mediaItemBuilder.build())
+        val mediaSource = buildMediaSource()
 
         player.setMediaSource(mediaSource)
         player.prepare()
@@ -267,16 +367,7 @@ class Gen1RawRadioStation(
         activePrepareJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             val durMs = estimateDurationMs()
             if (token != playGeneration.get() || !isActive || !_playing) return@launch
-            val liveOffsetMs = if (durMs > 0L) {
-                if (lastStoppedTimeMs > 0L) {
-                    val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
-                    (stoppedPositionMs + elapsedMs) % durMs
-                } else {
-                    (System.currentTimeMillis() % durMs).coerceIn(0L, (durMs - 5_000L).coerceAtLeast(0L))
-                }
-            } else {
-                0L
-            }
+            val liveOffsetMs = computeLiveOffsetMs(durMs)
 
             withContext(Dispatchers.Main.immediate) {
                 if (token == playGeneration.get() && _playing) {

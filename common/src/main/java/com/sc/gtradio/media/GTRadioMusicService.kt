@@ -158,6 +158,20 @@ open class GTRadioMusicService : MediaLibraryService() {
     private var activePlaybackStationGroup: StationGroup? = null
     @Volatile private var stationSwitchToken = 0L
     @Volatile private var playerReadyForCurrentSwitch = false
+    private var pendingIncomingStation: RadioStation? = null
+    private var pendingSwitchJob: Job? = null
+    private var prewarmJob: Job? = null
+
+    private fun cancelPendingSeamlessSwitch(restoreFadeGain: Boolean) {
+        stationSwitchToken++
+        pendingSwitchJob?.cancel()
+        pendingSwitchJob = null
+        pendingIncomingStation?.cancelSeamlessPrepare()
+        pendingIncomingStation = null
+        if (restoreFadeGain) {
+            radioPlayer.setSwitchFadeGainImmediate(1.0f)
+        }
+    }
 
     private inner class GTRadioOnSharedPrefChange : SharedPreferences.OnSharedPreferenceChangeListener {
         override fun onSharedPreferenceChanged(prefs: SharedPreferences?, key: String?) {
@@ -194,6 +208,9 @@ open class GTRadioMusicService : MediaLibraryService() {
     }
 
     private fun reloadLibrary() {
+        cancelPendingSeamlessSwitch(restoreFadeGain = true)
+        prewarmJob?.cancel()
+        prewarmJob = null
         radioPlayer.hasActiveQueueOrStation = false
         radioPlayer.notifyAvailableCommandsChanged()
         if (playbackMode == PlaybackMode.TRACKLIST) {
@@ -344,7 +361,16 @@ open class GTRadioMusicService : MediaLibraryService() {
                     }
                 }
                 "setActiveStationGroupId" -> {
-                    activeStationGroupId = args.getString("stationGroupId")
+                    val groupId = args.getString("stationGroupId")
+                    activeStationGroupId = groupId
+                    prewarmJob?.cancel()
+                    prewarmJob = null
+                    val targetGroup = groupId?.let { getStationGroup(it) }
+                    if (targetGroup != null && (targetGroup.isRpf7Group || targetGroup.isRpf3Group)) {
+                        prewarmJob = serviceScope.launch {
+                            targetGroup.prewarmGen3Archives(applicationContext)
+                        }
+                    }
                 }
                 "setStreamMuted" -> {
                     val muted = args.getBoolean("muted", false)
@@ -605,6 +631,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         radioPlayer.setTransitionLoading(true)
 
         if (mediaId.startsWith(TracklistContract.SONG_PREFIX)) {
+            cancelPendingSeamlessSwitch(restoreFadeGain = true)
             val payload = mediaId.removePrefix(TracklistContract.SONG_PREFIX)
             val stationId = payload.substringBefore("::")
             val trackId = payload.substringAfter("::")
@@ -716,6 +743,8 @@ open class GTRadioMusicService : MediaLibraryService() {
     }
 
     private fun handlePause() {
+        cancelPendingSeamlessSwitch(restoreFadeGain = true)
+        radioPlayer.setTransitionLoading(false)
         if (playbackMode == PlaybackMode.TRACKLIST) {
             radioPlayer.pauseInternal()
             mediaLibrarySession.setSessionExtras(buildSessionExtras())
@@ -735,6 +764,7 @@ open class GTRadioMusicService : MediaLibraryService() {
         if (isHandlingStop) return
         isHandlingStop = true
         try {
+            cancelPendingSeamlessSwitch(restoreFadeGain = true)
             radioPlayer.setTransitionLoading(false)
             radioPlayer.hasActiveQueueOrStation = false
             radioPlayer.notifyAvailableCommandsChanged()
@@ -930,24 +960,12 @@ open class GTRadioMusicService : MediaLibraryService() {
         stationIndex: Int,
         trigger: String = "in_app"
     ) {
+        cancelPendingSeamlessSwitch(restoreFadeGain = false)
         val switchToken = ++stationSwitchToken
         val switchStartTime = SystemClock.uptimeMillis()
         playerReadyForCurrentSwitch = false
 
-        radioPlayer.setTransitionLoading(true)
         val departingStation = activeStation
-        if (departingStation != null && departingStation !== station) {
-            departingStation.stop()
-        }
-
-        activeStation = station
-        activeStationGroupId = group.mediaItem.mediaId
-        activePlaybackStationGroup = group
-
-        val canCycle = group.stationList.size > 1
-        radioPlayer.hasActiveQueueOrStation = true
-        radioPlayer.updateNavigationCommands(canCycle, canCycle)
-
         val noisePack = DynamicThemeManager.findNoisePackForSeries(applicationContext, group.groupName)
         val hasJson = noisePack?.hasThemeJson ?: false
         val soundCount = noisePack?.noiseSoundUris?.size ?: 0
@@ -956,9 +974,22 @@ open class GTRadioMusicService : MediaLibraryService() {
 
         GTRadioLogger.log("[TUNE] Trigger: $trigger -> station '${station.stationName}' (index=$stationIndex) in series '${group.groupName}' | pack: matched=${noisePack != null}, hasJson=$hasJson, sfxMode=${noisePack?.sfxMode}, sounds=$soundCount")
 
-        radioPlayer.resetForStationSwitch()
-
         if (shouldPlayNoise) {
+            radioPlayer.setTransitionLoading(true)
+            radioPlayer.setSwitchFadeGainImmediate(1.0f)
+            if (departingStation != null && departingStation !== station) {
+                departingStation.stop()
+            }
+
+            activeStation = station
+            activeStationGroupId = group.mediaItem.mediaId
+            activePlaybackStationGroup = group
+
+            val canCycle = group.stationList.size > 1
+            radioPlayer.hasActiveQueueOrStation = true
+            radioPlayer.updateNavigationCommands(canCycle, canCycle)
+
+            radioPlayer.resetForStationSwitch(keepFadeMuted = false)
             radioPlayer.setStreamMuted(true)
             station.play()
 
@@ -980,13 +1011,122 @@ open class GTRadioMusicService : MediaLibraryService() {
                     }
                 }
             )
-        } else {
-            DynamicThemeManager.stopTuningNoise("no_noise_pack")
-            radioPlayer.setStreamMuted(false)
-            station.play()
-            val elapsedMs = SystemClock.uptimeMillis() - switchStartTime
-            GTRadioLogger.log("[TUNE] Play ($trigger) for '${station.stationName}' in ${elapsedMs}ms (no noise pack)")
+
+            radioPlayer.updateSessionMetadata(station.metadata)
+            radioPlayer.playInternal()
+            mediaLibrarySession.setSessionExtras(buildSessionExtras())
+            persistPlaybackState()
+            return
         }
+
+        val isOutgoingPlaying = !DynamicThemeManager.isPlayingTuningNoise() &&
+            radioPlayer.radioPlaybackState == GTRadioPlayer.RadioState.PLAYING &&
+            (radioPlayer.exoPlayer.playWhenReady || djVoiceOverlayPlayer.isPlaying)
+
+        if (departingStation != null &&
+            departingStation !== station &&
+            isOutgoingPlaying &&
+            station.supportsSeamlessPrepare
+        ) {
+            DynamicThemeManager.stopTuningNoise("seamless_switch")
+            radioPlayer.setStreamMuted(false)
+            radioPlayer.setTransitionLoading(false)
+            if (radioPlayer.getSwitchFadeGain() < 1.0f) {
+                radioPlayer.setSwitchFadeGainImmediate(1.0f)
+            }
+
+            pendingIncomingStation = station
+            GTRadioLogger.log("[TUNE] Seamless prepare started for '${station.stationName}' (keeping '${departingStation.stationName}' playing)")
+
+            station.prepareForSeamlessTakeOver(
+                onReady = { commit ->
+                    if (switchToken != stationSwitchToken) {
+                        station.cancelSeamlessPrepare()
+                        return@prepareForSeamlessTakeOver
+                    }
+                    pendingSwitchJob = serviceScope.launch(Dispatchers.Main.immediate) {
+                        radioPlayer.fadeSwitchGain(0f, 80L)
+                        if (switchToken != stationSwitchToken) {
+                            station.cancelSeamlessPrepare()
+                            return@launch
+                        }
+                        departingStation.stop()
+                        radioPlayer.resetForStationSwitch(keepFadeMuted = true)
+                        activeStation = station
+                        activeStationGroupId = group.mediaItem.mediaId
+                        activePlaybackStationGroup = group
+                        pendingIncomingStation = null
+
+                        val canCycle = group.stationList.size > 1
+                        radioPlayer.hasActiveQueueOrStation = true
+                        radioPlayer.updateNavigationCommands(canCycle, canCycle)
+
+                        commit()
+                        radioPlayer.updateSessionMetadata(station.metadata)
+                        mediaLibrarySession.setSessionExtras(buildSessionExtras())
+                        persistPlaybackState()
+
+                        var waitedMs = 0L
+                        while (waitedMs < 120L &&
+                            switchToken == stationSwitchToken &&
+                            radioPlayer.exoPlayer.playbackState != Player.STATE_READY &&
+                            !(radioPlayer.exoPlayer.mediaItemCount == 0 && djVoiceOverlayPlayer.isPlaying)
+                        ) {
+                            delay(15L)
+                            waitedMs += 15L
+                        }
+                        if (switchToken != stationSwitchToken) return@launch
+                        radioPlayer.fadeSwitchGain(1.0f, 80L)
+                        val elapsedMs = SystemClock.uptimeMillis() - switchStartTime
+                        GTRadioLogger.log("[TUNE] Seamless swap complete ($trigger) -> '${station.stationName}' in ${elapsedMs}ms")
+                    }
+                },
+                onFailed = {
+                    if (switchToken == stationSwitchToken) {
+                        pendingIncomingStation = null
+                        radioPlayer.setSwitchFadeGainImmediate(1.0f)
+                        radioPlayer.setTransitionLoading(true)
+                        departingStation.stop()
+                        radioPlayer.resetForStationSwitch(keepFadeMuted = false)
+                        activeStation = station
+                        activeStationGroupId = group.mediaItem.mediaId
+                        activePlaybackStationGroup = group
+
+                        val canCycle = group.stationList.size > 1
+                        radioPlayer.hasActiveQueueOrStation = true
+                        radioPlayer.updateNavigationCommands(canCycle, canCycle)
+
+                        station.play()
+                        radioPlayer.updateSessionMetadata(station.metadata)
+                        radioPlayer.playInternal()
+                        mediaLibrarySession.setSessionExtras(buildSessionExtras())
+                        persistPlaybackState()
+                    }
+                }
+            )
+            return
+        }
+
+        radioPlayer.setTransitionLoading(true)
+        radioPlayer.setSwitchFadeGainImmediate(1.0f)
+        if (departingStation != null && departingStation !== station) {
+            departingStation.stop()
+        }
+
+        activeStation = station
+        activeStationGroupId = group.mediaItem.mediaId
+        activePlaybackStationGroup = group
+
+        val canCycle = group.stationList.size > 1
+        radioPlayer.hasActiveQueueOrStation = true
+        radioPlayer.updateNavigationCommands(canCycle, canCycle)
+
+        radioPlayer.resetForStationSwitch(keepFadeMuted = false)
+        DynamicThemeManager.stopTuningNoise("no_noise_pack")
+        radioPlayer.setStreamMuted(false)
+        station.play()
+        val elapsedMs = SystemClock.uptimeMillis() - switchStartTime
+        GTRadioLogger.log("[TUNE] Play ($trigger) for '${station.stationName}' in ${elapsedMs}ms (no noise pack)")
 
         radioPlayer.updateSessionMetadata(station.metadata)
         radioPlayer.playInternal()
@@ -1350,16 +1490,15 @@ open class GTRadioMusicService : MediaLibraryService() {
         val station = buildRadioStation(group, mediaId)
         if (station != null) {
             station.onMetadataChanged = { updatedMeta ->
-                if (activeStation?.mediaId == station.mediaId) {
-                    if (Looper.myLooper() == Looper.getMainLooper()) {
+                val forward = {
+                    if (activeStation?.mediaId == station.mediaId && pendingIncomingStation == null) {
                         radioPlayer.updateSessionMetadata(updatedMeta)
-                    } else {
-                        Handler(Looper.getMainLooper()).post {
-                            if (activeStation?.mediaId == station.mediaId) {
-                                radioPlayer.updateSessionMetadata(updatedMeta)
-                            }
-                        }
                     }
+                }
+                if (Looper.myLooper() == Looper.getMainLooper()) {
+                    forward()
+                } else {
+                    Handler(Looper.getMainLooper()).post { forward() }
                 }
             }
             stationCache[station.mediaItem.mediaId] = station
@@ -1537,6 +1676,9 @@ open class GTRadioMusicService : MediaLibraryService() {
     }
 
     override fun onDestroy() {
+        prewarmJob?.cancel()
+        prewarmJob = null
+        cancelPendingSeamlessSwitch(restoreFadeGain = false)
         serviceScope.cancel()
         if (playbackMode == PlaybackMode.TRACKLIST) {
             activeTracklistStation?.stopCleanTrackPlayback()

@@ -32,10 +32,20 @@ interface RadioStation {
     fun release() {
         stop()
     }
+
+    val supportsSeamlessPrepare: Boolean get() = false
+    fun prepareForSeamlessTakeOver(
+        onReady: (commit: () -> Unit) -> Unit,
+        onFailed: () -> Unit = {}
+    ) {
+        onReady { play() }
+    }
+    fun cancelSeamlessPrepare() {}
 }
 
 object StationDispatchers {
     val ioDispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(4)
+    val prewarmDispatcher = kotlinx.coroutines.Dispatchers.IO.limitedParallelism(2)
 }
 
 private var neutralRadioPlaceholderJpegBytes: ByteArray? = null

@@ -14,6 +14,7 @@ import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.documentfile.provider.DocumentFile
@@ -23,6 +24,7 @@ import com.sc.gtradio.common.FileUtils
 import com.sc.gtradio.common.FileUtils.listSimpleFiles
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.common.SimpleFileInfo
+import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -1144,6 +1146,71 @@ init {
 
     fun getStationIndex(stationMediaId: String): Int {
         return stationList.indexOfFirst { x -> x.mediaId == stationMediaId }
+    }
+
+    suspend fun prewarmGen3Archives(context: Context) {
+        if (!isRpf7Group && !isRpf3Group) return
+        val startMs = SystemClock.uptimeMillis()
+        if (isRpf7Group) {
+            if (!Rpf7KeyManager.isUnlocked(context)) {
+                Rpf7KeyManager.ensureKeysLoaded(context)
+            }
+            if (!Rpf7KeyManager.isUnlocked(context)) return
+
+            val shared = listOfNotNull(rpf7AdvertsArchive, rpf7NewsArchive).distinct()
+            val stations = rpf7StationArchives.values.distinct()
+            val all = (shared + stations).distinct()
+            if (all.isEmpty()) return
+
+            GTRadioLogger.log("[SCAN] Pre-warming ${all.size} RPF7 TOC(s) for '$groupName'...")
+            withContext(StationDispatchers.prewarmDispatcher) {
+                Rpf7MetadataRepository.ensureLoaded(context)
+                coroutineScope {
+                    for (arch in all) {
+                        if (!isActive) break
+                        launch {
+                            if (isActive && !arch.isIndexed) {
+                                arch.ensureIndexed()
+                            }
+                        }
+                    }
+                }
+            }
+            GTRadioLogger.log("[SCAN] Pre-warmed ${all.size} RPF7 TOC(s) for '$groupName' in ${SystemClock.uptimeMillis() - startMs}ms")
+        } else if (isRpf3Group) {
+            if (!Rpf3KeyManager.isUnlocked(context)) {
+                Rpf3KeyManager.ensureKeyLoaded(context)
+            }
+            if (!Rpf3KeyManager.isUnlocked(context)) return
+
+            val shared = listOfNotNull(
+                rpf3AdvertsArchive,
+                rpf3NewsArchive,
+                rpf3WeatherArchive,
+                rpf3ExtraTracksArchive,
+                rpf3Ep1SfxArchive,
+                rpf3Ep2SfxArchive
+            ).distinct()
+            val stations = rpf3StationArchives.values.distinct()
+            val all = (shared + stations).distinct()
+            if (all.isEmpty()) return
+
+            GTRadioLogger.log("[SCAN] Pre-warming ${all.size} RPF3 TOC(s) for '$groupName'...")
+            withContext(StationDispatchers.prewarmDispatcher) {
+                Rpf3MetadataRepository.ensureLoaded(context)
+                coroutineScope {
+                    for (arch in all) {
+                        if (!isActive) break
+                        launch {
+                            if (isActive && !arch.isIndexed) {
+                                arch.ensureIndexed()
+                            }
+                        }
+                    }
+                }
+            }
+            GTRadioLogger.log("[SCAN] Pre-warmed ${all.size} RPF3 TOC(s) for '$groupName' in ${SystemClock.uptimeMillis() - startMs}ms")
+        }
     }
 
     fun toCachedDescriptor(): LibraryIndexCache.CachedGroupDescriptor {
