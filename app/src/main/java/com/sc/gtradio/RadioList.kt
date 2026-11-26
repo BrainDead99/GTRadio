@@ -2,6 +2,7 @@ package com.sc.gtradio
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.database.ContentObserver
 import android.graphics.Bitmap
@@ -12,10 +13,12 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -28,6 +31,7 @@ import androidx.lifecycle.Observer
 import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.preference.PreferenceManager
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
@@ -39,10 +43,11 @@ import com.sc.gtradio.databinding.FragmentStationitemBinding
 import com.sc.gtradio.media.*
 import com.sc.gtradio.media.artwork.AlbumArtDownloader
 import com.sc.gtradio.media.core.TracklistContract
+import com.sc.gtradio.media.rpf7.Rpf7MetadataRepository
 import com.sc.gtradio.utils.InjectorUtils
-import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.*
 import kotlin.math.abs
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 class RadioList : Fragment() {
@@ -60,6 +65,9 @@ class RadioList : Fragment() {
     companion object {
         private const val REPEAT_CYCLES = 11
         private const val MIDDLE_CYCLE = REPEAT_CYCLES / 2
+        private const val PREF_LOUDNESS = "loudness_normalization_enabled"
+        private const val PREF_CAR_EQ = "car_stereo_eq_enabled"
+        private const val PREF_WHEEL_ARC_SIDE = "theme_wheel_arc_side"
     }
 
     private var activeThemePack: DynamicThemePack? = null
@@ -69,6 +77,8 @@ class RadioList : Fragment() {
     private val stripViewsByMediaId = HashMap<String, MutableList<ImageView>>()
     private val stationOnBitmaps = HashMap<String, Bitmap?>()
     private val stationOffBitmaps = HashMap<String, Bitmap?>()
+    private var wheelOffIconBitmap: Bitmap? = null
+    private var wheelScrubbingSlot: RadioWheelView.WheelSlot? = null
     private var lastAutoScrolledMediaId: String = ""
 
     private var stripItemSpanPx: Int = 0
@@ -92,25 +102,50 @@ class RadioList : Fragment() {
     private var lastTopInset: Int = 0
     private var lastBottomInset: Int = 0
 
+    private val settingsPrefListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        if (_binding == null || !isAdded) return@OnSharedPreferenceChangeListener
+        when (key) {
+            PREF_LOUDNESS, PREF_CAR_EQ -> updateSettingsCardValues()
+            PREF_WHEEL_ARC_SIDE -> {
+                updateSettingsCardValues()
+                val pack = activeThemePack
+                if (pack != null && isWheelTheme(pack)) {
+                    applyWheelOrientationAndStage(pack, loadedStations.size)
+                }
+            }
+        }
+    }
+
     private fun applyThemeInsets(pack: DynamicThemePack?) {
         if (_binding == null) return
-        val safeMarginPx = (16 * resources.displayMetrics.density).roundToInt()
+        val density = resources.displayMetrics.density
+        val safeMarginPx = (16 * density).roundToInt()
         val bleed = pack?.bleedStatusBar ?: true
+        val wheelMode = pack != null && isWheelTheme(pack)
+        val headerStartPx = ((if (wheelMode) 18 else 24) * density).roundToInt()
+        val headerEndPx = ((if (wheelMode) 18 else 16) * density).roundToInt()
         binding.dynamicThemeRoot.setBackgroundColor(Color.BLACK)
         if (bleed) {
             binding.dynamicThemeRoot.updatePadding(top = 0)
             binding.themeHeaderTitle.updateLayoutParams<ViewGroup.MarginLayoutParams> {
                 topMargin = lastTopInset + safeMarginPx
+                marginStart = headerStartPx
+                marginEnd = headerEndPx
             }
         } else {
             binding.dynamicThemeRoot.updatePadding(top = lastTopInset)
             binding.themeHeaderTitle.updateLayoutParams<ViewGroup.MarginLayoutParams> {
                 topMargin = safeMarginPx
+                marginStart = headerStartPx
+                marginEnd = headerEndPx
             }
         }
         binding.root.findViewById<View>(R.id.nowPlaying)?.updatePadding(bottom = lastBottomInset)
         binding.themeControlsBlock.updatePadding(bottom = lastBottomInset)
         binding.themeStripControlsBlock.updatePadding(bottom = lastBottomInset)
+        binding.themeSettingsContainer.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+            bottomMargin = lastBottomInset + (12 * density).roundToInt()
+        }
     }
 
     private val scrollSnapRunnable = Runnable {
@@ -213,9 +248,100 @@ class RadioList : Fragment() {
     private val binding get() = _binding!!
 
     private fun isStripLayout(pack: DynamicThemePack): Boolean {
-        return pack.layoutStyle.equals("strip", ignoreCase = true) ||
-            pack.layoutStyle.equals("gta4", ignoreCase = true) ||
-            pack.stationOffIconUris.isNotEmpty()
+        return !isWheelTheme(pack) && (
+            pack.layoutStyle.equals("strip", ignoreCase = true) ||
+                pack.layoutStyle.equals("gta4", ignoreCase = true) ||
+                pack.stationOffIconUris.isNotEmpty()
+            )
+    }
+
+    private fun isWheelTheme(pack: DynamicThemePack): Boolean {
+        return pack.layoutStyle.equals("wheel", ignoreCase = true) ||
+            pack.layoutStyle.equals("wheel_arc", ignoreCase = true)
+    }
+
+    private fun isArcWheelMode(pack: DynamicThemePack, stationCount: Int): Boolean {
+        val totalSlots = stationCount + 1
+        return pack.layoutStyle.equals("wheel_arc", ignoreCase = true) ||
+            (pack.layoutStyle.equals("wheel", ignoreCase = true) && totalSlots > pack.autoArcAbove)
+    }
+
+    private fun updateSettingsCardValues() {
+        val b = _binding ?: return
+        val ctx = context?.applicationContext ?: return
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
+        val loudnessOn = prefs.getBoolean(PREF_LOUDNESS, true)
+        val eqOn = prefs.getBoolean(PREF_CAR_EQ, false)
+        val arcSide = prefs.getString(PREF_WHEEL_ARC_SIDE, "left") ?: "left"
+        b.themeSettingsLoudnessValue.text = if (loudnessOn) "< On >" else "< Off >"
+        b.themeSettingsEqValue.text = if (eqOn) "< On >" else "< Off >"
+        b.themeSettingsWheelSideValue.text = if (arcSide.equals("right", ignoreCase = true)) "< Right >" else "< Left >"
+    }
+
+    private fun applyWheelOrientationAndStage(pack: DynamicThemePack, stationCount: Int) {
+        val b = _binding ?: return
+        val ctx = context?.applicationContext ?: return
+        val arcMode = isArcWheelMode(pack, stationCount)
+        b.themeSettingsWheelSideRow.visibility = if (arcMode) View.VISIBLE else View.GONE
+        b.themeSettingsBottomReserve.visibility = if (arcMode) View.GONE else View.VISIBLE
+
+        val prefs = PreferenceManager.getDefaultSharedPreferences(ctx)
+        val isRight = arcMode && (prefs.getString(PREF_WHEEL_ARC_SIDE, "left") ?: "left").equals("right", ignoreCase = true)
+
+        b.themeRadioWheel.wheelMode = when {
+            !arcMode -> RadioWheelView.WheelMode.FULL_CIRCLE
+            isRight -> RadioWheelView.WheelMode.ARC_RIGHT
+            else -> RadioWheelView.WheelMode.ARC_LEFT
+        }
+        b.themeHeaderTitle.gravity = if (isRight) Gravity.END else Gravity.START
+        b.themeSettingsTab.updateLayoutParams<FrameLayout.LayoutParams> {
+            gravity = if (isRight) Gravity.END else Gravity.START
+        }
+        updateSettingsCardValues()
+
+        b.themeRadioWheel.post {
+            positionWheelMetadataContainer()
+        }
+    }
+
+    private fun positionWheelMetadataContainer() {
+        val b = _binding ?: return
+        if (b.themeWheelStage.visibility != View.VISIBLE) return
+        val stageRect = b.themeRadioWheel.getMetadataStageRect()
+        val rectW = stageRect.width().roundToInt()
+        val rectH = stageRect.height().roundToInt()
+        if (rectW <= 0 || rectH <= 0) return
+
+        val density = resources.displayMetrics.density
+        val maxTextW = (rectW - (12 * density).roundToInt()).coerceAtLeast(48)
+        b.themeWheelMetaContainer.updateLayoutParams<FrameLayout.LayoutParams> {
+            width = rectW
+            height = rectH
+            leftMargin = stageRect.left.roundToInt()
+            topMargin = stageRect.top.roundToInt()
+            gravity = Gravity.TOP or Gravity.START
+        }
+
+        val artSize = min(
+            (100 * density).roundToInt(),
+            min((rectH * 0.36f).roundToInt(), (rectW * 0.56f).roundToInt())
+        ).coerceAtLeast((52 * density).roundToInt())
+        b.themeWheelArt.updateLayoutParams<ViewGroup.LayoutParams> {
+            width = artSize
+            height = artSize
+        }
+
+        val textViews = listOf(
+            b.themeWheelNowPlaying,
+            b.themeWheelStation,
+            b.themeWheelTitle,
+            b.themeWheelArtist,
+            b.themeWheelAlbum,
+            b.themeWheelOffLabel
+        )
+        for (tv in textViews) {
+            tv.maxWidth = maxTextW
+        }
     }
 
     private fun recenterInfiniteScrollIfNeeded() {
@@ -427,6 +553,39 @@ class RadioList : Fragment() {
 
         setupVolumeControls()
 
+        val prefs = PreferenceManager.getDefaultSharedPreferences(requireContext().applicationContext)
+        prefs.registerOnSharedPreferenceChangeListener(settingsPrefListener)
+        updateSettingsCardValues()
+
+        binding.themeSettingsLoudnessRow.setOnClickListener {
+            val cur = prefs.getBoolean(PREF_LOUDNESS, true)
+            prefs.edit().putBoolean(PREF_LOUDNESS, !cur).apply()
+            DynamicThemeManager.playClickSound(requireContext(), activeThemePack)
+            updateSettingsCardValues()
+        }
+        binding.themeSettingsEqRow.setOnClickListener {
+            val cur = prefs.getBoolean(PREF_CAR_EQ, false)
+            prefs.edit().putBoolean(PREF_CAR_EQ, !cur).apply()
+            DynamicThemeManager.playClickSound(requireContext(), activeThemePack)
+            updateSettingsCardValues()
+        }
+        binding.themeSettingsWheelSideRow.setOnClickListener {
+            val cur = prefs.getString(PREF_WHEEL_ARC_SIDE, "left") ?: "left"
+            val next = if (cur.equals("right", ignoreCase = true)) "left" else "right"
+            prefs.edit().putString(PREF_WHEEL_ARC_SIDE, next).apply()
+            DynamicThemeManager.playClickSound(requireContext(), activeThemePack)
+            updateSettingsCardValues()
+            val pack = activeThemePack
+            if (pack != null && isWheelTheme(pack)) {
+                applyWheelOrientationAndStage(pack, loadedStations.size)
+            }
+        }
+        binding.themeRadioWheel.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if ((r - l) != (or - ol) || (b - t) != (ob - ot)) {
+                positionWheelMetadataContainer()
+            }
+        }
+
         binding.themeRadioState.setOnClickListener { toggleRadioPower() }
         binding.themeStripRadioState.setOnClickListener { toggleRadioPower() }
         binding.themeStripRadioLabel.setOnClickListener { toggleRadioPower() }
@@ -501,6 +660,7 @@ class RadioList : Fragment() {
             val bars = ((curSys.toFloat() / maxSys.toFloat()) * binding.themeVolumeBar.maxBars).roundToInt()
             binding.themeVolumeBar.currentBars = bars
             binding.themeStripVolumeBar.currentBars = bars
+            binding.themeSettingsVolumeBar.currentBars = bars
         }
         syncBarsFromSystem()
 
@@ -510,9 +670,11 @@ class RadioList : Fragment() {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
             binding.themeVolumeBar.currentBars = bars
             binding.themeStripVolumeBar.currentBars = bars
+            binding.themeSettingsVolumeBar.currentBars = bars
         }
         binding.themeVolumeBar.onVolumeBarsChanged = onVolumeChanged
         binding.themeStripVolumeBar.onVolumeBarsChanged = onVolumeChanged
+        binding.themeSettingsVolumeBar.onVolumeBarsChanged = onVolumeChanged
 
         val obs = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
@@ -555,6 +717,8 @@ class RadioList : Fragment() {
                         DynamicThemeManager.loadBitmap(ctx, onUri, 256)
                         DynamicThemeManager.loadBitmap(ctx, offUri, 256)
                     }
+                    val wheelOffUri = DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, "Radio Off")
+                    DynamicThemeManager.loadBitmap(ctx, wheelOffUri, 256)
                 }
                 withContext(Dispatchers.Main.immediate) {
                     if (_binding != null && isAdded) {
@@ -578,9 +742,22 @@ class RadioList : Fragment() {
             (activity as? MainActivity)?.setFullscreenThemeMode(true)
         }
 
+        val wheelMode = isWheelTheme(pack)
         val stripMode = isStripLayout(pack)
-        binding.themeControlsBlock.visibility = if (stripMode) View.GONE else View.VISIBLE
-        binding.themeStripControlsBlock.visibility = if (stripMode) View.VISIBLE else View.GONE
+
+        if (wheelMode) {
+            binding.themeNowPlayingGroup.visibility = View.GONE
+            binding.themeControlsBlock.visibility = View.GONE
+            binding.themeStripControlsBlock.visibility = View.GONE
+            binding.themeWheelStage.visibility = View.VISIBLE
+            binding.themeSettingsContainer.visibility = View.VISIBLE
+        } else {
+            binding.themeWheelStage.visibility = View.GONE
+            binding.themeSettingsContainer.visibility = if (pack.showSettingsPanel) View.VISIBLE else View.GONE
+            binding.themeControlsBlock.visibility = if (stripMode) View.GONE else View.VISIBLE
+            binding.themeStripControlsBlock.visibility = if (stripMode) View.VISIBLE else View.GONE
+            binding.themeHeaderTitle.gravity = Gravity.START
+        }
 
         // Apply Header Title & Font
         binding.themeHeaderTitle.text = pack.headerTitle
@@ -607,6 +784,49 @@ class RadioList : Fragment() {
             bodyViews.forEach { it.typeface = tf }
         }
 
+        if (wheelMode || pack.showSettingsPanel) {
+            binding.themeSettingsTabAccent.setBackgroundColor(pack.accentColor)
+            binding.themeSettingsVolumeBar.continuousMode = true
+            binding.themeSettingsVolumeBar.activeBarColor = pack.accentColor
+            binding.themeSettingsVolumeBar.inactiveBarColor = Color.parseColor("#334A38")
+            pack.bodyTypeface?.let { tf ->
+                listOf(
+                    binding.themeSettingsTabLabel,
+                    binding.themeSettingsVolumeLabel,
+                    binding.themeSettingsLoudnessLabel,
+                    binding.themeSettingsLoudnessValue,
+                    binding.themeSettingsEqLabel,
+                    binding.themeSettingsEqValue,
+                    binding.themeSettingsWheelSideLabel,
+                    binding.themeSettingsWheelSideValue
+                ).forEach { it.typeface = tf }
+            }
+        }
+
+        if (wheelMode) {
+            val metaTf = pack.metadataTypeface ?: pack.bodyTypeface
+            val strokeW = if (pack.metadataStrokeWidthDp > 0f) pack.metadataStrokeWidthDp else 2.5f
+            listOf(
+                binding.themeWheelNowPlaying,
+                binding.themeWheelStation,
+                binding.themeWheelTitle,
+                binding.themeWheelArtist,
+                binding.themeWheelAlbum,
+                binding.themeWheelOffLabel
+            ).forEach { tv ->
+                metaTf?.let { tv.typeface = it }
+                tv.setTextColor(Color.WHITE)
+                tv.strokeColor = pack.metadataStrokeColor
+                tv.strokeWidthDp = strokeW
+            }
+            binding.themeRadioWheel.accentColor = pack.accentColor
+            applyWheelOrientationAndStage(pack, loadedStations.size)
+        } else if (pack.showSettingsPanel) {
+            binding.themeSettingsWheelSideRow.visibility = View.GONE
+            binding.themeSettingsBottomReserve.visibility = View.GONE
+            updateSettingsCardValues()
+        }
+
         binding.themeVolumeBar.continuousMode = false
         binding.themeVolumeBar.activeBarColor = pack.volumeBarColor
 
@@ -614,7 +834,7 @@ class RadioList : Fragment() {
         binding.themeStripVolumeBar.activeBarColor = pack.volumeBarColor
         binding.themeStripVolumeBar.inactiveBarColor = Color.parseColor("#3B3B3B")
 
-        if (!stripMode) {
+        if (!stripMode && !wheelMode) {
             binding.themeNowPlayingLabel.setTextColor(pack.activeTextColor)
             binding.themeSongTitle.setTextColor(pack.headerColor)
             binding.themeSongArtist.setTextColor(pack.activeTextColor)
@@ -677,6 +897,7 @@ class RadioList : Fragment() {
         (activity as? MainActivity)?.setFullscreenThemeMode(true)
         applyDynamicThemeShell(pack)
 
+        val wheelMode = isWheelTheme(pack)
         val stripMode = isStripLayout(pack)
 
         // Build Station Icons
@@ -688,6 +909,8 @@ class RadioList : Fragment() {
         stripViewsByMediaId.clear()
         stationOnBitmaps.clear()
         stationOffBitmaps.clear()
+        wheelOffIconBitmap = null
+        wheelScrubbingSlot = null
 
         val density = resources.displayMetrics.density
         val iconSizePx = ((if (stripMode) 64 else 52) * density).roundToInt()
@@ -715,6 +938,14 @@ class RadioList : Fragment() {
             stationOffBitmaps[mId] = offBmp
         }
 
+        val wheelOffUri = if (wheelMode) DynamicThemeManager.resolveStationIconUri(pack.stationIconUris, "Radio Off") else null
+        if (wheelMode && wheelOffUri != null) {
+            wheelOffIconBitmap = DynamicThemeManager.getCachedBitmap(wheelOffUri, 256)
+            if (wheelOffIconBitmap == null) {
+                missingIcons = true
+            }
+        }
+
         if (missingIcons) {
             val ctx = requireContext().applicationContext
             viewLifecycleOwner.lifecycleScope.launch(Dispatchers.IO) {
@@ -732,17 +963,32 @@ class RadioList : Fragment() {
                     stationOnBitmaps[mId] = onBmp
                     stationOffBitmaps[mId] = offBmp
                 }
+                val loadedOffBmp = if (wheelMode && wheelOffUri != null) {
+                    wheelOffIconBitmap ?: DynamicThemeManager.loadBitmap(ctx, wheelOffUri, 256)
+                } else null
                 withContext(Dispatchers.Main.immediate) {
                     if (_binding != null && isAdded) {
-                        for ((mId, views) in stripViewsByMediaId) {
-                            val offBmp = stationOffBitmaps[mId]
-                            if (offBmp != null) {
-                                for (iv in views) iv.setImageBitmap(offBmp)
-                            }
+                        if (loadedOffBmp != null) {
+                            wheelOffIconBitmap = loadedOffBmp
                         }
-                        for ((mId, iv) in stationIconViews) {
-                            val onBmp = stationOnBitmaps[mId]
-                            if (onBmp != null) iv.setImageBitmap(onBmp)
+                        if (wheelMode) {
+                            for (item in children) {
+                                binding.themeRadioWheel.updateSlotIcon(item.mediaId, stationOnBitmaps[item.mediaId])
+                            }
+                            if (loadedOffBmp != null) {
+                                binding.themeRadioWheel.updateSlotIcon(null, loadedOffBmp)
+                            }
+                        } else {
+                            for ((mId, views) in stripViewsByMediaId) {
+                                val offBmp = stationOffBitmaps[mId]
+                                if (offBmp != null) {
+                                    for (iv in views) iv.setImageBitmap(offBmp)
+                                }
+                            }
+                            for ((mId, iv) in stationIconViews) {
+                                val onBmp = stationOnBitmaps[mId]
+                                if (onBmp != null) iv.setImageBitmap(onBmp)
+                            }
                         }
                         updateDynamicThemePlaybackUi()
                     }
@@ -750,7 +996,43 @@ class RadioList : Fragment() {
             }
         }
 
-        if (stripMode && children.isNotEmpty()) {
+        if (wheelMode) {
+            val slots = ArrayList<RadioWheelView.WheelSlot>(children.size + 1)
+            for (item in children) {
+                val mId = item.mediaId
+                val title = item.mediaMetadata.title?.toString() ?: ""
+                slots.add(RadioWheelView.WheelSlot(mediaId = mId, title = title, icon = stationOnBitmaps[mId], isOffSlot = false))
+            }
+            slots.add(RadioWheelView.WheelSlot(mediaId = null, title = "Radio Off", icon = wheelOffIconBitmap, isOffSlot = true))
+            binding.themeRadioWheel.setSlots(slots)
+            binding.themeRadioWheel.onSlotHovered = { slot ->
+                wheelScrubbingSlot = slot
+                context?.let { DynamicThemeManager.playClickSound(it, pack) }
+                updateDynamicThemePlaybackUi()
+            }
+            binding.themeRadioWheel.onSlotCommitted = { slot ->
+                wheelScrubbingSlot = null
+                val transportControls = musicServiceConnection?.transportControls
+                val currentActiveId = currentMetadata.mediaId ?: ""
+                if (slot.isOffSlot || slot.mediaId == null) {
+                    pendingTappedMediaId = null
+                    DynamicThemeManager.stopTuningNoise("wheel_off")
+                    musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
+                    transportControls?.stop()
+                } else {
+                    val targetId = slot.mediaId
+                    selectedStationTitle = slot.title
+                    centeredMediaId = targetId
+                    if (!currentPlaybackState.isPlaying || targetId != currentActiveId) {
+                        pendingTappedMediaId = targetId
+                        pendingTapTimestampMs = SystemClock.elapsedRealtime()
+                        transportControls?.playFromMediaId(targetId, null)
+                    }
+                }
+                updateDynamicThemePlaybackUi()
+            }
+            applyWheelOrientationAndStage(pack, children.size)
+        } else if (stripMode && children.isNotEmpty()) {
             val hasOffIcons = pack.stationOffIconUris.isNotEmpty()
             for (cycle in 0 until REPEAT_CYCLES) {
                 for (item in children) {
@@ -833,6 +1115,166 @@ class RadioList : Fragment() {
         updateDynamicThemePlaybackUi()
     }
 
+    private fun setMarqueeTextIfChanged(view: TextView, value: String) {
+        if (view.text.toString() != value) {
+            view.text = value
+        }
+        view.isSelected = true
+    }
+
+    private fun isTalkOrNewsBroadcast(
+        stationTitle: String,
+        songTitle: String,
+        cleanArtist: String,
+        cleanAlbum: String,
+        cachedSongArt: Bitmap?,
+        hideArtOnNonSong: Boolean
+    ): Boolean {
+        val isKnownTalkStation = Rpf7MetadataRepository.stationInfoByRpf.values.any {
+            it.stationName.equals(stationTitle, ignoreCase = true) && it.isTalk
+        }
+        if (isKnownTalkStation || stationTitle.contains("talk", ignoreCase = true)) {
+            return true
+        }
+        if (cleanAlbum.isBlank() && cachedSongArt == null) {
+            if (cleanArtist.equals(stationTitle, ignoreCase = true) ||
+                cleanArtist.contains("talk", ignoreCase = true) ||
+                songTitle.contains("news", ignoreCase = true) ||
+                songTitle.contains("talk show", ignoreCase = true)
+            ) {
+                return true
+            }
+            if (hideArtOnNonSong && Rpf7MetadataRepository.stationInfoByRpf.values.any {
+                    it.stationName.equals(stationTitle, ignoreCase = true) && it.isContinuousMix
+                }
+            ) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun updateWheelPlaybackUi(
+        pack: DynamicThemePack,
+        effectivePlaying: Boolean,
+        activeMediaId: String,
+        activeStationFromMeta: String
+    ) {
+        val b = _binding ?: return
+        val wheelHighlightId = pendingTappedMediaId ?: if (effectivePlaying) activeMediaId else null
+        val wheelIsPlaying = effectivePlaying || pendingTappedMediaId != null
+        b.themeRadioWheel.setActiveMediaId(wheelHighlightId, wheelIsPlaying)
+
+        val scrubbing = wheelScrubbingSlot
+        if (scrubbing != null) {
+            if (scrubbing.isOffSlot || scrubbing.mediaId == null) {
+                b.themeWheelNowPlaying.visibility = View.GONE
+                b.themeWheelArt.visibility = View.GONE
+                b.themeWheelStation.visibility = View.GONE
+                b.themeWheelTitle.visibility = View.GONE
+                b.themeWheelArtist.visibility = View.GONE
+                b.themeWheelAlbum.visibility = View.GONE
+                b.themeWheelOffLabel.visibility = View.VISIBLE
+                setMarqueeTextIfChanged(b.themeWheelOffLabel, "Radio Off")
+                return
+            }
+            if (!effectivePlaying || scrubbing.mediaId != activeMediaId) {
+                b.themeWheelOffLabel.visibility = View.GONE
+                b.themeWheelNowPlaying.visibility = View.GONE
+                b.themeWheelArt.visibility = View.GONE
+                b.themeWheelTitle.visibility = View.GONE
+                b.themeWheelArtist.visibility = View.GONE
+                b.themeWheelAlbum.visibility = View.GONE
+                b.themeWheelStation.visibility = View.VISIBLE
+                setMarqueeTextIfChanged(b.themeWheelStation, scrubbing.title)
+                return
+            }
+        }
+
+        // State 1: Radio Off
+        if (!effectivePlaying) {
+            b.themeWheelNowPlaying.visibility = View.GONE
+            b.themeWheelArt.visibility = View.GONE
+            b.themeWheelStation.visibility = View.GONE
+            b.themeWheelTitle.visibility = View.GONE
+            b.themeWheelArtist.visibility = View.GONE
+            b.themeWheelAlbum.visibility = View.GONE
+            b.themeWheelOffLabel.visibility = View.VISIBLE
+            setMarqueeTextIfChanged(b.themeWheelOffLabel, "Radio Off")
+            return
+        }
+
+        val stationTitle = activeStationFromMeta.ifBlank {
+            loadedStations.find { it.mediaId == activeMediaId }?.mediaMetadata?.title?.toString() ?: ""
+        }
+        val isSongOrShow = !DynamicThemeManager.isPlayingTuningNoise() && currentMetadata.isSong
+        val songTitle = currentMetadata.title?.toString() ?: ""
+        val cleanArtist = currentMetadata.artist?.toString() ?: ""
+        val cleanAlbum = currentMetadata.albumArtist?.toString() ?: ""
+
+        // State 4: Ads, DJ Chatter, Weather, Station IDs
+        if (!isSongOrShow || songTitle.isBlank() || songTitle.equals(stationTitle, ignoreCase = true)) {
+            b.themeWheelOffLabel.visibility = View.GONE
+            b.themeWheelNowPlaying.visibility = View.GONE
+            b.themeWheelArt.visibility = View.GONE
+            b.themeWheelTitle.visibility = View.GONE
+            b.themeWheelArtist.visibility = View.GONE
+            b.themeWheelAlbum.visibility = View.GONE
+            b.themeWheelStation.visibility = View.VISIBLE
+            setMarqueeTextIfChanged(b.themeWheelStation, stationTitle)
+            return
+        }
+
+        val cachedSongArt = if (cleanArtist.isNotBlank()) {
+            AlbumArtDownloader.getCachedAlbumArt(requireContext(), cleanArtist, songTitle)
+        } else null
+        val isTalkOrNews = isTalkOrNewsBroadcast(
+            stationTitle = stationTitle,
+            songTitle = songTitle,
+            cleanArtist = cleanArtist,
+            cleanAlbum = cleanAlbum,
+            cachedSongArt = cachedSongArt,
+            hideArtOnNonSong = pack.hideArtOnNonSong
+        )
+
+        b.themeWheelOffLabel.visibility = View.GONE
+        b.themeWheelNowPlaying.visibility = View.VISIBLE
+        setMarqueeTextIfChanged(b.themeWheelNowPlaying, "NOW PLAYING")
+        b.themeWheelStation.visibility = View.VISIBLE
+        setMarqueeTextIfChanged(b.themeWheelStation, stationTitle)
+        b.themeWheelTitle.visibility = View.VISIBLE
+        setMarqueeTextIfChanged(b.themeWheelTitle, songTitle)
+        if (cleanArtist.isNotBlank()) {
+            b.themeWheelArtist.visibility = View.VISIBLE
+            setMarqueeTextIfChanged(b.themeWheelArtist, cleanArtist)
+        } else {
+            b.themeWheelArtist.visibility = View.GONE
+        }
+
+        // State 3: Talk Radio Show / News
+        if (isTalkOrNews) {
+            b.themeWheelArt.visibility = View.GONE
+            b.themeWheelAlbum.visibility = View.GONE
+            return
+        }
+
+        // State 2: Music Song
+        if (cleanAlbum.isNotBlank()) {
+            b.themeWheelAlbum.visibility = View.VISIBLE
+            setMarqueeTextIfChanged(b.themeWheelAlbum, cleanAlbum)
+        } else {
+            b.themeWheelAlbum.visibility = View.GONE
+        }
+
+        val artBmp = cachedSongArt ?: currentMetadata.iconBitmap ?: stationOnBitmaps[activeMediaId]
+        if (artBmp != null) {
+            b.themeWheelArt.setImageBitmap(artBmp)
+        } else {
+            b.themeWheelArt.setImageResource(R.drawable.outline_radio_24)
+        }
+        b.themeWheelArt.visibility = View.VISIBLE
+    }
+
     private fun updateDynamicThemePlaybackUi() {
         val pack = activeThemePack ?: return
         if (_binding == null) return
@@ -875,6 +1317,11 @@ class RadioList : Fragment() {
                 ?: loadedStations.find { it.mediaId == activeMediaId }?.mediaMetadata?.title?.toString()
                 ?: ""
         } else ""
+
+        if (isWheelTheme(pack)) {
+            updateWheelPlaybackUi(pack, effectivePlaying, activeMediaId, activeStationFromMeta)
+            return
+        }
 
         if (stripMode) {
             val statusColor = if (effectivePlaying) pack.activeTextColor else pack.labelColor
@@ -1061,6 +1508,12 @@ class RadioList : Fragment() {
         super.onDestroyView()
         bgHandler.removeCallbacksAndMessages(null)
         scrollHandler.removeCallbacksAndMessages(null)
+        context?.applicationContext?.let { appCtx ->
+            try {
+                PreferenceManager.getDefaultSharedPreferences(appCtx)
+                    .unregisterOnSharedPreferenceChangeListener(settingsPrefListener)
+            } catch (_: Exception) {}
+        }
         volumeObserver?.let {
             try { requireContext().contentResolver.unregisterContentObserver(it) } catch (_: Exception) {}
         }

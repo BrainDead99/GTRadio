@@ -363,6 +363,289 @@
 
         </LinearLayout>
 
+        <!-- Circular Wheel & One-Handed Arc Theme Stage -->
+        <FrameLayout
+            android:id="@+id/themeWheelStage"
+            android:layout_width="0dp"
+            android:layout_height="0dp"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="4dp"
+            android:clipChildren="false"
+            android:clipToPadding="false"
+            android:visibility="gone"
+            app:layout_constraintBottom_toTopOf="@id/themeSettingsContainer"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/themeHeaderTitle">
+
+            <com.sc.gtradio.RadioWheelView
+                android:id="@+id/themeRadioWheel"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <LinearLayout
+                android:id="@+id/themeWheelMetaContainer"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:clipChildren="false"
+                android:clipToPadding="false"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:paddingHorizontal="4dp">
+
+                <com.sc.gtradio.OutlinedMarqueeTextView
+                    android:id="@+id/themeWheelNowPlaying"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:letterSpacing="0.06"
+                    android:paddingHorizontal="4dp"
+                    android:text="NOW PLAYING"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <ImageView
+                    android:id="@+id/themeWheelArt"
+                    android:layout_width="96dp"
+                    android:layout_height="96dp"
+                    android:layout_marginTop="6dp"
+                    android:layout_marginBottom="6dp"
+                    android:background="#0A0A0A"
+                    android:scaleType="centerCrop"
+                    tools:ignore="ContentDescription" />
+
+                <com.sc.gtradio.OutlinedMarqueeTextView
+                    android:id="@+id/themeWheelStation"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:paddingHorizontal="4dp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    tools:text="Station Name" />
+
+                <com.sc.gtradio.OutlinedMarqueeTextView
+                    android:id="@+id/themeWheelTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:gravity="center"
+                    android:paddingHorizontal="4dp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    tools:text="Song Title" />
+
+                <com.sc.gtradio.OutlinedMarqueeTextView
+                    android:id="@+id/themeWheelArtist"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:gravity="center"
+                    android:paddingHorizontal="4dp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    tools:text="Artist" />
+
+                <com.sc.gtradio.OutlinedMarqueeTextView
+                    android:id="@+id/themeWheelAlbum"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:gravity="center"
+                    android:paddingHorizontal="4dp"
+                    android:textColor="#FFFFFF"
+                    android:textSize="12sp"
+                    tools:text="Album Name" />
+
+                <com.sc.gtradio.OutlinedMarqueeTextView
+                    android:id="@+id/themeWheelOffLabel"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:paddingHorizontal="4dp"
+                    android:text="Radio Off"
+                    android:textColor="#FFFFFF"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:visibility="gone" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <!-- Native Code-Drawn Live Settings Card -->
+        <LinearLayout
+            android:id="@+id/themeSettingsContainer"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="18dp"
+            android:layout_marginEnd="18dp"
+            android:layout_marginBottom="12dp"
+            android:orientation="vertical"
+            android:visibility="gone"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent">
+
+            <FrameLayout
+                android:id="@+id/themeSettingsTabRow"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:id="@+id/themeSettingsTab"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="start"
+                    android:background="#FFFFFFFF"
+                    android:minWidth="96dp"
+                    android:orientation="vertical">
+
+                    <View
+                        android:id="@+id/themeSettingsTabAccent"
+                        android:layout_width="match_parent"
+                        android:layout_height="3.5dp"
+                        android:background="#5EC2F2" />
+
+                    <TextView
+                        android:id="@+id/themeSettingsTabLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:letterSpacing="0.06"
+                        android:paddingHorizontal="14dp"
+                        android:paddingVertical="4dp"
+                        android:text="SETTINGS"
+                        android:textColor="#000000"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </FrameLayout>
+
+            <LinearLayout
+                android:id="@+id/themeSettingsBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#C2000000"
+                android:orientation="vertical"
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="6dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/themeSettingsVolumeLabel"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Radio Volume"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp" />
+
+                    <com.sc.gtradio.VolumeBarView
+                        android:id="@+id/themeSettingsVolumeBar"
+                        android:layout_width="124dp"
+                        android:layout_height="18dp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/themeSettingsLoudnessRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/themeSettingsLoudnessLabel"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Loudness Normalization"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/themeSettingsLoudnessValue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="&lt; On &gt;"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/themeSettingsEqRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/themeSettingsEqLabel"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Car Stereo EQ"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/themeSettingsEqValue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="&lt; Off &gt;"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:id="@+id/themeSettingsWheelSideRow"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:background="?attr/selectableItemBackground"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:visibility="gone">
+
+                    <TextView
+                        android:id="@+id/themeSettingsWheelSideLabel"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Wheel Layout"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp" />
+
+                    <TextView
+                        android:id="@+id/themeSettingsWheelSideValue"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="&lt; Left &gt;"
+                        android:textColor="#FFFFFF"
+                        android:textSize="14sp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <View
+                android:id="@+id/themeSettingsBottomReserve"
+                android:layout_width="match_parent"
+                android:layout_height="36dp" />
+        </LinearLayout>
+
     </androidx.constraintlayout.widget.ConstraintLayout>
 
 </FrameLayout>
