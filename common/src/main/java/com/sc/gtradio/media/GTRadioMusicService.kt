@@ -951,9 +951,10 @@ open class GTRadioMusicService : MediaLibraryService() {
         val noisePack = DynamicThemeManager.findNoisePackForSeries(applicationContext, group.groupName)
         val hasJson = noisePack?.hasThemeJson ?: false
         val soundCount = noisePack?.noiseSoundUris?.size ?: 0
-        val shouldPlayNoise = noisePack != null && soundCount > 0 && hasJson
+        val isTuningNoiseMode = noisePack?.sfxMode.equals("tuning_noise", ignoreCase = true)
+        val shouldPlayNoise = noisePack != null && hasJson && isTuningNoiseMode && soundCount > 0
 
-        GTRadioLogger.log("[TUNE] Trigger: $trigger -> station '${station.stationName}' (index=$stationIndex) in series '${group.groupName}' | pack: matched=${noisePack != null}, hasJson=$hasJson, sounds=$soundCount")
+        GTRadioLogger.log("[TUNE] Trigger: $trigger -> station '${station.stationName}' (index=$stationIndex) in series '${group.groupName}' | pack: matched=${noisePack != null}, hasJson=$hasJson, sfxMode=${noisePack?.sfxMode}, sounds=$soundCount")
 
         radioPlayer.resetForStationSwitch()
 

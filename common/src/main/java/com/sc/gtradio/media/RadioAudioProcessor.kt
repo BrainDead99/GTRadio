@@ -26,6 +26,9 @@ class RadioAudioProcessor(context: Context) : BaseAudioProcessor() {
     @Volatile
     var isCarEqEnabled: Boolean = false
 
+    @Volatile
+    private var pendingStateReset: Boolean = false
+
     private val prefs: SharedPreferences = PreferenceManager.getDefaultSharedPreferences(context)
 
     // Loudness Normalization DSP state
@@ -61,13 +64,17 @@ class RadioAudioProcessor(context: Context) : BaseAudioProcessor() {
     }
 
     fun updateSettings(preferences: SharedPreferences) {
-        isLoudnessEnabled = preferences.getBoolean("loudness_normalization_enabled", true)
-        isCarEqEnabled = preferences.getBoolean("car_stereo_eq_enabled", false)
+        val newLoudness = preferences.getBoolean("loudness_normalization_enabled", true)
+        val newCarEq = preferences.getBoolean("car_stereo_eq_enabled", false)
+        if (newLoudness != isLoudnessEnabled || newCarEq != isCarEqEnabled) {
+            pendingStateReset = true
+        }
+        isLoudnessEnabled = newLoudness
+        isCarEqEnabled = newCarEq
     }
 
     override fun isActive(): Boolean {
-        return (isLoudnessEnabled || isCarEqEnabled) &&
-            outputAudioFormat != AudioProcessor.AudioFormat.NOT_SET
+        return outputAudioFormat != AudioProcessor.AudioFormat.NOT_SET
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -146,6 +153,11 @@ class RadioAudioProcessor(context: Context) : BaseAudioProcessor() {
         if (remaining == 0) return
 
         val outputBuffer = replaceOutputBuffer(remaining)
+
+        if (pendingStateReset) {
+            pendingStateReset = false
+            resetFilterState()
+        }
 
         val loudnessOn = isLoudnessEnabled
         val carEqOn = isCarEqEnabled

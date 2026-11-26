@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.media.AudioAttributes
 import android.media.MediaPlayer
+import android.media.SoundPool
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -21,6 +22,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Random
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
 data class DynamicThemePack(
@@ -41,7 +43,17 @@ data class DynamicThemePack(
     val stationOffIconUris: Map<String, Uri> = emptyMap(),
     val noiseSoundUris: List<Uri> = emptyList(),
     val layoutStyle: String = "grid",
-    val hasThemeJson: Boolean = true
+    val hasThemeJson: Boolean = true,
+    val bleedStatusBar: Boolean = true,
+    val accentColor: Int = volumeBarColor,
+    val metadataTypeface: Typeface? = null,
+    val metadataStrokeColor: Int = Color.BLACK,
+    val metadataStrokeWidthDp: Float = 0f,
+    val sfxMode: String = "tuning_noise",
+    val clickSoundUris: List<Uri> = emptyList(),
+    val autoArcAbove: Int = 18,
+    val showSettingsPanel: Boolean = false,
+    val hideArtOnNonSong: Boolean = false
 ) {
     val hasFullThemeUi: Boolean
         get() = hasThemeJson && (portraitBgUris.isNotEmpty() || landscapeBgUris.isNotEmpty())
@@ -165,6 +177,7 @@ object DynamicThemeManager {
         synchronized(wallpaperCache) {
             wallpaperCache.evictAll()
         }
+        releaseClickSound()
         scannedPacks = null
         lastScannedThemeUri = null
     }
@@ -205,10 +218,19 @@ object DynamicThemeManager {
     }
 
     fun normalizeStationKey(raw: String): String {
-        val base = raw.lowercase().trim()
+        val withoutExt = raw.lowercase().trim()
             .replace(Regex("\\.(png|jpg|jpeg|webp|bmp|gif|svg)$"), "")
+        val compact = withoutExt.replace(Regex("[^a-z0-9]"), "")
+        if (compact == "off" || compact == "officon" || compact == "radiooff" || compact == "radioofficon") {
+            return "radiooff"
+        }
+        stationAliases[compact]?.let { return it }
+        val base = withoutExt
             .replace(Regex("(_on_icon|_off_icon|_icon|_on|_off|logo|radio_)"), "")
             .replace(Regex("[^a-z0-9]"), "")
+        if (base == "off" || base == "radiooff") {
+            return "radiooff"
+        }
         stationAliases[base]?.let { return it }
         val noTrailingDigits = base.replace(Regex("[0-9]+$"), "")
         if (noTrailingDigits.isNotBlank()) {
@@ -218,21 +240,32 @@ object DynamicThemeManager {
     }
 
     fun resolveStationIconUri(iconMap: Map<String, Uri>, stationName: String): Uri? {
-        if (iconMap.isEmpty()) return null
+        if (iconMap.isEmpty() || stationName.isBlank()) return null
         val norm = normalizeStationKey(stationName)
+        if (norm.isBlank()) return null
         iconMap[norm]?.let { return it }
-        for ((k, u) in iconMap) {
-            if (k.length >= 3 && (norm.contains(k) || k.contains(norm))) {
-                return u
+        val normNoDigits = norm.replace(Regex("[0-9]+$"), "")
+        if (normNoDigits.length >= 3) {
+            for ((k, u) in iconMap) {
+                val kNoDigits = k.replace(Regex("[0-9]+$"), "")
+                if (kNoDigits == normNoDigits) return u
             }
         }
-        return null
+        return iconMap.entries
+            .filter { (k, _) -> k.length >= 3 && (norm.contains(k) || k.contains(norm)) }
+            .maxByOrNull { it.key.length }
+            ?.value
     }
 
     fun findNoisePackForSeries(context: Context, seriesName: String?): DynamicThemePack? {
         if (seriesName.isNullOrBlank() || !isDynamicThemeEnabled(context)) return null
         val exact = findThemeForSeries(context, seriesName) ?: return null
-        if (!exact.hasThemeJson || exact.noiseSoundUris.isEmpty()) return null
+        if (!exact.hasThemeJson ||
+            !exact.sfxMode.equals("tuning_noise", ignoreCase = true) ||
+            exact.noiseSoundUris.isEmpty()
+        ) {
+            return null
+        }
         return exact
     }
 
@@ -479,14 +512,27 @@ object DynamicThemeManager {
         val activeTextColor = parseColorSafe(if (isGta4Folder && activeColorHex == "#B8CFE6") defaultGold else activeColorHex, Color.parseColor("#B8CFE6"))
         val volumeBarColor = parseColorSafe(if (isGta4Folder && volColorHex == "#B8CFE6") "#9E9E9E" else volColorHex, Color.parseColor("#B8CFE6"))
 
+        val metadataFontName = optStringAny(obj, "", "metadataFont", "centerMetadataFont")
+        val bleedStatusBar = optBooleanAny(obj, true, "bleedStatusBar", "bleed_status_bar", "hide_top_inset")
+        val accentColorHex = optStringAny(obj, "", "accentColor", "accent_color")
+        val accentColor = if (accentColorHex.isNotBlank()) parseColorSafe(accentColorHex, volumeBarColor) else volumeBarColor
+        val metadataStrokeHex = optStringAny(obj, "", "metadataStrokeColor", "metadata_stroke_color")
+        val metadataStrokeColor = if (metadataStrokeHex.isNotBlank()) parseColorSafe(metadataStrokeHex, Color.BLACK) else Color.BLACK
+        val metadataStrokeWidthDp = optFloatAny(obj, 0f, "metadataStrokeWidthDp", "metadata_stroke_width_dp").coerceAtLeast(0f)
+        val autoArcAbove = optIntAny(obj, 18, "autoArcAbove", "auto_arc_above").coerceAtLeast(1)
+        val showSettingsPanel = optBooleanAny(obj, false, "showSettingsPanel", "show_settings_panel")
+        val hideArtOnNonSong = optBooleanAny(obj, false, "hideArtOnNonSong", "hide_art_on_non_song")
+
         val portraitBgs = ArrayList<Uri>()
         val landscapeBgs = ArrayList<Uri>()
         val onIcons = HashMap<String, Uri>()
         val offIcons = HashMap<String, Uri>()
         val noiseUris = ArrayList<Uri>()
+        val clickUris = ArrayList<Uri>()
         var groupLogoUri: Uri? = null
         var headerTf: Typeface? = null
         var bodyTf: Typeface? = null
+        var metadataTf: Typeface? = null
 
         for (c in simpleChildren) {
             if (!c.isDirectory && c.name.lowercase().startsWith("logo.")) {
@@ -543,7 +589,10 @@ object DynamicThemeManager {
                 }
                 "font", "fonts" -> {
                     val fontCacheDir = File(context.cacheDir, "theme_fonts_${folderName.hashCode()}").apply { mkdirs() }
-                    val fontFiles = subChildren.filter { !it.isDirectory && it.name.lowercase().endsWith(".ttf") }
+                    val fontFiles = subChildren.filter {
+                        val fLower = it.name.lowercase()
+                        !it.isDirectory && (fLower.endsWith(".ttf") || fLower.endsWith(".otf"))
+                    }
                     for (ff in fontFiles) {
                         val cachedFile = copyUriToCache(context, ff.uri, File(fontCacheDir, ff.name)) ?: continue
                         try {
@@ -561,10 +610,14 @@ object DynamicThemeManager {
                             ) {
                                 bodyTf = tf
                             }
+                            if (metadataFontName.isNotBlank() && ff.name.equals(metadataFontName, ignoreCase = true)) {
+                                metadataTf = tf
+                            }
                         } catch (_: Exception) {}
                     }
                     if (headerTf == null && bodyTf != null) headerTf = bodyTf
                     if (bodyTf == null && headerTf != null) bodyTf = headerTf
+                    if (metadataTf == null) metadataTf = bodyTf
                 }
                 "sounds", "sound" -> {
                     subChildren
@@ -572,6 +625,9 @@ object DynamicThemeManager {
                         .sortedBy { it.name.lowercase() }
                         .forEach { snd ->
                             val sLower = snd.name.lowercase()
+                            if (sLower.endsWith(".wav") || sLower.endsWith(".ogg") || sLower.endsWith(".mp3")) {
+                                clickUris.add(snd.uri)
+                            }
                             if (sLower.contains("noise") || sLower.contains("static") || sLower.endsWith(".wav") || sLower.endsWith(".mp3") || sLower.endsWith(".ogg")) {
                                 noiseUris.add(snd.uri)
                             }
@@ -584,12 +640,27 @@ object DynamicThemeManager {
             onIcons.putAll(offIcons)
         }
 
-        val layoutStyle = obj.optString(
+        val layoutStyle = optStringAny(
+            obj,
+            if (isGta4Folder || offIcons.isNotEmpty()) "strip" else "grid",
             "layoutStyle",
-            if (isGta4Folder || offIcons.isNotEmpty()) "strip" else "grid"
+            "layout_style"
         )
+        val defaultSfxMode = if (
+            layoutStyle.equals("wheel", ignoreCase = true) ||
+            layoutStyle.equals("wheel_arc", ignoreCase = true)
+        ) {
+            "click"
+        } else {
+            "tuning_noise"
+        }
+        val rawSfxMode = optStringAny(obj, defaultSfxMode, "sfxMode", "sfx_mode").lowercase().trim()
+        val sfxMode = when (rawSfxMode) {
+            "tuning_noise", "click", "none" -> rawSfxMode
+            else -> defaultSfxMode
+        }
 
-        GTRadioLogger.log("DynamicThemeManager: Loaded theme pack '$seriesName' (style=$layoutStyle, onIcons=${onIcons.size}, offIcons=${offIcons.size}, bgP=${portraitBgs.size}, sounds=${noiseUris.size})")
+        GTRadioLogger.log("DynamicThemeManager: Loaded theme pack '$seriesName' (style=$layoutStyle, sfx=$sfxMode, bleed=$bleedStatusBar, onIcons=${onIcons.size}, offIcons=${offIcons.size}, bgP=${portraitBgs.size}, sounds=${noiseUris.size})")
 
         return DynamicThemePack(
             seriesName = seriesName,
@@ -609,7 +680,17 @@ object DynamicThemeManager {
             stationOffIconUris = offIcons,
             noiseSoundUris = noiseUris,
             layoutStyle = layoutStyle,
-            hasThemeJson = true
+            hasThemeJson = true,
+            bleedStatusBar = bleedStatusBar,
+            accentColor = accentColor,
+            metadataTypeface = metadataTf,
+            metadataStrokeColor = metadataStrokeColor,
+            metadataStrokeWidthDp = metadataStrokeWidthDp,
+            sfxMode = sfxMode,
+            clickSoundUris = clickUris,
+            autoArcAbove = autoArcAbove,
+            showSettingsPanel = showSettingsPanel,
+            hideArtOnNonSong = hideArtOnNonSong
         )
     }
 
@@ -749,7 +830,11 @@ object DynamicThemeManager {
         val myGen = tuneGeneration.incrementAndGet()
         stopTuningNoiseInternal("new_tune_request")
 
-        if (pack.noiseSoundUris.isEmpty() || !pack.hasThemeJson || !isDynamicThemeEnabled(context)) {
+        if (!pack.sfxMode.equals("tuning_noise", ignoreCase = true) ||
+            pack.noiseSoundUris.isEmpty() ||
+            !pack.hasThemeJson ||
+            !isDynamicThemeEnabled(context)
+        ) {
             onComplete()
             return
         }
@@ -852,6 +937,193 @@ object DynamicThemeManager {
         }
     }
 
+    private val clickLock = Any()
+    private val clickIoExecutor = Executors.newSingleThreadExecutor()
+    private var clickSoundPool: SoundPool? = null
+    private var loadingClickUri: Uri? = null
+    private var loadedClickUri: Uri? = null
+    private var loadedClickSoundId: Int = 0
+    @Volatile private var clickSoundReady: Boolean = false
+    @Volatile private var pendingClickPlay: Boolean = false
+
+    fun preloadClickSound(context: Context, pack: DynamicThemePack?) {
+        preloadClickSoundInternal(context.applicationContext, pack, playWhenLoaded = false)
+    }
+
+    fun playClickSound(context: Context, pack: DynamicThemePack?) {
+        val appCtx = context.applicationContext
+        if (pack == null ||
+            !pack.sfxMode.equals("click", ignoreCase = true) ||
+            pack.clickSoundUris.isEmpty() ||
+            !isDynamicThemeEnabled(appCtx)
+        ) {
+            return
+        }
+        val targetUri = pack.clickSoundUris.first()
+        var poolToPlay: SoundPool? = null
+        var soundIdToPlay = 0
+        var needPreload = false
+        synchronized(clickLock) {
+            val pool = clickSoundPool
+            if (pool != null && loadedClickUri == targetUri) {
+                if (clickSoundReady && loadedClickSoundId != 0) {
+                    poolToPlay = pool
+                    soundIdToPlay = loadedClickSoundId
+                } else {
+                    pendingClickPlay = true
+                }
+            } else if (loadingClickUri == targetUri) {
+                pendingClickPlay = true
+            } else {
+                needPreload = true
+            }
+        }
+        if (poolToPlay != null && soundIdToPlay != 0) {
+            poolToPlay?.play(soundIdToPlay, 0.9f, 0.9f, 1, 0, 1.0f)
+            return
+        }
+        if (needPreload) {
+            preloadClickSoundInternal(appCtx, pack, playWhenLoaded = true)
+        }
+    }
+
+    fun releaseClickSound() {
+        val oldPool: SoundPool?
+        synchronized(clickLock) {
+            oldPool = clickSoundPool
+            clickSoundPool = null
+            loadingClickUri = null
+            loadedClickUri = null
+            loadedClickSoundId = 0
+            clickSoundReady = false
+            pendingClickPlay = false
+        }
+        oldPool?.let { runCatching { it.release() } }
+    }
+
+    private fun preloadClickSoundInternal(appCtx: Context, pack: DynamicThemePack?, playWhenLoaded: Boolean) {
+        if (pack == null ||
+            !pack.sfxMode.equals("click", ignoreCase = true) ||
+            pack.clickSoundUris.isEmpty() ||
+            !isDynamicThemeEnabled(appCtx)
+        ) {
+            return
+        }
+        val targetUri = pack.clickSoundUris.first()
+        synchronized(clickLock) {
+            val existing = clickSoundPool
+            if (existing != null && loadedClickUri == targetUri) {
+                if (playWhenLoaded) {
+                    if (clickSoundReady && loadedClickSoundId != 0) {
+                        existing.play(loadedClickSoundId, 0.9f, 0.9f, 1, 0, 1.0f)
+                    } else {
+                        pendingClickPlay = true
+                    }
+                }
+                return
+            }
+            if (loadingClickUri == targetUri) {
+                if (playWhenLoaded) {
+                    pendingClickPlay = true
+                }
+                return
+            }
+            loadingClickUri = targetUri
+            pendingClickPlay = playWhenLoaded
+        }
+
+        clickIoExecutor.execute {
+            try {
+                val ext = resolveClickExtension(appCtx, targetUri)
+                val cacheDir = File(appCtx.cacheDir, "theme_click_sfx").apply { mkdirs() }
+                val destFile = File(cacheDir, "click_${targetUri.toString().hashCode()}$ext")
+                val cached = copyUriToCache(appCtx, targetUri, destFile)
+                if (cached == null) {
+                    synchronized(clickLock) {
+                        if (loadingClickUri == targetUri) {
+                            loadingClickUri = null
+                            pendingClickPlay = false
+                        }
+                    }
+                    return@execute
+                }
+
+                val attrs = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+                val newPool = SoundPool.Builder()
+                    .setMaxStreams(3)
+                    .setAudioAttributes(attrs)
+                    .build()
+
+                newPool.setOnLoadCompleteListener { sp, sampleId, status ->
+                    if (status != 0) return@setOnLoadCompleteListener
+                    var playNow = false
+                    synchronized(clickLock) {
+                        if (clickSoundPool === sp && loadedClickSoundId == sampleId) {
+                            clickSoundReady = true
+                            playNow = pendingClickPlay
+                            pendingClickPlay = false
+                        }
+                    }
+                    if (playNow) {
+                        sp.play(sampleId, 0.9f, 0.9f, 1, 0, 1.0f)
+                    }
+                }
+
+                var oldPool: SoundPool? = null
+                var sampleId = 0
+                var shouldAbort = false
+                synchronized(clickLock) {
+                    if (loadingClickUri != targetUri) {
+                        shouldAbort = true
+                    } else {
+                        oldPool = clickSoundPool
+                        clickSoundPool = newPool
+                        loadedClickUri = targetUri
+                        loadingClickUri = null
+                        clickSoundReady = false
+                        sampleId = newPool.load(cached.absolutePath, 1)
+                        loadedClickSoundId = sampleId
+                    }
+                }
+                if (shouldAbort || sampleId == 0) {
+                    runCatching { newPool.release() }
+                    if (!shouldAbort && sampleId == 0) {
+                        synchronized(clickLock) {
+                            if (clickSoundPool === newPool) {
+                                clickSoundPool = null
+                                loadedClickUri = null
+                                loadedClickSoundId = 0
+                                clickSoundReady = false
+                                pendingClickPlay = false
+                            }
+                        }
+                    }
+                }
+                oldPool?.let { runCatching { it.release() } }
+            } catch (e: Exception) {
+                synchronized(clickLock) {
+                    if (loadingClickUri == targetUri) {
+                        loadingClickUri = null
+                        pendingClickPlay = false
+                    }
+                }
+                GTRadioLogger.log("DynamicThemeManager: Failed loading click SFX", e)
+            }
+        }
+    }
+
+    private fun resolveClickExtension(context: Context, uri: Uri): String {
+        val candidate = (DocumentFile.fromSingleUri(context, uri)?.name ?: uri.lastPathSegment ?: "").lowercase()
+        return when {
+            candidate.endsWith(".ogg") -> ".ogg"
+            candidate.endsWith(".mp3") -> ".mp3"
+            else -> ".wav"
+        }
+    }
+
     private fun copyUriToCache(context: Context, uri: Uri, dest: File): File? {
         if (dest.exists() && dest.length() > 0L) return dest
         return try {
@@ -862,6 +1134,43 @@ object DynamicThemeManager {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun optStringAny(obj: JSONObject, defaultValue: String, vararg keys: String): String {
+        for (k in keys) {
+            if (obj.has(k) && !obj.isNull(k)) {
+                val value = obj.optString(k, "")
+                if (value.isNotBlank()) return value
+            }
+        }
+        return defaultValue
+    }
+
+    private fun optBooleanAny(obj: JSONObject, defaultValue: Boolean, vararg keys: String): Boolean {
+        for (k in keys) {
+            if (obj.has(k) && !obj.isNull(k)) {
+                return obj.optBoolean(k, defaultValue)
+            }
+        }
+        return defaultValue
+    }
+
+    private fun optIntAny(obj: JSONObject, defaultValue: Int, vararg keys: String): Int {
+        for (k in keys) {
+            if (obj.has(k) && !obj.isNull(k)) {
+                return obj.optInt(k, defaultValue)
+            }
+        }
+        return defaultValue
+    }
+
+    private fun optFloatAny(obj: JSONObject, defaultValue: Float, vararg keys: String): Float {
+        for (k in keys) {
+            if (obj.has(k) && !obj.isNull(k)) {
+                return obj.optDouble(k, defaultValue.toDouble()).toFloat()
+            }
+        }
+        return defaultValue
     }
 
     private fun parseColorSafe(hex: String, fallback: Int): Int {

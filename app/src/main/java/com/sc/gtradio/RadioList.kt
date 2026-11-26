@@ -89,6 +89,29 @@ class RadioList : Fragment() {
     private var bgIndex = 0
     private var showingBgA = true
     private var volumeObserver: ContentObserver? = null
+    private var lastTopInset: Int = 0
+    private var lastBottomInset: Int = 0
+
+    private fun applyThemeInsets(pack: DynamicThemePack?) {
+        if (_binding == null) return
+        val safeMarginPx = (16 * resources.displayMetrics.density).roundToInt()
+        val bleed = pack?.bleedStatusBar ?: true
+        binding.dynamicThemeRoot.setBackgroundColor(Color.BLACK)
+        if (bleed) {
+            binding.dynamicThemeRoot.updatePadding(top = 0)
+            binding.themeHeaderTitle.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                topMargin = lastTopInset + safeMarginPx
+            }
+        } else {
+            binding.dynamicThemeRoot.updatePadding(top = lastTopInset)
+            binding.themeHeaderTitle.updateLayoutParams<ViewGroup.MarginLayoutParams> {
+                topMargin = safeMarginPx
+            }
+        }
+        binding.root.findViewById<View>(R.id.nowPlaying)?.updatePadding(bottom = lastBottomInset)
+        binding.themeControlsBlock.updatePadding(bottom = lastBottomInset)
+        binding.themeStripControlsBlock.updatePadding(bottom = lastBottomInset)
+    }
 
     private val scrollSnapRunnable = Runnable {
         if (_binding == null) return@Runnable
@@ -381,12 +404,9 @@ class RadioList : Fragment() {
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { _, insets ->
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            binding.root.findViewById<View>(R.id.nowPlaying)?.updatePadding(bottom = systemBars.bottom)
-            binding.themeHeaderTitle.updateLayoutParams<ViewGroup.MarginLayoutParams> {
-                topMargin = (36 * resources.displayMetrics.density).roundToInt() + systemBars.top
-            }
-            binding.themeControlsBlock.updatePadding(bottom = systemBars.bottom)
-            binding.themeStripControlsBlock.updatePadding(bottom = systemBars.bottom)
+            lastTopInset = systemBars.top
+            lastBottomInset = systemBars.bottom
+            applyThemeInsets(activeThemePack)
             insets
         }
 
@@ -548,6 +568,10 @@ class RadioList : Fragment() {
     private fun applyDynamicThemeShell(pack: DynamicThemePack) {
         if (_binding == null) return
         activeThemePack = pack
+        applyThemeInsets(pack)
+        if (pack.sfxMode.equals("click", ignoreCase = true)) {
+            DynamicThemeManager.preloadClickSound(requireContext(), pack)
+        }
         if (loadedStations.isNotEmpty()) {
             binding.defaultRadioContainer.visibility = View.GONE
             binding.dynamicThemeRoot.visibility = View.VISIBLE
@@ -644,12 +668,13 @@ class RadioList : Fragment() {
             return
         }
 
-        applyDynamicThemeShell(pack)
-        if (children.isEmpty()) return
+        if (children.isEmpty()) {
+            applyDynamicThemeShell(pack)
+            return
+        }
         binding.defaultRadioContainer.visibility = View.GONE
         binding.dynamicThemeRoot.visibility = View.VISIBLE
         (activity as? MainActivity)?.setFullscreenThemeMode(true)
-
         applyDynamicThemeShell(pack)
 
         val stripMode = isStripLayout(pack)
@@ -1040,6 +1065,9 @@ class RadioList : Fragment() {
             try { requireContext().contentResolver.unregisterContentObserver(it) } catch (_: Exception) {}
         }
         volumeObserver = null
+        if (activeThemePack?.sfxMode.equals("click", ignoreCase = true)) {
+            DynamicThemeManager.releaseClickSound()
+        }
         (activity as? MainActivity)?.setFullscreenThemeMode(false)
         _binding = null
     }
