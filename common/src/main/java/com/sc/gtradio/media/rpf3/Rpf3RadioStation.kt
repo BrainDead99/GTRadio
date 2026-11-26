@@ -153,43 +153,22 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private var lastSegment = RadioSegmentType.None
     private var activeListener: Player.Listener? = null
 
-    private data class ChunkPlaybackMeta(
-        val item: Rpf3SongItem,
-        val startBlock: Int,
-        val loopEpoch: Int,
-        val startMs: Long,
-        val uri: Uri
-    )
-
-    private data class NextChunkTarget(
-        val item: Rpf3SongItem,
-        val startBlock: Int,
-        val totalBlocks: Int,
-        val loopEpoch: Int,
-        val chunkBlocks: Int
+    private data class PreparedPlayback(
+        val uris: List<Uri>,
+        val startWindowIndex: Int,
+        val startPositionMs: Long,
+        val totalDurMs: Long,
+        val preRoll: PlannedPreRollCue?,
+        val overlayCue: PlannedOverlayCue?
     )
 
     private var currentSegmentUris: List<Uri> = emptyList()
     private var currentSongItem: Rpf3SongItem? = null
-    private var nextChunkItem: Rpf3SongItem? = null
-    private var nextChunkStartBlock: Int = 0
-    private var nextChunkTotalBlocks: Int = 0
-    private var nextChunkLoopEpoch: Int = 0
-    private var currentMultiChunksPlayedInRow: Int = 0
     private var introItemCount: Int = 0
     private var hasStartedContinuousMix: Boolean = false
+    private var pendingMixStartOffsetMs: Long = 0L
     private var savedMixAbsMs: Long = 0L
     private var continuousMixItem: Rpf3SongItem? = null
-    private val chunkMetaByMediaId = ConcurrentHashMap<String, ChunkPlaybackMeta>()
-    private val chunkMediaIdByUri = ConcurrentHashMap<Uri, String>()
-    private val queuedChunkKeys: MutableSet<String> = ConcurrentHashMap.newKeySet<String>()
-    private var activeChunkPrefetchJob: Job? = null
-
-    private fun buildChunkKey(entryName: String, loopEpoch: Int, startBlock: Int): String =
-        "${entryName.uppercase(Locale.ROOT)}_${loopEpoch}_$startBlock"
-
-    private fun buildChunkMediaId(entryName: String, loopEpoch: Int, startBlock: Int): String =
-        "rpf3_chunk_${entryName}_${loopEpoch}_$startBlock"
 
     private data class PlannedOverlayCue(
         val djUri: Uri,
@@ -231,16 +210,8 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private var seamlessPreparePrevHasStartedMix: Boolean? = null
     private var seamlessPreparePrevSavedMixAbsMs: Long? = null
 
-    private data class PreparedPlayback(
-        val uris: List<Uri>,
-        val startWindowIndex: Int,
-        val startPositionMs: Long,
-        val totalDurMs: Long,
-        val preRoll: PlannedPreRollCue?,
-        val overlayCue: PlannedOverlayCue?
-    )
-
     private fun pinAudioUri(uri: Uri) {
+        if (uri.scheme == Rpf3StreamingDataSource.SCHEME) return
         val uriStr = uri.toString()
         activePinnedCounts.compute(uriStr) { _, existing ->
             (existing ?: java.util.concurrent.atomic.AtomicInteger(0)).apply { incrementAndGet() }
@@ -249,6 +220,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     private fun unpinAudioUri(uri: Uri) {
+        if (uri.scheme == Rpf3StreamingDataSource.SCHEME) return
         val uriStr = uri.toString()
         var decremented = false
         activePinnedCounts.computeIfPresent(uriStr) { _, counter ->
@@ -273,12 +245,27 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private var lastStoppedTimeMs: Long = 0L
     private var stoppedWindowIndex: Int = 0
     private var stoppedPositionMs: Long = 0L
-    private val durationCache = HashMap<Uri, Long>()
+    private val durationCache = ConcurrentHashMap<Uri, Long>()
 
     private var activeMixMarkers: List<Rpf3TrackMarker> = emptyList()
-    private var activeMixChunkStartMs: Long = 0L
     private var lastDisplayedMixTrackId: Int = -1
+    private var lastPolledMixPosMs: Long = -1L
     private var mixPollerRunnable: Runnable? = null
+
+    private fun resolveStreamIndex(uri: Uri?): Rpf3StreamIndex? {
+        return Rpf3StreamRegistry.resolveStreamIndex(uri)
+    }
+
+    private fun resolvePlaybackUri(archive: Rpf3Archive, trackKey: String): Uri? {
+        val clean = trackKey.trim()
+        if (archive.isMultiChannelEntry(clean)) {
+            val idx = archive.getOrBuildStreamIndex(clean) ?: return null
+            val uri = archive.buildStreamUri(idx.entryName)
+            durationCache[uri] = idx.durationMs
+            return uri
+        }
+        return archive.materializeAudioUri(clean)
+    }
 
     private fun materializeClip(keyOrScoped: String): Uri? {
         stationArchive.materializeAudioUri(keyOrScoped)?.let { return it }
@@ -619,9 +606,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
             if (cached != null) {
                 art = cached
             } else {
+                val expectedGen = playGeneration.get()
                 Gen2MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
                     mainHandler.post {
-                        if (_playing && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
+                        if (_playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
                             val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
                             val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
                             val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
@@ -671,6 +659,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
     private fun getFileDurationMs(uri: Uri): Long {
         durationCache[uri]?.let { return it }
+        if (uri.scheme == Rpf3StreamingDataSource.SCHEME) {
+            val streamIdx = resolveStreamIndex(uri)
+            if (streamIdx != null && streamIdx.durationMs > 0L) {
+                durationCache[uri] = streamIdx.durationMs
+                return streamIdx.durationMs
+            }
+        }
         val readDur = readAudioDurationMs(context, uri)
         if (readDur > 0L) {
             durationCache[uri] = readDur
@@ -699,6 +694,8 @@ private val RPF3_INTRO_ALIASES = mapOf(
         return dur
     }
 
+    private fun readAudioDurationMs(uri: Uri): Long = getFileDurationMs(uri)
+
     override fun cancelSeamlessPrepare() {
         playGeneration.incrementAndGet()
         seamlessPrepareJob?.cancel()
@@ -709,9 +706,9 @@ private val RPF3_INTRO_ALIASES = mapOf(
             seamlessPreparePrevHasStartedMix = null
             seamlessPreparePrevSavedMixAbsMs?.let { savedMixAbsMs = it }
             seamlessPreparePrevSavedMixAbsMs = null
+            pendingMixStartOffsetMs = 0L
             plannedOverlayCue = null
             plannedPreRollCue = null
-            clearChunkTracking(cancelPrefetch = false)
             unpinAllActive()
         }
     }
@@ -729,7 +726,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
         seamlessPreparePrevHasStartedMix = hasStartedContinuousMix
         seamlessPreparePrevSavedMixAbsMs = savedMixAbsMs
         seamlessPrepareActive = true
-        queuedChunkKeys.clear()
 
         seamlessPrepareJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
@@ -760,8 +756,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         seamlessPreparePrevSavedMixAbsMs = null
                         isStationActive = true
                         _playing = true
-                        activeChunkPrefetchJob?.cancel()
-                        activeChunkPrefetchJob = null
                         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
                         player.repeatMode = Player.REPEAT_MODE_OFF
                         player.playWhenReady = false
@@ -801,6 +795,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
             seamlessPreparePrevSavedMixAbsMs?.let { savedMixAbsMs = it }
             seamlessPreparePrevSavedMixAbsMs = null
         }
+        pendingMixStartOffsetMs = 0L
         activeDecodeJob?.cancel()
         activeDecodeJob = null
         activeCleanJob?.cancel()
@@ -811,8 +806,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
         plannedPreRollCue = null
         player.djVoiceOverlayPlayer?.stopOverlay()
         player.resetMusicDuckGain()
-        activeChunkPrefetchJob?.cancel()
-        activeChunkPrefetchJob = null
         stopMixPoller(clearMarkers = true)
         lookAheadJob?.cancel()
         lookAheadJob = null
@@ -828,19 +821,14 @@ private val RPF3_INTRO_ALIASES = mapOf(
         if (isMix && currentSongItem != null) {
             val exo = player.exoPlayer
             if (exo.playbackState == Player.STATE_READY) {
-                val mediaId = exo.currentMediaItem?.mediaId
-                val chunkMeta = if (mediaId != null) chunkMetaByMediaId[mediaId] else null
-                if (chunkMeta != null) {
-                    val rawPosMs = exo.currentPosition.coerceAtLeast(0L)
-                    val curPosMs = if (exo.duration > 0) rawPosMs.coerceAtMost(exo.duration) else rawPosMs
-                    savedMixAbsMs = chunkMeta.startMs + curPosMs
-                    continuousMixItem = chunkMeta.item
-                    lastStoppedTimeMs = System.currentTimeMillis()
-                }
+                val rawPosMs = exo.currentPosition.coerceAtLeast(0L)
+                val curPosMs = if (exo.duration > 0) rawPosMs.coerceAtMost(exo.duration) else rawPosMs
+                savedMixAbsMs = curPosMs
+                continuousMixItem = currentSongItem
+                lastStoppedTimeMs = System.currentTimeMillis()
             }
         }
 
-        clearChunkTracking(cancelPrefetch = false)
         unpinAllActive()
         if (!isStationActive) return
         isStationActive = false
@@ -865,18 +853,24 @@ private val RPF3_INTRO_ALIASES = mapOf(
             mainHandler.post { release() }
             return
         }
-        activeChunkPrefetchJob?.cancel()
-        activeChunkPrefetchJob = null
         stop()
         stationScope.cancel()
+    }
+
+    private fun isValidWavOrAudioFile(uri: Uri?): Boolean {
+        if (uri == null) return false
+        if (uri.scheme == Rpf3StreamingDataSource.SCHEME) {
+            return Rpf3StreamRegistry.hasValidEntry(uri)
+        }
+        val p = uri.path ?: return false
+        val f = File(p)
+        return f.exists() && f.length() > 44L
     }
 
     private fun areSegmentFilesValid(uris: List<Uri>): Boolean {
         if (uris.isEmpty()) return false
         for (u in uris) {
-            val p = u.path ?: return false
-            val f = File(p)
-            if (!f.exists() || f.length() <= 44L) return false
+            if (!isValidWavOrAudioFile(u)) return false
         }
         return true
     }
@@ -898,10 +892,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_OFF
         player.playWhenReady = false
-
-        activeChunkPrefetchJob?.cancel()
-        activeChunkPrefetchJob = null
-        queuedChunkKeys.clear()
 
         val isMix = isContinuousMixStation()
         val canResumeMix = isMix && savedMixAbsMs > 0L && continuousMixItem != null && lastStoppedTimeMs > 0L
@@ -955,10 +945,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
         if (currentSegmentUris.isEmpty() || !isValid()) return null
         val lastIdx = currentSegmentUris.size - 1
         val mainDur = getFileDurationMs(currentSegmentUris[lastIdx])
-        val startOffset = if (lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L) {
-            rng.nextInt(25_000).toLong()
-        } else {
-            0L
+        val mixOffset = pendingMixStartOffsetMs
+        pendingMixStartOffsetMs = 0L
+        val startOffset = when {
+            isMixItem(currentSongItem) -> mixOffset.coerceIn(0L, (mainDur - 1L).coerceAtLeast(0L))
+            lastSegment == RadioSegmentType.Song && currentSegmentUris.size == 1 && mainDur > 45_000L ->
+                rng.nextInt(25_000).toLong()
+            else -> 0L
         }
         val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
         val preRoll = plannedPreRollCue
@@ -966,6 +959,106 @@ private val RPF3_INTRO_ALIASES = mapOf(
         val overlay = plannedOverlayCue
         plannedOverlayCue = null
         return PreparedPlayback(currentSegmentUris, 0, startOffset, totalDur, preRoll, overlay)
+    }
+
+    private data class BuiltSongMedia(
+        val uris: List<Uri>,
+        val pinnedFiles: List<String>,
+        val overlayCue: PlannedOverlayCue?,
+        val preRollCue: PlannedPreRollCue?,
+        val introCount: Int
+    )
+
+    private fun buildSongSegmentMedia(
+        event: Gen3BroadcastEvent.SongEvent<Rpf3SongItem, Rpf3ClipRef>,
+        mainUri: Uri?,
+        markers: DjMarkerWindow?,
+        skipIntroDecode: Boolean,
+        pinToActive: Boolean
+    ): BuiltSongMedia {
+        val uris = ArrayList<Uri>()
+        val pinned = ArrayList<String>()
+
+        var djIntroUri: Uri? = null
+        var djDurMs = 0L
+        if (!skipIntroDecode && event.songIntroOverlay != null) {
+            val u = materializeClip(event.songIntroOverlay.trackKey)
+            if (u != null) {
+                if (pinToActive) {
+                    pinAudioUri(u)
+                } else if (u.scheme != Rpf3StreamingDataSource.SCHEME) {
+                    val p = u.toString()
+                    pinned.add(p)
+                    Rpf3Archive.pinFile(p)
+                }
+                djIntroUri = u
+                djDurMs = getFileDurationMs(u)
+            }
+        }
+
+        if (mainUri != null) {
+            if (pinToActive) {
+                pinAudioUri(mainUri)
+            } else if (mainUri.scheme != Rpf3StreamingDataSource.SCHEME) {
+                val p = mainUri.toString()
+                pinned.add(p)
+                Rpf3Archive.pinFile(p)
+            }
+        }
+
+        val fitsInIntro = djIntroUri != null && markers != null && markers.hasIntroWindow &&
+            djDurMs > 0L && djDurMs <= markers.introDurationMs
+        val canPreRoll = djIntroUri != null && markers != null && markers.hasIntroWindow &&
+            djDurMs > markers.introDurationMs && markers.introEndMs >= 2000L && markers.effectiveIntroStartMs <= 3000L
+
+        var overlayCue: PlannedOverlayCue? = null
+        var preRollCue: PlannedPreRollCue? = null
+        var introCount = 0
+
+        when {
+            fitsInIntro -> {
+                mainUri?.let { uris.add(it) }
+                val djStartMs = maxOf(markers!!.effectiveIntroStartMs, markers.introEndMs - djDurMs - 250L)
+                overlayCue = PlannedOverlayCue(djIntroUri!!, djStartMs, markers.introEndMs)
+                GTRadioLogger.logVerbose("DJ-OVERLAY") {
+                    "${event.song.trackName}: fits-in-intro [${markers.effectiveIntroStartMs}..${markers.introEndMs}ms], djDur=${djDurMs}ms, fireAt=${djStartMs}ms"
+                }
+            }
+            canPreRoll -> {
+                mainUri?.let { uris.add(it) }
+                val preRollDelayMs = (djDurMs - markers!!.introEndMs + 250L).coerceIn(500L, (djDurMs - 500L).coerceAtLeast(500L))
+                preRollCue = PlannedPreRollCue(djIntroUri!!, preRollDelayMs, markers.introEndMs)
+                GTRadioLogger.logVerbose("DJ-OVERLAY") {
+                    "${event.song.trackName}: pre-roll djDur=${djDurMs}ms, introEnd=${markers.introEndMs}ms, delay=${preRollDelayMs}ms"
+                }
+            }
+            else -> {
+                if (djIntroUri != null) uris.add(djIntroUri)
+                if (mainUri != null) uris.add(mainUri)
+                introCount = if (uris.size > 1) 1 else 0
+            }
+        }
+
+        return BuiltSongMedia(uris, pinned, overlayCue, preRollCue, introCount)
+    }
+
+    private fun resolveLandedWindowPlayback(
+        uris: List<Uri>,
+        landedSeekMs: Long,
+        preRoll: PlannedPreRollCue?,
+        overlay: PlannedOverlayCue?
+    ): PreparedPlayback {
+        val totalDur = uris.sumOf { getFileDurationMs(it) }
+        var rem = landedSeekMs.coerceAtLeast(0L)
+        for (i in uris.indices) {
+            val dur = getFileDurationMs(uris[i])
+            if (rem < dur || i == uris.lastIndex) {
+                val clampedSeek = rem.coerceIn(0L, (dur - 1L).coerceAtLeast(0L))
+                return PreparedPlayback(uris, i, clampedSeek, totalDur, preRoll, overlay)
+            }
+            rem -= dur
+        }
+        return PreparedPlayback(uris, 0, 0L, totalDur, preRoll, overlay)
     }
 
     private fun resolveResumeFromRealTimePrepared(
@@ -977,7 +1070,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
         for (u in currentSegmentUris) {
             getFileDurationMs(u)
         }
-        var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
+        val winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
 
         if (isContinuousMixStation() && currentSongItem != null && activeMixMarkers.isEmpty()) {
@@ -987,32 +1080,213 @@ private val RPF3_INTRO_ALIASES = mapOf(
             }
         }
 
+        for (i in winIdx until currentSegmentUris.size) {
+            val uri = currentSegmentUris[i]
+            val durMs = getFileDurationMs(uri)
+            val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
+            if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
+                if (!isValid()) return null
+                for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
+                val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+                val preRoll = plannedPreRollCue
+                plannedPreRollCue = null
+                val overlay = plannedOverlayCue
+                plannedOverlayCue = null
+                return PreparedPlayback(currentSegmentUris, i, posMs + remainingMs, totalDur, preRoll, overlay)
+            } else {
+                remainingMs -= timeLeftMs
+                posMs = 0L
+            }
+        }
+
+        for (u in currentSegmentUris) {
+            unpinAudioUri(u)
+        }
+        currentSegmentUris = emptyList()
+        if (emitMetadata) {
+            setStationOnlyMetadata()
+        }
+
         var safety = 0
-        while (safety < 6 && currentSegmentUris.isNotEmpty()) {
+        while (safety < 6 && isValid()) {
             safety++
-            for (i in winIdx until currentSegmentUris.size) {
-                val uri = currentSegmentUris[i]
-                val durMs = getFileDurationMs(uri)
-                val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
-                if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
-                    if (!isValid()) return null
-                    for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
-                    val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
-                    val preRoll = plannedPreRollCue
-                    plannedPreRollCue = null
-                    val overlay = plannedOverlayCue
-                    plannedOverlayCue = null
-                    return PreparedPlayback(currentSegmentUris, i, posMs + remainingMs, totalDur, preRoll, overlay)
-                } else {
-                    remainingMs -= timeLeftMs
-                    posMs = 0L
+            val forceLand = (safety >= 6)
+
+            val prefetched = prefetchedItem
+            if (prefetched != null) {
+                prefetchedItem = null
+                if (areSegmentFilesValid(prefetched.uris)) {
+                    currentSegmentUris = prefetched.uris
+                    currentSongItem = prefetched.songItem
+                    lastSegment = prefetched.segmentType
+                    pendingBreakClips.clear()
+                    prefetched.pendingBreakClips?.let { pendingBreakClips.addAll(it) }
+                    plannedOverlayCue = prefetched.plannedOverlayCue
+                    plannedPreRollCue = prefetched.plannedPreRollCue
+                    introItemCount = if (prefetched.plannedOverlayCue != null || prefetched.plannedPreRollCue != null) 0 else if (currentSegmentUris.size > 1 && lastSegment == RadioSegmentType.Song) 1 else 0
+
+                    for (i in currentSegmentUris.indices) {
+                        val durMs = getFileDurationMs(currentSegmentUris[i])
+                        if (remainingMs < durMs) {
+                            if (!isValid()) return null
+                            for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
+                            val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+                            val preRoll = plannedPreRollCue
+                            plannedPreRollCue = null
+                            val overlay = plannedOverlayCue
+                            plannedOverlayCue = null
+                            return PreparedPlayback(currentSegmentUris, i, remainingMs, totalDur, preRoll, overlay)
+                        }
+                        remainingMs -= durMs
+                    }
+                    for (u in currentSegmentUris) unpinAudioUri(u)
+                    if (forceLand) {
+                        for (u in currentSegmentUris) pinAudioUri(u)
+                        val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+                        val preRoll = plannedPreRollCue
+                        plannedPreRollCue = null
+                        val overlay = plannedOverlayCue
+                        plannedOverlayCue = null
+                        return PreparedPlayback(currentSegmentUris, 0, 0L, totalDur, preRoll, overlay)
+                    }
+                    continue
                 }
             }
-            if (!advanceMultiChunkOrPickNext(emitMetadata)) break
-            winIdx = 0
-            posMs = 0L
-            for (u in currentSegmentUris) {
-                getFileDurationMs(u)
+
+            if (isContinuousMixStation()) {
+                prepareContinuousMixSegment()
+                if (currentSegmentUris.isNotEmpty() && isValid()) {
+                    val startOff = pendingMixStartOffsetMs
+                    pendingMixStartOffsetMs = 0L
+                    return PreparedPlayback(currentSegmentUris, 0, startOff, getFileDurationMs(currentSegmentUris[0]), null, null)
+                }
+                break
+            }
+
+            val event = director.pickNextEvent { song ->
+                if (song.introNames.isNotEmpty()) {
+                    val intro = song.introNames[rng.nextInt(song.introNames.size)]
+                    Rpf3ClipRef(song.archive, intro)
+                } else null
+            }
+
+            when (event) {
+                is Gen3BroadcastEvent.SongEvent -> {
+                    val item = event.song
+                    val mainUri = resolvePlaybackUri(item.archive, item.trackName)
+                    val mainDurMs = if (mainUri != null) getFileDurationMs(mainUri) else 0L
+                    if (!forceLand && mainDurMs > 0L && remainingMs >= mainDurMs) {
+                        remainingMs -= mainDurMs
+                        GTRadioLogger.logVerbose("CATCHUP") {
+                            "Rpf3[$stationTitle]: skipped elapsed '${item.trackName}' (${mainDurMs}ms) without decoding intro; rem=${remainingMs}ms"
+                        }
+                        continue
+                    }
+
+                    var landedSeekMs = if (forceLand && remainingMs >= mainDurMs) 0L else remainingMs.coerceAtLeast(0L)
+                    val markers = item.archive.readDjMarkers(item.trackName)
+                    val introEstDur = if (event.songIntroOverlay != null) {
+                        event.songIntroOverlay.archive.getEntryDurationMs(event.songIntroOverlay.trackKey) ?: 0L
+                    } else 0L
+                    val pastIntroEnd = markers != null && markers.hasIntroWindow && landedSeekMs >= markers.introEndMs
+                    val pastStandaloneIntro = (markers == null || !markers.hasIntroWindow) && introEstDur > 0L && landedSeekMs >= introEstDur
+                    val skipIntroDecode = pastIntroEnd || pastStandaloneIntro
+                    if (pastStandaloneIntro) {
+                        landedSeekMs = (landedSeekMs - introEstDur).coerceAtLeast(0L)
+                    }
+
+                    val built = buildSongSegmentMedia(
+                        event = event,
+                        mainUri = mainUri,
+                        markers = markers,
+                        skipIntroDecode = skipIntroDecode,
+                        pinToActive = true
+                    )
+                    if (built.uris.isEmpty() || !isValid()) return null
+
+                    currentSegmentUris = built.uris
+                    currentSongItem = item
+                    lastSegment = RadioSegmentType.Song
+                    introItemCount = built.introCount
+                    pendingBreakClips.clear()
+                    plannedOverlayCue = null
+                    plannedPreRollCue = null
+                    return resolveLandedWindowPlayback(built.uris, landedSeekMs, built.preRollCue, built.overlayCue)
+                }
+                is Gen3BroadcastEvent.BreakBlockEvent -> {
+                    val standalone = ArrayList(event.standaloneClips)
+                    if (standalone.isEmpty()) continue
+                    if (!forceLand) {
+                        var landedIdx = -1
+                        for (idx in standalone.indices) {
+                            val clipRef = standalone[idx].clip
+                            val clipDurMs = clipRef.archive.getEntryDurationMs(clipRef.trackKey) ?: 0L
+                            if (clipDurMs > 0L && remainingMs >= clipDurMs) {
+                                remainingMs -= clipDurMs
+                            } else {
+                                landedIdx = idx
+                                break
+                            }
+                        }
+                        if (landedIdx < 0) continue
+
+                        val landedClip = standalone[landedIdx]
+                        val u = resolvePlaybackUri(landedClip.clip.archive, landedClip.clip.trackKey)
+                        if (u != null && isValid()) {
+                            pinAudioUri(u)
+                            currentSegmentUris = listOf(u)
+                            currentSongItem = null
+                            lastSegment = landedClip.segmentType
+                            introItemCount = 0
+                            pendingBreakClips.clear()
+                            if (landedIdx + 1 < standalone.size) {
+                                pendingBreakClips.addAll(standalone.subList(landedIdx + 1, standalone.size))
+                            }
+                            plannedOverlayCue = null
+                            plannedPreRollCue = null
+                            val durMs = getFileDurationMs(u)
+                            val seekMs = remainingMs.coerceIn(0L, (durMs - 1L).coerceAtLeast(0L))
+                            return PreparedPlayback(listOf(u), 0, seekMs, durMs, null, null)
+                        }
+                    } else {
+                        val firstClip = standalone.removeAt(0)
+                        val u = resolvePlaybackUri(firstClip.clip.archive, firstClip.clip.trackKey)
+                        if (u != null && isValid()) {
+                            pinAudioUri(u)
+                            currentSegmentUris = listOf(u)
+                            currentSongItem = null
+                            lastSegment = firstClip.segmentType
+                            introItemCount = 0
+                            pendingBreakClips.clear()
+                            pendingBreakClips.addAll(standalone)
+                            plannedOverlayCue = null
+                            plannedPreRollCue = null
+                            return PreparedPlayback(listOf(u), 0, 0L, getFileDurationMs(u), null, null)
+                        }
+                    }
+                }
+                is Gen3BroadcastEvent.InterludeEvent -> {
+                    val ref = event.clip
+                    val clipDurMs = ref.archive.getEntryDurationMs(ref.trackKey) ?: 0L
+                    if (!forceLand && clipDurMs > 0L && remainingMs >= clipDurMs) {
+                        remainingMs -= clipDurMs
+                        continue
+                    }
+                    val u = resolvePlaybackUri(ref.archive, ref.trackKey)
+                    if (u != null && isValid()) {
+                        pinAudioUri(u)
+                        currentSegmentUris = listOf(u)
+                        currentSongItem = null
+                        lastSegment = event.segmentType
+                        introItemCount = 0
+                        pendingBreakClips.clear()
+                        plannedOverlayCue = null
+                        plannedPreRollCue = null
+                        val durMs = getFileDurationMs(u)
+                        val seekMs = if (forceLand && remainingMs >= durMs) 0L else remainingMs.coerceIn(0L, (durMs - 1L).coerceAtLeast(0L))
+                        return PreparedPlayback(listOf(u), 0, seekMs, durMs, null, null)
+                    }
+                }
             }
         }
 
@@ -1064,94 +1338,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
         return listOf(item)
     }
 
-    private fun isValidWavFile(uri: Uri?): Boolean {
-        val p = uri?.path ?: return false
-        val f = File(p)
-        return f.exists() && f.length() > 44L
-    }
-
-    private fun materializeValidChunkUri(item: Rpf3SongItem, startBlock: Int, chunkBlocks: Int): Uri? {
-        val first = item.archive.materializeAudioChunkUri(item.trackName, startBlock, chunkBlocks)
-        if (isValidWavFile(first)) return first
-        // Retry exact same startBlock if cache file was evicted or incomplete; never skip ahead.
-        val retry = item.archive.materializeAudioChunkUri(item.trackName, startBlock, chunkBlocks)
-        return if (isValidWavFile(retry)) retry else null
-    }
-
-    private fun registerChunkMetadata(item: Rpf3SongItem, startBlock: Int, loopEpoch: Int, uri: Uri): String {
-        val chunkMediaId = buildChunkMediaId(item.trackName, loopEpoch, startBlock)
-        val startMs = item.archive.getChunkStartMs(item.trackName, startBlock)
-        chunkMetaByMediaId[chunkMediaId] = ChunkPlaybackMeta(item, startBlock, loopEpoch, startMs, uri)
-        chunkMediaIdByUri[uri] = chunkMediaId
-        return chunkMediaId
-    }
-
-    private fun clearChunkTracking(cancelPrefetch: Boolean = true) {
-        if (cancelPrefetch) {
-            activeChunkPrefetchJob?.cancel()
-            activeChunkPrefetchJob = null
-        }
-        queuedChunkKeys.clear()
-        for (meta in chunkMetaByMediaId.values) {
-            unpinAudioUri(meta.uri)
-        }
-        chunkMetaByMediaId.clear()
-        chunkMediaIdByUri.clear()
-    }
-
-    private fun unpinIfUnusedByPlayer(uri: Uri) {
-        val uriStr = uri.toString()
-        val exo = player.exoPlayer
-        val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
-        for (i in curIdx until exo.mediaItemCount) {
-            if (exo.getMediaItemAt(i).localConfiguration?.uri?.toString() == uriStr) {
-                return
-            }
-        }
-        unpinAudioUri(uri)
-    }
-
-    private fun resetChunkCursor() {
-        nextChunkItem = null
-        nextChunkStartBlock = 0
-        nextChunkTotalBlocks = 0
-        nextChunkLoopEpoch = 0
-        currentMultiChunksPlayedInRow = 0
-    }
-
-    private fun resolveNextChunkTarget(): NextChunkTarget? {
-        val item = nextChunkItem ?: currentSongItem ?: return null
-        val totalBlocks = nextChunkTotalBlocks.takeIf { it > 0 } ?: item.archive.getEntryBlockCount(item.trackName)
-        val chunkBlocks = Rpf3Archive.CHUNK_BLOCKS
-        if (nextChunkStartBlock < totalBlocks) {
-            return NextChunkTarget(item, nextChunkStartBlock, totalBlocks, nextChunkLoopEpoch, chunkBlocks)
-        }
-        if (isMixItem(item)) {
-            val parts = getMixSeriesPartsFor(item)
-            val nextItem = if (parts.size > 1) {
-                val curIdx = parts.indexOfFirst { it.trackName.equals(item.trackName, ignoreCase = true) }
-                parts[if (curIdx >= 0) (curIdx + 1) % parts.size else 0]
-            } else {
-                item
-            }
-            val nextTotal = nextItem.archive.getEntryBlockCount(nextItem.trackName)
-            return NextChunkTarget(nextItem, 0, nextTotal, nextChunkLoopEpoch + 1, chunkBlocks)
-        }
-        return null
-    }
-
-    private fun estimateEntryDurationMs(item: Rpf3SongItem, totalBlocks: Int): Long {
-        if (totalBlocks <= 0) return 0L
-        val chunkBlocks = Rpf3Archive.CHUNK_BLOCKS
-        val lastAligned = ((totalBlocks - 1) / chunkBlocks).coerceAtLeast(0) * chunkBlocks
-        if (lastAligned <= 0) return 0L
-        val lastStartMs = item.archive.getChunkStartMs(item.trackName, lastAligned)
-        if (lastStartMs <= 0L) return 0L
-        val avgBlockMs = lastStartMs.toDouble() / lastAligned.toDouble()
-        val remainingBlocks = (totalBlocks - lastAligned).coerceAtLeast(1)
-        return lastStartMs + (remainingBlocks * avgBlockMs).toLong()
-    }
-
     private fun resolveContinuousMixPrepared(
         elapsedMs: Long,
         isValid: () -> Boolean
@@ -1160,10 +1346,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
         var absMs = savedMixAbsMs + elapsedMs
         val parts = getMixSeriesPartsFor(item)
         if (parts.size > 1) {
+            val totalCycleMs = parts.sumOf { it.archive.getOrBuildStreamIndex(it.trackName)?.durationMs ?: 0L }
+            if (totalCycleMs > 0L) {
+                absMs %= totalCycleMs
+            }
             var guard = 0
             while (guard < parts.size) {
-                val pTotalBlocks = item.archive.getEntryBlockCount(item.trackName)
-                val pDurMs = estimateEntryDurationMs(item, pTotalBlocks)
+                val pDurMs = item.archive.getOrBuildStreamIndex(item.trackName)?.durationMs ?: 0L
                 if (pDurMs <= 0L || absMs < pDurMs) break
                 absMs -= pDurMs
                 val idx = parts.indexOfFirst { it.trackName.equals(item.trackName, ignoreCase = true) }
@@ -1172,89 +1361,33 @@ private val RPF3_INTRO_ALIASES = mapOf(
             }
         }
 
-        val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
-        val chunkBlocks = Rpf3Archive.CHUNK_BLOCKS
-        val estTotalMs = estimateEntryDurationMs(item, totalBlocks)
-        val targetMixMs = if (estTotalMs > 0L) absMs % estTotalMs else absMs
-
-        var targetStartBlock = 0
-        var chunkStartMs = 0L
-        var blk = chunkBlocks
-        while (blk < totalBlocks) {
-            val ms = item.archive.getChunkStartMs(item.trackName, blk)
-            if (ms <= 0L || ms > targetMixMs) break
-            targetStartBlock = blk
-            chunkStartMs = ms
-            blk += chunkBlocks
-        }
-
-        val chunkKey = buildChunkKey(item.trackName, 0, targetStartBlock)
-        if (!queuedChunkKeys.add(chunkKey)) return null
-
-        val mainUri = materializeValidChunkUri(item, targetStartBlock, chunkBlocks) ?: return null
+        val streamIdx = item.archive.getOrBuildStreamIndex(item.trackName) ?: return null
+        val totalMixDurationMs = streamIdx.durationMs
+        val targetMixMs = if (totalMixDurationMs > 0L) absMs % totalMixDurationMs else 0L
+        val mainUri = item.archive.buildStreamUri(streamIdx.entryName)
+        durationCache[mainUri] = totalMixDurationMs
         if (!isValid()) return null
 
-        val fileDur = getFileDurationMs(mainUri)
-        val seekWithinChunkMs = (targetMixMs - chunkStartMs).coerceIn(0L, (fileDur - 500L).coerceAtLeast(0L))
-
-        pinAudioUri(mainUri)
-        registerChunkMetadata(item, targetStartBlock, 0, mainUri)
         hasStartedContinuousMix = true
+        pendingMixStartOffsetMs = 0L
         currentSongItem = item
         lastSegment = RadioSegmentType.Song
         currentSegmentUris = listOf(mainUri)
-        nextChunkItem = item
-        nextChunkTotalBlocks = totalBlocks
-        nextChunkLoopEpoch = 0
-        nextChunkStartBlock = targetStartBlock + chunkBlocks
-        currentMultiChunksPlayedInRow = 1
         introItemCount = 0
 
-        val markers = item.archive.readTrackMarkers(item.trackName)
+        val markers = item.archive.readTrackMarkers(streamIdx.entryName)
         if (markers.isNotEmpty()) {
             activeMixMarkers = markers
-            activeMixChunkStartMs = chunkStartMs
             lastDisplayedMixTrackId = -1
+            lastPolledMixPosMs = -1L
         } else {
             stopMixPoller(clearMarkers = true)
         }
 
-        return PreparedPlayback(listOf(mainUri), 0, seekWithinChunkMs, fileDur, null, null)
+        return PreparedPlayback(listOf(mainUri), 0, targetMixMs, totalMixDurationMs, null, null)
     }
 
     private fun advanceMultiChunkOrPickNext(emitMetadata: Boolean = true): Boolean {
-        if (lastSegment == RadioSegmentType.Song && currentSongItem != null) {
-            val target = resolveNextChunkTarget()
-            if (target != null) {
-                val chunkKey = buildChunkKey(target.item.trackName, target.loopEpoch, target.startBlock)
-                val nextUri = materializeValidChunkUri(target.item, target.startBlock, target.chunkBlocks)
-                if (nextUri != null && queuedChunkKeys.add(chunkKey)) {
-                    pinAudioUri(nextUri)
-                    val mId = registerChunkMetadata(target.item, target.startBlock, target.loopEpoch, nextUri)
-                    if (target.item != currentSongItem) {
-                        currentSongItem = target.item
-                        if (isMixItem(target.item)) {
-                            val markers = target.item.archive.readTrackMarkers(target.item.trackName)
-                            if (markers.isNotEmpty()) {
-                                activeMixMarkers = markers
-                                lastDisplayedMixTrackId = -1
-                            } else {
-                                stopMixPoller(clearMarkers = true)
-                            }
-                        }
-                    }
-                    activeMixChunkStartMs = chunkMetaByMediaId[mId]?.startMs ?: 0L
-                    nextChunkItem = target.item
-                    nextChunkTotalBlocks = target.totalBlocks
-                    nextChunkLoopEpoch = target.loopEpoch
-                    nextChunkStartBlock = target.startBlock + target.chunkBlocks
-                    currentMultiChunksPlayedInRow += 1
-                    currentSegmentUris = listOf(nextUri)
-                    introItemCount = 0
-                    return true
-                }
-            }
-        }
         pickNextSegment(emitMetadata)
         return currentSegmentUris.isNotEmpty()
     }
@@ -1264,8 +1397,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
         if (!_playing) return
         activeOverlayJob?.cancel()
         activeOverlayJob = null
-        activeChunkPrefetchJob?.cancel()
-        activeChunkPrefetchJob = null
         player.resetMusicDuckGain()
         activeDecodeJob?.cancel()
         activeDecodeJob = stationScope.launch(StationDispatchers.ioDispatcher) {
@@ -1273,7 +1404,9 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 if (!_playing || playGeneration.get() != currentGen) return@launch
                 if (advanceMultiChunkOrPickNext(emitMetadata = true)) {
                     if (!_playing || playGeneration.get() != currentGen) return@launch
-                    startPlayback(currentSegmentUris, 0, 0L, currentGen)
+                    val startPosMs = pendingMixStartOffsetMs
+                    pendingMixStartOffsetMs = 0L
+                    startPlayback(currentSegmentUris, 0, startPosMs, currentGen)
                 }
             } catch (ce: CancellationException) {
                 throw ce
@@ -1284,9 +1417,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     private fun pickNextSegment(emitMetadata: Boolean = true) {
-        resetChunkCursor()
         hasPrefetchedNextSegment = false
-        clearChunkTracking(cancelPrefetch = true)
         for (u in currentSegmentUris) {
             unpinAudioUri(u)
         }
@@ -1308,22 +1439,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
             plannedOverlayCue = prefetched.plannedOverlayCue
             plannedPreRollCue = prefetched.plannedPreRollCue
             introItemCount = if (prefetched.plannedOverlayCue != null || prefetched.plannedPreRollCue != null) 0 else if (currentSegmentUris.size > 1 && lastSegment == RadioSegmentType.Song) 1 else 0
-            if (prefetched.songItem != null) {
-                val totalBlocks = prefetched.songItem.archive.getEntryBlockCount(prefetched.songItem.trackName)
-                nextChunkItem = prefetched.songItem
-                nextChunkTotalBlocks = totalBlocks
-                nextChunkLoopEpoch = 0
-                nextChunkStartBlock = if (totalBlocks > Rpf3Archive.CHUNK_THRESHOLD_BLOCKS) Rpf3Archive.CHUNK_BLOCKS else totalBlocks
-                currentMultiChunksPlayedInRow = 1
-                if (totalBlocks > Rpf3Archive.CHUNK_THRESHOLD_BLOCKS) {
-                    val lastUri = currentSegmentUris.lastOrNull()
-                    if (lastUri != null) {
-                        pinAudioUri(lastUri)
-                        registerChunkMetadata(prefetched.songItem, 0, 0, lastUri)
-                    }
-                    queuedChunkKeys.add(buildChunkKey(prefetched.songItem.trackName, 0, 0))
-                }
-            }
             return
         }
 
@@ -1339,77 +1454,22 @@ private val RPF3_INTRO_ALIASES = mapOf(
         when (event) {
             is Gen3BroadcastEvent.SongEvent -> {
                 val item = event.song
-                val uris = ArrayList<Uri>()
                 val markers = item.archive.readDjMarkers(item.trackName)
+                val mainUri = resolvePlaybackUri(item.archive, item.trackName)
+                val built = buildSongSegmentMedia(
+                    event = event,
+                    mainUri = mainUri,
+                    markers = markers,
+                    skipIntroDecode = false,
+                    pinToActive = true
+                )
 
-                var djIntroUri: Uri? = null
-                var djDurMs = 0L
-                if (event.songIntroOverlay != null) {
-                    val u = materializeClip(event.songIntroOverlay.trackKey)
-                    if (u != null) {
-                        pinAudioUri(u)
-                        djIntroUri = u
-                        djDurMs = readAudioDurationMs(context, u)
-                    }
-                }
-
-                val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
-                val mainUri = if (totalBlocks > Rpf3Archive.CHUNK_THRESHOLD_BLOCKS) {
-                    item.archive.materializeAudioChunkUri(item.trackName, 0, Rpf3Archive.CHUNK_BLOCKS)
-                } else {
-                    item.archive.materializeAudioUri(item.trackName)
-                }
-                if (mainUri != null) {
-                    pinAudioUri(mainUri)
-                }
-
-                val fitsInIntro = djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > 0L && djDurMs <= markers.introDurationMs
-                val canPreRoll = djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > markers.introDurationMs && markers.introEndMs >= 2000L && markers.effectiveIntroStartMs <= 3000L
-
-                when {
-                    fitsInIntro -> {
-                        mainUri?.let { uris.add(it) }
-                        val djStartMs = maxOf(markers!!.effectiveIntroStartMs, markers.introEndMs - djDurMs - 250L)
-                        plannedOverlayCue = PlannedOverlayCue(djIntroUri!!, djStartMs, markers.introEndMs)
-                        introItemCount = 0
-                        GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "${item.trackName}: fits-in-intro [${markers.effectiveIntroStartMs}..${markers.introEndMs}ms], djDur=${djDurMs}ms, fireAt=${djStartMs}ms"
-                        }
-                    }
-                    canPreRoll -> {
-                        mainUri?.let { uris.add(it) }
-                        val preRollDelayMs = (djDurMs - markers!!.introEndMs + 250L).coerceIn(500L, (djDurMs - 500L).coerceAtLeast(500L))
-                        plannedPreRollCue = PlannedPreRollCue(djIntroUri!!, preRollDelayMs, markers.introEndMs)
-                        introItemCount = 0
-                        GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "${item.trackName}: pre-roll djDur=${djDurMs}ms, introEnd=${markers.introEndMs}ms, delay=${preRollDelayMs}ms"
-                        }
-                    }
-                    else -> {
-                        if (djIntroUri != null) {
-                            uris.add(djIntroUri)
-                        }
-                        if (mainUri != null) {
-                            uris.add(mainUri)
-                        }
-                        introItemCount = if (uris.size > 1) 1 else 0
-                    }
-                }
-
-                if (totalBlocks > Rpf3Archive.CHUNK_THRESHOLD_BLOCKS && mainUri != null) {
-                    registerChunkMetadata(item, 0, 0, mainUri)
-                    queuedChunkKeys.add(buildChunkKey(item.trackName, 0, 0))
-                }
-                currentSegmentUris = uris
+                plannedOverlayCue = built.overlayCue
+                plannedPreRollCue = built.preRollCue
+                introItemCount = built.introCount
+                currentSegmentUris = built.uris
                 currentSongItem = item
                 lastSegment = RadioSegmentType.Song
-                nextChunkItem = item
-                nextChunkTotalBlocks = totalBlocks
-                nextChunkLoopEpoch = 0
-                nextChunkStartBlock = if (totalBlocks > Rpf3Archive.CHUNK_THRESHOLD_BLOCKS) Rpf3Archive.CHUNK_BLOCKS else totalBlocks
-                currentMultiChunksPlayedInRow = 1
                 pendingBreakClips.clear()
             }
             is Gen3BroadcastEvent.BreakBlockEvent -> {
@@ -1417,7 +1477,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 val clips = ArrayList(event.standaloneClips)
                 if (clips.isNotEmpty()) {
                     val first = clips.removeAt(0)
-                    val u = first.clip.archive.materializeAudioUri(first.clip.trackKey)
+                    val u = resolvePlaybackUri(first.clip.archive, first.clip.trackKey)
                     if (u != null) {
                         uris.add(u)
                         pinAudioUri(u)
@@ -1428,17 +1488,21 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 }
                 currentSegmentUris = uris
                 currentSongItem = null
+                introItemCount = 0
                 pendingBreakClips.clear()
                 pendingBreakClips.addAll(clips)
             }
             is Gen3BroadcastEvent.InterludeEvent -> {
                 val ref = event.clip
-                val u = ref.archive.materializeAudioUri(ref.trackKey)
+                val u = resolvePlaybackUri(ref.archive, ref.trackKey)
                 if (u != null) {
                     pinAudioUri(u)
                     currentSegmentUris = listOf(u)
+                } else {
+                    currentSegmentUris = emptyList()
                 }
                 currentSongItem = null
+                introItemCount = 0
                 lastSegment = event.segmentType
                 pendingBreakClips.clear()
             }
@@ -1448,18 +1512,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private fun prepareContinuousMixSegment() {
         val mixEntries = getAllMixEntries()
         if (mixEntries.isEmpty()) return
-        val chunkBlocks = Rpf3Archive.CHUNK_BLOCKS
         val item: Rpf3SongItem
-        val startBlk: Int
-        if (!hasStartedContinuousMix) {
+        val coldStart = !hasStartedContinuousMix
+        if (coldStart) {
             item = mixEntries[rng.nextInt(mixEntries.size)]
-            val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
-            val alignedBuckets = ((totalBlocks - 1) / chunkBlocks).coerceAtLeast(0)
-            startBlk = if (totalBlocks > chunkBlocks * 2 && alignedBuckets > 0) {
-                rng.nextInt(alignedBuckets + 1) * chunkBlocks
-            } else {
-                0
-            }
             hasStartedContinuousMix = true
         } else {
             val prev = currentSongItem
@@ -1470,29 +1526,22 @@ private val RPF3_INTRO_ALIASES = mapOf(
             } else {
                 prev ?: series[0]
             }
-            startBlk = 0
         }
 
-        val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
-        val loopEpoch = 0
-        val chunkKey = buildChunkKey(item.trackName, loopEpoch, startBlk)
-        if (!queuedChunkKeys.add(chunkKey)) return
-        val mainUri = materializeValidChunkUri(item, startBlk, chunkBlocks) ?: return
-        pinAudioUri(mainUri)
-        nextChunkItem = item
-        nextChunkTotalBlocks = totalBlocks
-        nextChunkLoopEpoch = loopEpoch
-        nextChunkStartBlock = startBlk + chunkBlocks
-        currentMultiChunksPlayedInRow = 1
+        val streamIdx = item.archive.getOrBuildStreamIndex(item.trackName) ?: return
+        val mainUri = item.archive.buildStreamUri(streamIdx.entryName)
+        durationCache[mainUri] = streamIdx.durationMs
+        pendingMixStartOffsetMs = if (coldStart && streamIdx.durationMs > 30_000L) {
+            rng.nextInt((streamIdx.durationMs - 30_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()).toLong()
+        } else {
+            0L
+        }
 
-        registerChunkMetadata(item, startBlk, loopEpoch, mainUri)
-        val startMs = item.archive.getChunkStartMs(item.trackName, startBlk)
-
-        val markers = item.archive.readTrackMarkers(item.trackName)
+        val markers = item.archive.readTrackMarkers(streamIdx.entryName)
         if (markers.isNotEmpty()) {
             activeMixMarkers = markers
-            activeMixChunkStartMs = startMs
             lastDisplayedMixTrackId = -1
+            lastPolledMixPosMs = -1L
         } else {
             stopMixPoller(clearMarkers = true)
         }
@@ -1523,7 +1572,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 val exo = player.exoPlayer
                 val curWinIdx = exo.currentMediaItemIndex
                 val isFinalWindow = curWinIdx >= exo.mediaItemCount - 1
-                val isFinalChunk = nextChunkTotalBlocks <= 0 || (nextChunkStartBlock >= nextChunkTotalBlocks && !isMixItem(songItem))
+                val isFinalChunk = !isMixItem(songItem)
 
                 val hasValidOutro = markers != null && markers.hasOutroWindow && markers.outroStartMs > (markers.introEndMs.coerceAtLeast(0L) + 15_000L)
 
@@ -1575,7 +1624,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                                 is Gen3BroadcastEvent.InterludeEvent -> {
                                     if (ev.isDryOverlayEligible) {
                                         val voiceUri = ev.clip.archive.materializeAudioUri(ev.clip.trackKey)
-                                        val djDur = if (voiceUri != null) readAudioDurationMs(context, voiceUri) else 0L
+                                        val djDur = if (voiceUri != null) getFileDurationMs(voiceUri) else 0L
                                         if (voiceUri != null && djDur in 1..12_000L) {
                                             outroOverlapHandled = true
                                             pinAudioUri(voiceUri)
@@ -1617,74 +1666,31 @@ private val RPF3_INTRO_ALIASES = mapOf(
         when (event) {
             is Gen3BroadcastEvent.SongEvent -> {
                 val item = event.song
-                val uris = ArrayList<Uri>()
-                val pinned = ArrayList<String>()
                 val markers = item.archive.readDjMarkers(item.trackName)
+                val mainUri = resolvePlaybackUri(item.archive, item.trackName)
+                val built = buildSongSegmentMedia(
+                    event = event,
+                    mainUri = mainUri,
+                    markers = markers,
+                    skipIntroDecode = false,
+                    pinToActive = false
+                )
 
-                var djIntroUri: Uri? = null
-                var djDurMs = 0L
-                if (event.songIntroOverlay != null) {
-                    val u = materializeClip(event.songIntroOverlay.trackKey)
-                    if (u != null) {
-                        val p = u.toString()
-                        pinned.add(p)
-                        Rpf3Archive.pinFile(p)
-                        djIntroUri = u
-                        djDurMs = readAudioDurationMs(context, u)
-                    }
-                }
-                val totalBlocks = item.archive.getEntryBlockCount(item.trackName)
-                val mainUri = if (totalBlocks > Rpf3Archive.CHUNK_THRESHOLD_BLOCKS) {
-                    item.archive.materializeAudioChunkUri(item.trackName, 0, Rpf3Archive.CHUNK_BLOCKS)
-                } else {
-                    item.archive.materializeAudioUri(item.trackName)
-                }
-                if (mainUri != null) {
-                    val p = mainUri.toString()
-                    pinned.add(p)
-                    Rpf3Archive.pinFile(p)
-                }
-
-                val fitsInIntro = djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > 0L && djDurMs <= markers.introDurationMs
-                val canPreRoll = djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > markers.introDurationMs && markers.introEndMs >= 2000L && markers.effectiveIntroStartMs <= 3000L
-
-                var pOverlayCue: PlannedOverlayCue? = null
-                var pPreRollCue: PlannedPreRollCue? = null
-
-                when {
-                    fitsInIntro -> {
-                        mainUri?.let { uris.add(it) }
-                        val djStartMs = maxOf(markers!!.effectiveIntroStartMs, markers.introEndMs - djDurMs - 250L)
-                        pOverlayCue = PlannedOverlayCue(djIntroUri!!, djStartMs, markers.introEndMs)
-                    }
-                    canPreRoll -> {
-                        mainUri?.let { uris.add(it) }
-                        val preRollDelayMs = (djDurMs - markers!!.introEndMs + 250L).coerceIn(500L, (djDurMs - 500L).coerceAtLeast(500L))
-                        pPreRollCue = PlannedPreRollCue(djIntroUri!!, preRollDelayMs, markers.introEndMs)
-                    }
-                    else -> {
-                        if (djIntroUri != null) uris.add(djIntroUri)
-                        if (mainUri != null) uris.add(mainUri)
-                    }
-                }
-
-                if (uris.isNotEmpty() && _playing && playGeneration.get() == expectedGen) {
+                if (built.uris.isNotEmpty() && _playing && playGeneration.get() == expectedGen) {
                     prefetchedItem = PrefetchedBroadcastItem(
-                        uris = uris,
-                        pinnedFiles = pinned,
+                        uris = built.uris,
+                        pinnedFiles = built.pinnedFiles,
                         event = event,
                         songItem = item,
                         segmentType = RadioSegmentType.Song,
-                        plannedOverlayCue = pOverlayCue,
-                        plannedPreRollCue = pPreRollCue
+                        plannedOverlayCue = built.overlayCue,
+                        plannedPreRollCue = built.preRollCue
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
                         "Rpf3[$stationTitle]: Look-ahead prefetched next song '${item.trackName}' (intro=${event.songIntroOverlay != null})"
                     }
                 } else {
-                    pinned.forEach { Rpf3Archive.unpinFile(it) }
+                    built.pinnedFiles.forEach { Rpf3Archive.unpinFile(it) }
                 }
             }
             is Gen3BroadcastEvent.BreakBlockEvent -> {
@@ -1693,12 +1699,14 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 val pinned = ArrayList<String>()
                 if (clips.isNotEmpty()) {
                     val first = clips.removeAt(0)
-                    val u = first.clip.archive.materializeAudioUri(first.clip.trackKey)
+                    val u = resolvePlaybackUri(first.clip.archive, first.clip.trackKey)
                     if (u != null) {
                         uris.add(u)
-                        val p = u.toString()
-                        pinned.add(p)
-                        Rpf3Archive.pinFile(p)
+                        if (u.scheme != Rpf3StreamingDataSource.SCHEME) {
+                            val p = u.toString()
+                            pinned.add(p)
+                            Rpf3Archive.pinFile(p)
+                        }
                     }
                 }
                 if (uris.isNotEmpty() && _playing && playGeneration.get() == expectedGen) {
@@ -1719,13 +1727,18 @@ private val RPF3_INTRO_ALIASES = mapOf(
             }
             is Gen3BroadcastEvent.InterludeEvent -> {
                 val ref = event.clip
-                val u = ref.archive.materializeAudioUri(ref.trackKey)
+                val u = resolvePlaybackUri(ref.archive, ref.trackKey)
                 if (u != null && _playing && playGeneration.get() == expectedGen) {
-                    val p = u.toString()
-                    Rpf3Archive.pinFile(p)
+                    val pinned = if (u.scheme != Rpf3StreamingDataSource.SCHEME) {
+                        val p = u.toString()
+                        Rpf3Archive.pinFile(p)
+                        listOf(p)
+                    } else {
+                        emptyList()
+                    }
                     prefetchedItem = PrefetchedBroadcastItem(
                         uris = listOf(u),
-                        pinnedFiles = listOf(p),
+                        pinnedFiles = pinned,
                         event = event,
                         songItem = null,
                         segmentType = event.segmentType
@@ -1734,76 +1747,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         "Rpf3[$stationTitle]: Look-ahead prefetched interlude '${ref.trackKey}' (${event.role}, dryEligible=${event.isDryOverlayEligible})"
                     }
                 }
-            }
-        }
-    }
-
-    private fun prefetchAndQueueNextChunk(expectedGen: Int = playGeneration.get()) {
-        if (Looper.myLooper() != Looper.getMainLooper()) {
-            mainHandler.post { prefetchAndQueueNextChunk(expectedGen) }
-            return
-        }
-        if (!_playing || playGeneration.get() != expectedGen) return
-        if (lastSegment != RadioSegmentType.Song || currentSongItem == null) return
-
-        val exo = player.exoPlayer
-        val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
-        val aheadCount = (exo.mediaItemCount - 1) - curIdx
-        if (aheadCount >= 1) return
-        if (activeChunkPrefetchJob?.isActive == true) return
-
-        val target = resolveNextChunkTarget() ?: return
-        val chunkKey = buildChunkKey(target.item.trackName, target.loopEpoch, target.startBlock)
-        if (queuedChunkKeys.contains(chunkKey)) return
-
-        activeChunkPrefetchJob = stationScope.launch(StationDispatchers.ioDispatcher) {
-            try {
-                if (!_playing || playGeneration.get() != expectedGen) return@launch
-                val nextUri = materializeValidChunkUri(target.item, target.startBlock, target.chunkBlocks) ?: return@launch
-                if (!_playing || playGeneration.get() != expectedGen) return@launch
-
-                // Pin BEFORE addMediaItem() so LRU eviction cannot delete queued chunks
-                pinAudioUri(nextUri)
-
-                withContext(Dispatchers.Main.immediate) {
-                    if (!_playing || playGeneration.get() != expectedGen ||
-                        lastSegment != RadioSegmentType.Song || currentSongItem == null
-                    ) {
-                        unpinIfUnusedByPlayer(nextUri)
-                        return@withContext
-                    }
-                    if (!queuedChunkKeys.add(chunkKey)) {
-                        unpinIfUnusedByPlayer(nextUri)
-                        return@withContext
-                    }
-
-                    val chunkMediaId = registerChunkMetadata(target.item, target.startBlock, target.loopEpoch, nextUri)
-                    val mediaItem = MediaItem.Builder().setUri(nextUri).setMediaId(chunkMediaId).build()
-                    player.exoPlayer.addMediaItem(mediaItem)
-
-                    if (!isMixItem(target.item)) {
-                        currentSegmentUris = currentSegmentUris + nextUri
-                    }
-
-                    nextChunkItem = target.item
-                    nextChunkTotalBlocks = target.totalBlocks
-                    nextChunkLoopEpoch = target.loopEpoch
-                    nextChunkStartBlock = target.startBlock + target.chunkBlocks
-                    currentMultiChunksPlayedInRow += 1
-
-                    val remainingAhead = (player.exoPlayer.mediaItemCount - 1) - player.exoPlayer.currentMediaItemIndex.coerceAtLeast(0)
-                    if (remainingAhead < 1) {
-                        mainHandler.post {
-                            if (_playing && playGeneration.get() == expectedGen) {
-                                prefetchAndQueueNextChunk(expectedGen)
-                            }
-                        }
-                    }
-                }
-            } catch (ce: CancellationException) {
-                throw ce
-            } catch (e: Throwable) {
-                GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: prefetchAndQueueNextChunk error", e)
             }
         }
     }
@@ -1892,14 +1835,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 }
 
                 player.exoPlayer.clearMediaItems()
+                val isSinglePartMix = isMixItem(currentSongItem) && getMixSeriesPartsFor(currentSongItem!!).size <= 1
+                player.repeatMode = if (isSinglePartMix) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
                 for (u in uris) {
-                    val chunkMediaId = chunkMediaIdByUri[u]
-                    val item = if (chunkMediaId != null) {
-                        MediaItem.Builder().setUri(u).setMediaId(chunkMediaId).build()
-                    } else {
-                        MediaItem.fromUri(u)
-                    }
-                    player.exoPlayer.addMediaItem(item)
+                    player.exoPlayer.addMediaItem(MediaItem.fromUri(u))
                 }
                 if (startWindowIndex > 0 || startPositionMs > 0L) {
                     player.exoPlayer.seekTo(startWindowIndex, startPositionMs)
@@ -1910,10 +1849,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                     private var alreadyHandled = false
                     override fun onPlaybackStateChanged(state: Int) {
                         if (state == Player.STATE_READY && activeMixMarkers.isNotEmpty()) {
-                            val mediaId = player.exoPlayer.currentMediaItem?.mediaId
-                            if (mediaId != null && chunkMetaByMediaId.containsKey(mediaId)) {
-                                updateMixTrackMetadata()
-                            }
+                            updateMixTrackMetadata()
                         }
                         if (!alreadyHandled && state == Player.STATE_ENDED) {
                             alreadyHandled = true
@@ -1933,51 +1869,35 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
                     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                         val exo = player.exoPlayer
-                        val currentMediaId = mediaItem?.mediaId ?: exo.currentMediaItem?.mediaId
-                        if (currentMediaId != null) {
-                            val meta = chunkMetaByMediaId[currentMediaId]
-                            if (meta != null) {
-                                if (meta.item != currentSongItem) {
-                                    currentSongItem = meta.item
-                                    if (isMixItem(meta.item)) {
-                                        val markers = meta.item.archive.readTrackMarkers(meta.item.trackName)
-                                        if (markers.isNotEmpty()) {
-                                            activeMixMarkers = markers
-                                            lastDisplayedMixTrackId = -1
-                                        } else {
-                                            stopMixPoller(clearMarkers = true)
-                                        }
-                                    }
-                                }
-                                activeMixChunkStartMs = meta.startMs
-                            }
+                        if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT && activeMixMarkers.isNotEmpty()) {
+                            lastDisplayedMixTrackId = -1
+                            lastPolledMixPosMs = 0L
+                            updateMixTrackMetadata()
                         }
-
-                        // Unpin ONLY chunks that ExoPlayer has transitioned past and are no longer active/queued
                         val curIdx = exo.currentMediaItemIndex.coerceAtLeast(0)
-                        val activeMediaIds = HashSet<String>()
-                        val activeUriStrings = HashSet<String>()
-                        for (i in curIdx until exo.mediaItemCount) {
-                            val mi = exo.getMediaItemAt(i)
-                            if (mi.mediaId.isNotEmpty()) activeMediaIds.add(mi.mediaId)
-                            mi.localConfiguration?.uri?.toString()?.let { activeUriStrings.add(it) }
-                        }
-                        val pastEntries = chunkMetaByMediaId.entries.filter { (mId, _) -> mId !in activeMediaIds }
-                        for ((mId, meta) in pastEntries) {
-                            chunkMetaByMediaId.remove(mId)
-                            queuedChunkKeys.remove(buildChunkKey(meta.item.trackName, meta.loopEpoch, meta.startBlock))
-                            if (meta.uri.toString() !in activeUriStrings) {
-                                unpinAudioUri(meta.uri)
-                            }
-                        }
-
                         updateMetadataForWindowIndex(curIdx, expectedGen)
 
                         // Staged Break Decoding: while current clip plays, stage next queued break clip
                         stageNextPendingBreakClip(expectedGen)
+                    }
 
-                        if (lastSegment == RadioSegmentType.Song && currentSongItem != null && nextChunkTotalBlocks > 0) {
-                            prefetchAndQueueNextChunk(expectedGen)
+                    override fun onPositionDiscontinuity(
+                        oldPosition: Player.PositionInfo,
+                        newPosition: Player.PositionInfo,
+                        reason: Int
+                    ) {
+                        if (!_playing || playGeneration.get() != expectedGen) return
+                        if (activeMixMarkers.isNotEmpty() &&
+                            (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION ||
+                             reason == Player.DISCONTINUITY_REASON_SEEK)
+                        ) {
+                            if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION ||
+                                newPosition.positionMs < oldPosition.positionMs
+                            ) {
+                                lastDisplayedMixTrackId = -1
+                                lastPolledMixPosMs = newPosition.positionMs
+                            }
+                            updateMixTrackMetadata()
                         }
                     }
 
@@ -2007,10 +1927,6 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         startMixPoller(expectedGen)
                     } else {
                         stopMixPoller(clearMarkers = false)
-                    }
-
-                    if (lastSegment == RadioSegmentType.Song && currentSongItem != null && nextChunkTotalBlocks > 0) {
-                        prefetchAndQueueNextChunk(expectedGen)
                     }
 
                     // Start look-ahead prefetch monitor for discrete songs
@@ -2055,7 +1971,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
         activeBreakStagingJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
                 if (!_playing || playGeneration.get() != expectedGen) return@launch
-                val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey) ?: return@launch
+                val uri = resolvePlaybackUri(nextClip.clip.archive, nextClip.clip.trackKey) ?: return@launch
                 pinAudioUri(uri)
                 withContext(Dispatchers.Main.immediate) {
                     if (_playing && playGeneration.get() == expectedGen) {
@@ -2090,7 +2006,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
                     return@launch
                 }
                 val nextClip = pendingBreakClips.removeAt(0)
-                val uri = nextClip.clip.archive.materializeAudioUri(nextClip.clip.trackKey)
+                val uri = resolvePlaybackUri(nextClip.clip.archive, nextClip.clip.trackKey)
                 if (uri != null) {
                     pinAudioUri(uri)
                     withContext(Dispatchers.Main.immediate) {
@@ -2111,6 +2027,11 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 throw ce
             } catch (e: Throwable) {
                 GTRadioLogger.e("Rpf3RadioStation[$stationTitle]: stageAndPlayRemainingBreakClip error", e)
+                withContext(Dispatchers.Main.immediate) {
+                    if (_playing && playGeneration.get() == expectedGen) {
+                        playNext()
+                    }
+                }
             }
         }
     }
@@ -2120,8 +2041,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
         activePollerJob = stationScope.launch {
             while (isActive && _playing && playGeneration.get() == expectedGen && activeMixMarkers.isNotEmpty()) {
                 val exo = player.exoPlayer
-                val mediaId = exo.currentMediaItem?.mediaId
-                if (exo.playbackState == Player.STATE_READY && mediaId != null && chunkMetaByMediaId.containsKey(mediaId)) {
+                if (exo.playbackState == Player.STATE_READY) {
                     updateMixTrackMetadata()
                 }
                 delay(1000L)
@@ -2134,8 +2054,8 @@ private val RPF3_INTRO_ALIASES = mapOf(
         activePollerJob = null
         if (clearMarkers) {
             activeMixMarkers = emptyList()
-            activeMixChunkStartMs = 0L
             lastDisplayedMixTrackId = -1
+            lastPolledMixPosMs = -1L
         }
     }
 
@@ -2143,12 +2063,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
         if (!_playing) return
         val exo = player.exoPlayer
         if (exo.playbackState != Player.STATE_READY) return
-        val mediaId = exo.currentMediaItem?.mediaId ?: return
-        val chunkMeta = chunkMetaByMediaId[mediaId] ?: return
-        if (chunkMeta.item != currentSongItem || activeMixMarkers.isEmpty()) {
-            val markers = chunkMeta.item.archive.readTrackMarkers(chunkMeta.item.trackName)
+        val item = currentSongItem ?: return
+        if (activeMixMarkers.isEmpty()) {
+            val markers = item.archive.readTrackMarkers(item.trackName)
             if (markers.isNotEmpty()) {
-                currentSongItem = chunkMeta.item
                 activeMixMarkers = markers
             }
         }
@@ -2157,10 +2075,13 @@ private val RPF3_INTRO_ALIASES = mapOf(
             setStationOnlyMetadata()
             return
         }
-        val currentTrackPosMs = exo.currentPosition.coerceAtLeast(0L).let {
+        val currentMs = exo.currentPosition.coerceAtLeast(0L).let {
             if (exo.duration > 0) it.coerceAtMost(exo.duration) else it
         }
-        val currentMs = chunkMeta.startMs + currentTrackPosMs
+        if (lastPolledMixPosMs > 10_000L && currentMs < 2_000L) {
+            lastDisplayedMixTrackId = -1
+        }
+        lastPolledMixPosMs = currentMs
 
         var resolvedTrackId = -1
         for (m in activeMixMarkers) {
@@ -2189,10 +2110,11 @@ private val RPF3_INTRO_ALIASES = mapOf(
                 if (cached != null) {
                     art = cached
                 } else {
+                    val expectedGen = playGeneration.get()
                     val currentTid = resolvedTrackId
                     Gen2MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
                         mainHandler.post {
-                            if (_playing && lastDisplayedMixTrackId == currentTid) {
+                            if (_playing && playGeneration.get() == expectedGen && lastDisplayedMixTrackId == currentTid) {
                                 val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
                                 val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
                                 val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
@@ -2314,14 +2236,14 @@ private val RPF3_INTRO_ALIASES = mapOf(
                         onMetadataReady(title, artist, album, 2009)
                     }
                 }
-                val uri = targetItem.archive.materializeFullAudioUri(targetItem.trackName)
+                val uri = resolvePlaybackUri(targetItem.archive, targetItem.trackName)
                 if (token != cleanPlayGeneration.get()) return@launch
                 if (uri == null) {
-                    GTRadioLogger.log("Rpf3RadioStation: Failed to materialize clean track audio for '${targetItem.trackName}'")
+                    GTRadioLogger.log("Rpf3RadioStation: Failed to build clean track stream for '${targetItem.trackName}'")
                     withContext(Dispatchers.Main.immediate) { onTrackFinished() }
                     return@launch
                 }
-                val dur = readAudioDurationMs(context, uri)
+                val dur = getFileDurationMs(uri)
                 withContext(Dispatchers.Main.immediate) {
                     if (token != cleanPlayGeneration.get()) return@withContext
                     player.playCleanQueue(listOf(uri), listOf(dur)) {

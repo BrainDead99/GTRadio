@@ -114,6 +114,7 @@
                 android:ellipsize="end"
                 android:letterSpacing="0.03"
                 android:maxLines="1"
+                android:minLines="1"
                 android:textColor="#D49A2A"
                 android:textSize="14sp"
                 android:textStyle="bold"
@@ -127,6 +128,7 @@
                 android:ellipsize="end"
                 android:letterSpacing="0.03"
                 android:maxLines="1"
+                android:minLines="1"
                 android:textColor="#D49A2A"
                 android:textSize="13sp"
                 tools:text="RAGE AGAINST THE MACHINE" />
@@ -139,6 +141,7 @@
                 android:ellipsize="end"
                 android:letterSpacing="0.03"
                 android:maxLines="1"
+                android:minLines="1"
                 android:textColor="#D49A2A"
                 android:textSize="13sp"
                 tools:text="RAGE AGAINST THE MACHINE" />

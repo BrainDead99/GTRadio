@@ -927,6 +927,120 @@ data class Rpf7ClipRef(
         return PreparedPlayback(listOf(mainUri), 0, targetMixMs, totalMixDurationMs, null, null)
     }
 
+    private data class BuiltSongMedia(
+        val uris: List<Uri>,
+        val pinnedFiles: List<String>,
+        val overlayCue: PlannedOverlayCue?,
+        val preRollCue: PlannedPreRollCue?,
+        val introCount: Int
+    )
+
+    private fun buildSongSegmentMedia(
+        event: Gen3BroadcastEvent.SongEvent<Rpf7SongItem, Rpf7ClipRef>,
+        mainUri: Uri?,
+        markers: DjMarkerWindow?,
+        skipIntroDecode: Boolean,
+        pinToActive: Boolean
+    ): BuiltSongMedia {
+        val uris = ArrayList<Uri>()
+        val pinned = ArrayList<String>()
+
+        var djIntroUri: Uri? = null
+        var djDurMs = 0L
+        val fallbackIneligible = event.isFallbackIntroOverlay &&
+            (markers == null || !markers.hasIntroWindow || markers.introDurationMs < 3000L)
+        if (!skipIntroDecode && !fallbackIneligible && event.songIntroOverlay != null) {
+            val u = materializeClip(event.songIntroOverlay.trackKey)
+            if (u != null) {
+                val dur = getFileDurationMs(u)
+                val isIntroEligible = if (event.isFallbackIntroOverlay) {
+                    markers != null && markers.hasIntroWindow && markers.introDurationMs >= 3000L && dur in 1..markers.introDurationMs
+                } else {
+                    true
+                }
+                if (isIntroEligible) {
+                    if (pinToActive) {
+                        pinAudioUri(u)
+                    } else if (u.scheme != Rpf7StreamingDataSource.SCHEME) {
+                        val p = u.toString()
+                        pinned.add(p)
+                        Rpf7Archive.pinFile(p)
+                    }
+                    djIntroUri = u
+                    djDurMs = dur
+                }
+            }
+        }
+
+        if (mainUri != null) {
+            if (pinToActive) {
+                pinAudioUri(mainUri)
+            } else if (mainUri.scheme != Rpf7StreamingDataSource.SCHEME) {
+                val p = mainUri.toString()
+                pinned.add(p)
+                Rpf7Archive.pinFile(p)
+            }
+        }
+
+        val fitsInIntro = djIntroUri != null && markers != null && markers.hasIntroWindow &&
+            djDurMs > 0L && djDurMs <= markers.introDurationMs
+        val canPreRoll = !event.isFallbackIntroOverlay && djIntroUri != null && markers != null && markers.hasIntroWindow &&
+            djDurMs > markers.introDurationMs && markers.introEndMs >= 2000L && markers.effectiveIntroStartMs <= 3000L
+
+        var overlayCue: PlannedOverlayCue? = null
+        var preRollCue: PlannedPreRollCue? = null
+        var introCount = 0
+
+        when {
+            fitsInIntro -> {
+                mainUri?.let { uris.add(it) }
+                val djStartMs = maxOf(markers!!.effectiveIntroStartMs, markers.introEndMs - djDurMs - 250L)
+                overlayCue = PlannedOverlayCue(djIntroUri!!, djStartMs, markers.introEndMs)
+                GTRadioLogger.logVerbose("DJ-OVERLAY") {
+                    "${event.song.trackName}: fits-in-intro [${markers.effectiveIntroStartMs}..${markers.introEndMs}ms], djDur=${djDurMs}ms, fireAt=${djStartMs}ms"
+                }
+            }
+            canPreRoll -> {
+                mainUri?.let { uris.add(it) }
+                val preRollDelayMs = (djDurMs - markers!!.introEndMs + 250L).coerceIn(500L, (djDurMs - 500L).coerceAtLeast(500L))
+                preRollCue = PlannedPreRollCue(djIntroUri!!, preRollDelayMs, markers.introEndMs)
+                GTRadioLogger.logVerbose("DJ-OVERLAY") {
+                    "${event.song.trackName}: pre-roll djDur=${djDurMs}ms, introEnd=${markers.introEndMs}ms, delay=${preRollDelayMs}ms"
+                }
+            }
+            else -> {
+                if (!event.isFallbackIntroOverlay && djIntroUri != null) {
+                    uris.add(djIntroUri)
+                }
+                if (mainUri != null) {
+                    uris.add(mainUri)
+                }
+                introCount = if (uris.size > 1) 1 else 0
+            }
+        }
+
+        return BuiltSongMedia(uris, pinned, overlayCue, preRollCue, introCount)
+    }
+
+    private fun resolveLandedWindowPlayback(
+        uris: List<Uri>,
+        landedSeekMs: Long,
+        preRoll: PlannedPreRollCue?,
+        overlay: PlannedOverlayCue?
+    ): PreparedPlayback {
+        val totalDur = uris.sumOf { getFileDurationMs(it) }
+        var rem = landedSeekMs.coerceAtLeast(0L)
+        for (i in uris.indices) {
+            val dur = getFileDurationMs(uris[i])
+            if (rem < dur || i == uris.lastIndex) {
+                val clampedSeek = rem.coerceIn(0L, (dur - 1L).coerceAtLeast(0L))
+                return PreparedPlayback(uris, i, clampedSeek, totalDur, preRoll, overlay)
+            }
+            rem -= dur
+        }
+        return PreparedPlayback(uris, 0, 0L, totalDur, preRoll, overlay)
+    }
+
     private fun resolveResumeFromRealTimePrepared(
         rawElapsedMs: Long,
         emitMetadata: Boolean,
@@ -936,7 +1050,7 @@ data class Rpf7ClipRef(
         for (u in currentSegmentUris) {
             getFileDurationMs(u)
         }
-        var winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
+        val winIdx = stoppedWindowIndex.coerceIn(0, (currentSegmentUris.size - 1).coerceAtLeast(0))
         var posMs = stoppedPositionMs.coerceAtLeast(0L)
 
         val isContinuousMix = isContinuousMixStation() || (currentSongItem != null && Rpf7MetadataRepository.getTrackMeta(currentSongItem!!.trackName).isContinuousMix)
@@ -947,32 +1061,223 @@ data class Rpf7ClipRef(
             }
         }
 
+        for (i in winIdx until currentSegmentUris.size) {
+            val uri = currentSegmentUris[i]
+            val durMs = getFileDurationMs(uri)
+            val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
+            if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
+                if (!isValid()) return null
+                for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
+                val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+                val preRoll = plannedPreRollCue
+                plannedPreRollCue = null
+                val overlay = plannedOverlayCue
+                plannedOverlayCue = null
+                return PreparedPlayback(currentSegmentUris, i, posMs + remainingMs, totalDur, preRoll, overlay)
+            } else {
+                remainingMs -= timeLeftMs
+                posMs = 0L
+            }
+        }
+
+        for (u in currentSegmentUris) {
+            unpinAudioUri(u)
+        }
+        currentSegmentUris = emptyList()
+        if (emitMetadata) {
+            setStationOnlyMetadata()
+        }
+
         var safety = 0
-        while (safety < 6 && currentSegmentUris.isNotEmpty()) {
+        while (safety < 6 && isValid()) {
             safety++
-            for (i in winIdx until currentSegmentUris.size) {
-                val uri = currentSegmentUris[i]
-                val durMs = getFileDurationMs(uri)
-                val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
-                if (remainingMs < timeLeftMs && areSegmentFilesValid(currentSegmentUris.subList(i, currentSegmentUris.size))) {
-                    if (!isValid()) return null
-                    for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
-                    val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
-                    val preRoll = plannedPreRollCue
-                    plannedPreRollCue = null
-                    val overlay = plannedOverlayCue
-                    plannedOverlayCue = null
-                    return PreparedPlayback(currentSegmentUris, i, posMs + remainingMs, totalDur, preRoll, overlay)
-                } else {
-                    remainingMs -= timeLeftMs
-                    posMs = 0L
+            val forceLand = (safety >= 6)
+
+            val prefetched = prefetchedItem
+            if (prefetched != null) {
+                prefetchedItem = null
+                if (areSegmentFilesValid(prefetched.uris)) {
+                    currentSegmentUris = prefetched.uris
+                    currentSongItem = prefetched.songItem
+                    lastSegment = prefetched.segmentType
+                    pendingBreakClips.clear()
+                    prefetched.pendingBreakClips?.let { pendingBreakClips.addAll(it) }
+                    plannedOverlayCue = prefetched.plannedOverlayCue
+                    plannedPreRollCue = prefetched.plannedPreRollCue
+                    introItemCount = if (prefetched.plannedOverlayCue != null || prefetched.plannedPreRollCue != null) 0 else if (currentSegmentUris.size > 1 && lastSegment == RadioSegmentType.Song) 1 else 0
+
+                    for (i in currentSegmentUris.indices) {
+                        val durMs = getFileDurationMs(currentSegmentUris[i])
+                        if (remainingMs < durMs) {
+                            if (!isValid()) return null
+                            for (u in currentSegmentUris.subList(i, currentSegmentUris.size)) pinAudioUri(u)
+                            val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+                            val preRoll = plannedPreRollCue
+                            plannedPreRollCue = null
+                            val overlay = plannedOverlayCue
+                            plannedOverlayCue = null
+                            return PreparedPlayback(currentSegmentUris, i, remainingMs, totalDur, preRoll, overlay)
+                        }
+                        remainingMs -= durMs
+                    }
+                    for (u in currentSegmentUris) unpinAudioUri(u)
+                    if (forceLand) {
+                        for (u in currentSegmentUris) pinAudioUri(u)
+                        val totalDur = currentSegmentUris.sumOf { getFileDurationMs(it) }
+                        val preRoll = plannedPreRollCue
+                        plannedPreRollCue = null
+                        val overlay = plannedOverlayCue
+                        plannedOverlayCue = null
+                        return PreparedPlayback(currentSegmentUris, 0, 0L, totalDur, preRoll, overlay)
+                    }
+                    continue
                 }
             }
-            if (!advanceMultiChunkOrPickNext(emitMetadata)) break
-            winIdx = 0
-            posMs = 0L
-            for (u in currentSegmentUris) {
-                getFileDurationMs(u)
+
+            if (isContinuousMix && allSongItems.isNotEmpty()) {
+                prepareContinuousMixSegment()
+                if (currentSegmentUris.isNotEmpty() && isValid()) {
+                    val startOff = pendingMixStartOffsetMs
+                    pendingMixStartOffsetMs = 0L
+                    return PreparedPlayback(currentSegmentUris, 0, startOff, getFileDurationMs(currentSegmentUris[0]), null, null)
+                }
+                break
+            }
+
+            val event = director.pickNextEvent(
+                pickIntro = { song ->
+                    if (song.introKeys.isNotEmpty()) {
+                        val intro = song.introKeys[rng.nextInt(song.introKeys.size)]
+                        Rpf7ClipRef(song.archive, intro)
+                    } else null
+                },
+                pickFallbackIntro = {
+                    val clip = if (director.timeOfDayDjQueue.isNotEmpty()) {
+                        director.timeOfDayDjQueue.next()
+                    } else if (director.generalDjQueue.isNotEmpty()) {
+                        director.generalDjQueue.next()
+                    } else null
+                    clip
+                }
+            )
+
+            when (event) {
+                is Gen3BroadcastEvent.SongEvent -> {
+                    val item = event.song
+                    val mainUri = resolvePlaybackUri(item.archive, item.trackName)
+                    val mainDurMs = if (mainUri != null) getFileDurationMs(mainUri) else 0L
+                    if (!forceLand && mainDurMs > 0L && remainingMs >= mainDurMs) {
+                        remainingMs -= mainDurMs
+                        GTRadioLogger.logVerbose("CATCHUP") {
+                            "Rpf7[$stationTitle]: skipped elapsed '${item.trackName}' (${mainDurMs}ms) without decoding intro; rem=${remainingMs}ms"
+                        }
+                        continue
+                    }
+
+                    var landedSeekMs = if (forceLand && remainingMs >= mainDurMs) 0L else remainingMs.coerceAtLeast(0L)
+                    val markers = item.archive.readDjMarkers(item.trackName)
+                    val introEstDur = if (!event.isFallbackIntroOverlay && event.songIntroOverlay != null) {
+                        event.songIntroOverlay.archive.getEntryDurationMs(event.songIntroOverlay.trackKey) ?: 0L
+                    } else 0L
+                    val pastIntroEnd = markers != null && markers.hasIntroWindow && landedSeekMs >= markers.introEndMs
+                    val pastStandaloneIntro = (markers == null || !markers.hasIntroWindow) && introEstDur > 0L && landedSeekMs >= introEstDur
+                    val skipIntroDecode = pastIntroEnd || pastStandaloneIntro
+                    if (pastStandaloneIntro) {
+                        landedSeekMs = (landedSeekMs - introEstDur).coerceAtLeast(0L)
+                    }
+
+                    val built = buildSongSegmentMedia(
+                        event = event,
+                        mainUri = mainUri,
+                        markers = markers,
+                        skipIntroDecode = skipIntroDecode,
+                        pinToActive = true
+                    )
+                    if (built.uris.isEmpty() || !isValid()) return null
+
+                    currentSegmentUris = built.uris
+                    currentSongItem = item
+                    lastSegment = RadioSegmentType.Song
+                    introItemCount = built.introCount
+                    pendingBreakClips.clear()
+                    plannedOverlayCue = null
+                    plannedPreRollCue = null
+                    return resolveLandedWindowPlayback(built.uris, landedSeekMs, built.preRollCue, built.overlayCue)
+                }
+                is Gen3BroadcastEvent.BreakBlockEvent -> {
+                    val standalone = ArrayList(event.standaloneClips)
+                    if (standalone.isEmpty()) continue
+                    if (!forceLand) {
+                        var landedIdx = -1
+                        for (idx in standalone.indices) {
+                            val clipRef = standalone[idx].clip
+                            val clipDurMs = clipRef.archive.getEntryDurationMs(clipRef.trackKey) ?: 0L
+                            if (clipDurMs > 0L && remainingMs >= clipDurMs) {
+                                remainingMs -= clipDurMs
+                            } else {
+                                landedIdx = idx
+                                break
+                            }
+                        }
+                        if (landedIdx < 0) continue
+
+                        val landedClip = standalone[landedIdx]
+                        val u = resolvePlaybackUri(landedClip.clip.archive, landedClip.clip.trackKey)
+                        if (u != null && isValid()) {
+                            pinAudioUri(u)
+                            currentSegmentUris = listOf(u)
+                            currentSongItem = null
+                            lastSegment = landedClip.segmentType
+                            introItemCount = 0
+                            pendingBreakClips.clear()
+                            if (landedIdx + 1 < standalone.size) {
+                                pendingBreakClips.addAll(standalone.subList(landedIdx + 1, standalone.size))
+                            }
+                            plannedOverlayCue = null
+                            plannedPreRollCue = null
+                            val durMs = getFileDurationMs(u)
+                            val seekMs = remainingMs.coerceIn(0L, (durMs - 1L).coerceAtLeast(0L))
+                            return PreparedPlayback(listOf(u), 0, seekMs, durMs, null, null)
+                        }
+                    } else {
+                        val firstClip = standalone.removeAt(0)
+                        val u = resolvePlaybackUri(firstClip.clip.archive, firstClip.clip.trackKey)
+                        if (u != null && isValid()) {
+                            pinAudioUri(u)
+                            currentSegmentUris = listOf(u)
+                            currentSongItem = null
+                            lastSegment = firstClip.segmentType
+                            introItemCount = 0
+                            pendingBreakClips.clear()
+                            pendingBreakClips.addAll(standalone)
+                            plannedOverlayCue = null
+                            plannedPreRollCue = null
+                            return PreparedPlayback(listOf(u), 0, 0L, getFileDurationMs(u), null, null)
+                        }
+                    }
+                }
+                is Gen3BroadcastEvent.InterludeEvent -> {
+                    val ref = event.clip
+                    val clipDurMs = ref.archive.getEntryDurationMs(ref.trackKey) ?: 0L
+                    if (!forceLand && clipDurMs > 0L && remainingMs >= clipDurMs) {
+                        remainingMs -= clipDurMs
+                        continue
+                    }
+                    val u = resolvePlaybackUri(ref.archive, ref.trackKey)
+                    if (u != null && isValid()) {
+                        pinAudioUri(u)
+                        currentSegmentUris = listOf(u)
+                        currentSongItem = null
+                        lastSegment = event.segmentType
+                        introItemCount = 0
+                        pendingBreakClips.clear()
+                        plannedOverlayCue = null
+                        plannedPreRollCue = null
+                        val durMs = getFileDurationMs(u)
+                        val seekMs = if (forceLand && remainingMs >= durMs) 0L else remainingMs.coerceIn(0L, (durMs - 1L).coerceAtLeast(0L))
+                        return PreparedPlayback(listOf(u), 0, seekMs, durMs, null, null)
+                    }
+                }
             }
         }
 
@@ -1064,69 +1369,20 @@ data class Rpf7ClipRef(
         when (event) {
             is Gen3BroadcastEvent.SongEvent -> {
                 val item = event.song
-                val uris = ArrayList<Uri>()
                 val markers = item.archive.readDjMarkers(item.trackName)
-
-                var djIntroUri: Uri? = null
-                var djDurMs = 0L
-                if (event.songIntroOverlay != null) {
-                    val u = materializeClip(event.songIntroOverlay.trackKey)
-                    if (u != null) {
-                        val dur = readAudioDurationMs(context, u)
-                        val isIntroEligible = if (event.isFallbackIntroOverlay) {
-                            markers != null && markers.hasIntroWindow && markers.introDurationMs >= 3000L && dur in 1..markers.introDurationMs
-                        } else {
-                            true
-                        }
-                        if (isIntroEligible) {
-                            pinAudioUri(u)
-                            djIntroUri = u
-                            djDurMs = dur
-                        }
-                    }
-                }
-
                 val mainUri = resolvePlaybackUri(item.archive, item.trackName)
-                if (mainUri != null) {
-                    pinAudioUri(mainUri)
-                }
+                val built = buildSongSegmentMedia(
+                    event = event,
+                    mainUri = mainUri,
+                    markers = markers,
+                    skipIntroDecode = false,
+                    pinToActive = true
+                )
 
-                val fitsInIntro = djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > 0L && djDurMs <= markers.introDurationMs
-                val canPreRoll = !event.isFallbackIntroOverlay && djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > markers.introDurationMs && markers.introEndMs >= 2000L && markers.effectiveIntroStartMs <= 3000L
-
-                when {
-                    fitsInIntro -> {
-                        mainUri?.let { uris.add(it) }
-                        val djStartMs = maxOf(markers!!.effectiveIntroStartMs, markers.introEndMs - djDurMs - 250L)
-                        plannedOverlayCue = PlannedOverlayCue(djIntroUri!!, djStartMs, markers.introEndMs)
-                        introItemCount = 0
-                        GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "${item.trackName}: fits-in-intro [${markers.effectiveIntroStartMs}..${markers.introEndMs}ms], djDur=${djDurMs}ms, fireAt=${djStartMs}ms"
-                        }
-                    }
-                    canPreRoll -> {
-                        mainUri?.let { uris.add(it) }
-                        val preRollDelayMs = (djDurMs - markers!!.introEndMs + 250L).coerceIn(500L, (djDurMs - 500L).coerceAtLeast(500L))
-                        plannedPreRollCue = PlannedPreRollCue(djIntroUri!!, preRollDelayMs, markers.introEndMs)
-                        introItemCount = 0
-                        GTRadioLogger.logVerbose("DJ-OVERLAY") {
-                            "${item.trackName}: pre-roll djDur=${djDurMs}ms, introEnd=${markers.introEndMs}ms, delay=${preRollDelayMs}ms"
-                        }
-                    }
-                    else -> {
-                        if (!event.isFallbackIntroOverlay && djIntroUri != null) {
-                            uris.add(djIntroUri)
-                        }
-                        if (mainUri != null) {
-                            uris.add(mainUri)
-                        }
-                        introItemCount = if (uris.size > 1) 1 else 0
-                    }
-                }
-
-                currentSegmentUris = uris
+                plannedOverlayCue = built.overlayCue
+                plannedPreRollCue = built.preRollCue
+                introItemCount = built.introCount
+                currentSegmentUris = built.uris
                 currentSongItem = item
                 lastSegment = RadioSegmentType.Song
                 pendingBreakClips.clear()
@@ -1337,77 +1593,31 @@ data class Rpf7ClipRef(
         when (event) {
             is Gen3BroadcastEvent.SongEvent -> {
                 val item = event.song
-                val uris = ArrayList<Uri>()
-                val pinned = ArrayList<String>()
                 val markers = item.archive.readDjMarkers(item.trackName)
-
-                var djIntroUri: Uri? = null
-                var djDurMs = 0L
-                if (event.songIntroOverlay != null) {
-                    val u = materializeClip(event.songIntroOverlay.trackKey)
-                    if (u != null) {
-                        val dur = readAudioDurationMs(context, u)
-                        val isIntroEligible = if (event.isFallbackIntroOverlay) {
-                            markers != null && markers.hasIntroWindow && markers.introDurationMs >= 3000L && dur in 1..markers.introDurationMs
-                        } else {
-                            true
-                        }
-                        if (isIntroEligible) {
-                            val p = u.toString()
-                            pinned.add(p)
-                            Rpf7Archive.pinFile(p)
-                            djIntroUri = u
-                            djDurMs = dur
-                        }
-                    }
-                }
                 val mainUri = resolvePlaybackUri(item.archive, item.trackName)
-                if (mainUri != null && mainUri.scheme != Rpf7StreamingDataSource.SCHEME) {
-                    val p = mainUri.toString()
-                    pinned.add(p)
-                    Rpf7Archive.pinFile(p)
-                }
+                val built = buildSongSegmentMedia(
+                    event = event,
+                    mainUri = mainUri,
+                    markers = markers,
+                    skipIntroDecode = false,
+                    pinToActive = false
+                )
 
-                val fitsInIntro = djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > 0L && djDurMs <= markers.introDurationMs
-                val canPreRoll = !event.isFallbackIntroOverlay && djIntroUri != null && markers != null && markers.hasIntroWindow &&
-                        djDurMs > markers.introDurationMs && markers.introEndMs >= 2000L && markers.effectiveIntroStartMs <= 3000L
-
-                var pOverlayCue: PlannedOverlayCue? = null
-                var pPreRollCue: PlannedPreRollCue? = null
-
-                when {
-                    fitsInIntro -> {
-                        mainUri?.let { uris.add(it) }
-                        val djStartMs = maxOf(markers!!.effectiveIntroStartMs, markers.introEndMs - djDurMs - 250L)
-                        pOverlayCue = PlannedOverlayCue(djIntroUri!!, djStartMs, markers.introEndMs)
-                    }
-                    canPreRoll -> {
-                        mainUri?.let { uris.add(it) }
-                        val preRollDelayMs = (djDurMs - markers!!.introEndMs + 250L).coerceIn(500L, (djDurMs - 500L).coerceAtLeast(500L))
-                        pPreRollCue = PlannedPreRollCue(djIntroUri!!, preRollDelayMs, markers.introEndMs)
-                    }
-                    else -> {
-                        if (!event.isFallbackIntroOverlay && djIntroUri != null) uris.add(djIntroUri)
-                        if (mainUri != null) uris.add(mainUri)
-                    }
-                }
-
-                if (uris.isNotEmpty() && _playing && playGeneration.get() == expectedGen) {
+                if (built.uris.isNotEmpty() && _playing && playGeneration.get() == expectedGen) {
                     prefetchedItem = PrefetchedBroadcastItem(
-                        uris = uris,
-                        pinnedFiles = pinned,
+                        uris = built.uris,
+                        pinnedFiles = built.pinnedFiles,
                         event = event,
                         songItem = item,
                         segmentType = RadioSegmentType.Song,
-                        plannedOverlayCue = pOverlayCue,
-                        plannedPreRollCue = pPreRollCue
+                        plannedOverlayCue = built.overlayCue,
+                        plannedPreRollCue = built.preRollCue
                     )
                     GTRadioLogger.logVerbose("DIRECTOR") {
                         "Rpf7[$stationTitle]: Look-ahead prefetched next song '${item.trackName}' (intro=${event.songIntroOverlay != null}, fallback=${event.isFallbackIntroOverlay})"
                     }
                 } else {
-                    pinned.forEach { Rpf7Archive.unpinFile(it) }
+                    built.pinnedFiles.forEach { Rpf7Archive.unpinFile(it) }
                 }
             }
             is Gen3BroadcastEvent.BreakBlockEvent -> {

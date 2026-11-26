@@ -57,6 +57,24 @@
     *;
 }
 
+-keep class com.sc.gtradio.media.rpf3.Rpf3StreamingDataSource {
+    *;
+}
+-keep class com.sc.gtradio.media.rpf3.Rpf3StreamingDataSource$* {
+    *;
+}
+
+-keep class com.sc.gtradio.media.rpf3.Rpf3StreamRegistry {
+    *;
+}
+-keep class com.sc.gtradio.media.rpf3.Rpf3StreamRegistry$* {
+    *;
+}
+
+-keep class com.sc.gtradio.media.rpf3.Rpf3StreamIndex {
+    *;
+}
+
 -keep class com.sc.gtradio.media.rpf7.Rpf7StreamingDataSource {
     *;
 }

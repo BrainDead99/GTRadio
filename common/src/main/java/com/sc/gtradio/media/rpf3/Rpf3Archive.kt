@@ -11,11 +11,65 @@ import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
+import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
+
+/**
+ * Precomputed block geometry and virtual WAV layout for zero-cache streaming of an RPF3 MultiC entry.
+ */
+data class Rpf3StreamIndex(
+    val entryName: String,
+    val entryOffset: Long,
+    val entrySize: Long,
+    val headerSize: Int,
+    val numBlocks: Int,
+    val blockSize: Int,
+    val outChannels: Int,
+    val sampleRate: Int,
+    val isCompressed: Boolean,
+    val chTableOffset: Int,
+    val numChannels: Int,
+    val headerBytes: ByteArray,
+    val blockStartSamples: LongArray,
+    val blockSamples: LongArray,
+    val blockPcmBytes: LongArray,
+    val blockStartWavByte: LongArray,
+    val validBlockIndices: IntArray,
+    val totalSamples: Long,
+    val totalPcmBytes: Long,
+    val totalVirtualWavBytes: Long,
+    val durationMs: Long
+)
+
+/**
+ * Thread-safe registry mapping active [Rpf3Archive.archiveStreamId] keys to their archives
+ * so [Rpf3StreamingDataSource] can resolve `gtradio-rpf3://` URIs without Context allocations.
+ */
+object Rpf3StreamRegistry {
+    private val archives = ConcurrentHashMap<String, Rpf3Archive>()
+
+    fun register(archiveId: String, archive: Rpf3Archive) {
+        archives[archiveId] = archive
+    }
+
+    fun get(archiveId: String): Rpf3Archive? = archives[archiveId]
+
+    fun resolveStreamIndex(uri: Uri?): Rpf3StreamIndex? {
+        if (uri == null || uri.scheme != Rpf3StreamingDataSource.SCHEME) return null
+        val archiveId = uri.host ?: return null
+        val rawPath = uri.encodedPath?.removePrefix("/")?.removeSuffix(".wav") ?: return null
+        val entryName = Uri.decode(rawPath)
+        val archive = get(archiveId) ?: return null
+        return archive.getOrBuildStreamIndex(entryName)
+    }
+
+    fun hasValidEntry(uri: Uri?): Boolean = resolveStreamIndex(uri) != null
+}
 
 /**
  * Metadata record for a continuous-mix trackid marker inside an IVAUD marker table.
@@ -53,12 +107,59 @@ class Rpf3Archive(
     private val chunkStates = ConcurrentHashMap<String, IntArray>()
     private val trackMarkersCache = ConcurrentHashMap<String, List<Rpf3TrackMarker>>()
     private val djMarkerCache = ConcurrentHashMap<String, DjMarkerWindow>()
+    private val streamIndexCache = ConcurrentHashMap<String, Rpf3StreamIndex>()
+    val archiveStreamId: String = "rpf3_${nextArchiveId.incrementAndGet()}_" +
+        rpfName.removeSuffix(".rpf").replace(Regex("[^A-Za-z0-9_]"), "_").lowercase(Locale.ROOT)
     @Volatile private var indexed = false
     val isIndexed: Boolean get() = indexed
 
+    init {
+        Rpf3StreamRegistry.register(archiveStreamId, this)
+        Rpf3StreamingDataSource.ensureRegistered()
+    }
+
     companion object {
+        private val nextArchiveId = AtomicLong(0L)
         const val CHUNK_BLOCKS = 6
         const val CHUNK_THRESHOLD_BLOCKS = 18
+
+        fun buildWavHeaderBytes(
+            pcmDataBytes: Long,
+            sampleRate: Int,
+            channels: Int
+        ): ByteArray {
+            val totalDataLen = pcmDataBytes + 36L
+            val byteRate = sampleRate.toLong() * channels.toLong() * 2L
+            val blockAlign = channels * 2
+
+            val header = ByteArray(44)
+            header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
+            header[4] = (totalDataLen and 0xFFL).toByte()
+            header[5] = ((totalDataLen ushr 8) and 0xFFL).toByte()
+            header[6] = ((totalDataLen ushr 16) and 0xFFL).toByte()
+            header[7] = ((totalDataLen ushr 24) and 0xFFL).toByte()
+            header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
+            header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
+            header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
+            header[20] = 1; header[21] = 0
+            header[22] = channels.toByte(); header[23] = 0
+            header[24] = (sampleRate and 0xFF).toByte()
+            header[25] = ((sampleRate ushr 8) and 0xFF).toByte()
+            header[26] = ((sampleRate ushr 16) and 0xFF).toByte()
+            header[27] = ((sampleRate ushr 24) and 0xFF).toByte()
+            header[28] = (byteRate and 0xFFL).toByte()
+            header[29] = ((byteRate ushr 8) and 0xFFL).toByte()
+            header[30] = ((byteRate ushr 16) and 0xFFL).toByte()
+            header[31] = ((byteRate ushr 24) and 0xFFL).toByte()
+            header[32] = blockAlign.toByte(); header[33] = 0
+            header[34] = 16; header[35] = 0
+            header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
+            header[40] = (pcmDataBytes and 0xFFL).toByte()
+            header[41] = ((pcmDataBytes ushr 8) and 0xFFL).toByte()
+            header[42] = ((pcmDataBytes ushr 16) and 0xFFL).toByte()
+            header[43] = ((pcmDataBytes ushr 24) and 0xFFL).toByte()
+            return header
+        }
         private val prefetchExecutor = Executors.newSingleThreadExecutor()
         private val decodeLock = Any()
         @Volatile private var oldCachePurged = false
@@ -453,7 +554,7 @@ class Rpf3Archive(
                     val headerSize = probeBuf.getInt(44)
 
                     if (blockSize <= 2048 || numChannels <= 0 || headerSize <= 0) return 0L
-                    val hdrReadSize = headerSize.coerceIn(128, 65536)
+                    val hdrReadSize = headerSize.coerceIn(128, 524288)
                     val hdrBuf = ByteBuffer.allocate(hdrReadSize).order(ByteOrder.LITTLE_ENDIAN)
                     readFully(ch, hdrBuf, entry.offset)
                     val detailOffset = chTableOffset + (numChannels * 16)
@@ -479,6 +580,279 @@ class Rpf3Archive(
             GTRadioLogger.log("Rpf3Archive[$rpfName]: Error getting chunk start ms for $entryName block $startBlock", e)
         }
         return 0L
+    }
+
+    fun isMultiChannelEntry(trackKey: String): Boolean {
+        ensureIndexed()
+        val cleanKey = trackKey.trim().uppercase(Locale.ROOT)
+        val entry = entries[cleanKey] ?: return false
+        return !entry.isWaveBank
+    }
+
+    fun buildStreamUri(entryName: String): Uri {
+        Rpf3StreamRegistry.register(archiveStreamId, this)
+        Rpf3StreamingDataSource.ensureRegistered()
+        ensureIndexed()
+        val cleanKey = entryName.trim().uppercase(Locale.ROOT)
+        val targetName = entries[cleanKey]?.name ?: cleanKey
+        return Uri.parse("${Rpf3StreamingDataSource.SCHEME}://$archiveStreamId/${Uri.encode(targetName)}.wav")
+    }
+
+    fun openStreamPfd(): android.os.ParcelFileDescriptor? {
+        return try {
+            context.contentResolver.openFileDescriptor(sourceUri, "r")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun getEntryDurationMs(trackKey: String): Long? {
+        ensureIndexed()
+        val cleanKey = trackKey.trim().uppercase(Locale.ROOT)
+        val sub = bankSubTracks[cleanKey]
+        if (sub != null && sub.sampleRate > 0 && sub.numSamples16Bit > 0) {
+            return (sub.numSamples16Bit.toLong() * 1000L) / sub.sampleRate.toLong()
+        }
+        val fileEntry = entries[cleanKey] ?: return null
+        if (fileEntry.isWaveBank) {
+            val firstSub = bankSubTracks.values.firstOrNull { it.parentEntryName == fileEntry.name } ?: return null
+            if (firstSub.sampleRate > 0 && firstSub.numSamples16Bit > 0) {
+                return (firstSub.numSamples16Bit.toLong() * 1000L) / firstSub.sampleRate.toLong()
+            }
+            return null
+        }
+        return getOrBuildStreamIndex(fileEntry.name)?.durationMs
+    }
+
+    fun getOrBuildStreamIndex(entryName: String): Rpf3StreamIndex? {
+        ensureIndexed()
+        val cleanKey = entryName.trim().uppercase(Locale.ROOT)
+        val entry = entries[cleanKey] ?: return null
+        if (entry.isWaveBank) return null
+
+        streamIndexCache[entry.name]?.let { return it }
+
+        try {
+            var built: Rpf3StreamIndex? = null
+            context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                    val probeBuf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
+                    if (readFully(ch, probeBuf, entry.offset) < 64) return null
+
+                    val rawNumBlocks = probeBuf.getInt(8)
+                    val blockSize = probeBuf.getInt(12)
+                    val rawChOff20 = probeBuf.getInt(20)
+                    val rawChOff16 = probeBuf.getInt(16)
+                    val chTableOffset = if (rawChOff20 in 16..256) rawChOff20 else if (rawChOff16 in 16..256) rawChOff16 else 48
+                    val numChannels = probeBuf.getInt(36)
+                    val headerSize = probeBuf.getInt(44)
+
+                    if (rawNumBlocks <= 0 || blockSize <= 2048 || numChannels <= 0 || headerSize <= 0) return null
+
+                    val hdrReadSize = minOf(headerSize.toLong(), entry.size).toInt().coerceIn(128, 524288)
+                    val headerBytes = ByteArray(hdrReadSize)
+                    val hdrGot = readFully(ch, ByteBuffer.wrap(headerBytes), entry.offset)
+                    if (hdrGot < 128) return null
+                    val hdrBuf = ByteBuffer.wrap(headerBytes, 0, hdrGot).order(ByteOrder.LITTLE_ENDIAN)
+
+                    val detailOffset = chTableOffset + (numChannels * 16)
+                    var sampleRate = if (detailOffset + 28 <= hdrGot) {
+                        hdrBuf.getShort(detailOffset + 24).toInt() and 0xFFFF
+                    } else 32000
+                    if (sampleRate !in 16000..48000) sampleRate = 32000
+                    val outChannels = if (numChannels >= 2) 2 else 1
+
+                    val wihPos0 = chTableOffset
+                    val wihOffset0 = if (wihPos0 + 16 <= hdrGot) hdrBuf.getLong(wihPos0).toInt() else 0
+                    val wihSize0 = if (wihPos0 + 16 <= hdrGot) hdrBuf.getInt(wihPos0 + 12) else 0
+                    val wiStart0 = detailOffset + wihOffset0
+                    val numStates0 = if (wihSize0 > 32 && wiStart0 >= 0 && wiStart0 + 56 <= hdrGot) {
+                        hdrBuf.getInt(wiStart0 + 52)
+                    } else 0
+                    val isCompressed = (wihSize0 > 32 && numStates0 > 0)
+
+                    val validIndicesList = ArrayList<Int>(rawNumBlocks)
+                    val startSamplesList = ArrayList<Long>(rawNumBlocks)
+                    val blockSamplesList = ArrayList<Long>(rawNumBlocks)
+                    val blockPcmBytesList = ArrayList<Long>(rawNumBlocks)
+                    val blockStartWavByteList = ArrayList<Long>(rawNumBlocks)
+
+                    val bytesPerFrame = outChannels.toLong() * 2L
+                    var cumulativeSamples = 0L
+                    val blockHeaderBuf = ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN)
+                    val entryEnd = entry.offset + entry.size
+
+                    for (b in 0 until rawNumBlocks) {
+                        val blockStart = entry.offset + headerSize.toLong() + (b.toLong() * blockSize.toLong())
+                        if (blockStart + 2048L > entryEnd) break
+                        blockHeaderBuf.clear()
+                        val got = readFully(ch, blockHeaderBuf, blockStart)
+                        if (got < 64) break
+
+                        val tblOff = blockHeaderBuf.getLong(0).toInt().coerceIn(16, 64)
+                        if (tblOff + (outChannels * 16) > got) break
+
+                        val ch0Samples = blockHeaderBuf.getInt(tblOff + 12)
+                        val ch1Samples = if (outChannels == 2) blockHeaderBuf.getInt(tblOff + 28) else ch0Samples
+                        val samplesInBlk = if (outChannels == 2) {
+                            minOf(ch0Samples, ch1Samples).coerceAtLeast(0)
+                        } else {
+                            ch0Samples.coerceAtLeast(0)
+                        }
+                        if (samplesInBlk <= 0) continue
+
+                        val sampleTblOff = tblOff + outChannels * 16
+                        val rawFirstSample = if (sampleTblOff + 4 <= got) {
+                            blockHeaderBuf.getInt(sampleTblOff).coerceAtLeast(0).toLong()
+                        } else 0L
+                        val blockStartSample = if (rawFirstSample > 0L || b == 0) rawFirstSample else cumulativeSamples
+
+                        val pcmBytes = samplesInBlk.toLong() * bytesPerFrame
+                        validIndicesList.add(b)
+                        startSamplesList.add(blockStartSample)
+                        blockSamplesList.add(samplesInBlk.toLong())
+                        blockPcmBytesList.add(pcmBytes)
+                        blockStartWavByteList.add(44L + cumulativeSamples * bytesPerFrame)
+                        cumulativeSamples += samplesInBlk.toLong()
+                    }
+
+                    if (cumulativeSamples <= 0L || validIndicesList.isEmpty()) return null
+
+                    val totalSamples = cumulativeSamples
+                    val totalPcmBytes = totalSamples * bytesPerFrame
+                    val totalVirtualWavBytes = 44L + totalPcmBytes
+                    val durationMs = (totalSamples * 1000L) / sampleRate.toLong()
+
+                    built = Rpf3StreamIndex(
+                        entryName = entry.name,
+                        entryOffset = entry.offset,
+                        entrySize = entry.size,
+                        headerSize = headerSize,
+                        numBlocks = validIndicesList.size,
+                        blockSize = blockSize,
+                        outChannels = outChannels,
+                        sampleRate = sampleRate,
+                        isCompressed = isCompressed,
+                        chTableOffset = chTableOffset,
+                        numChannels = numChannels,
+                        headerBytes = headerBytes,
+                        blockStartSamples = startSamplesList.toLongArray(),
+                        blockSamples = blockSamplesList.toLongArray(),
+                        blockPcmBytes = blockPcmBytesList.toLongArray(),
+                        blockStartWavByte = blockStartWavByteList.toLongArray(),
+                        validBlockIndices = validIndicesList.toIntArray(),
+                        totalSamples = totalSamples,
+                        totalPcmBytes = totalPcmBytes,
+                        totalVirtualWavBytes = totalVirtualWavBytes,
+                        durationMs = durationMs
+                    )
+                }
+            }
+            val result = built ?: return null
+            return streamIndexCache.putIfAbsent(entry.name, result) ?: result
+        } catch (e: Exception) {
+            GTRadioLogger.log("Rpf3Archive[$rpfName]: Failed building stream index for $entryName", e)
+            return null
+        }
+    }
+
+    /**
+     * Decodes a single MultiC block [validIdx] into raw interleaved 16-bit PCM bytes whose
+     * exact length matches `index.blockPcmBytes[validIdx]`.
+     */
+    fun decodeSingleBlockToPcmBytes(
+        index: Rpf3StreamIndex,
+        validIdx: Int,
+        channel: FileChannel
+    ): ByteArray {
+        if (validIdx !in 0 until index.numBlocks) return ByteArray(0)
+        val expectedBytes = index.blockPcmBytes[validIdx].toInt().coerceAtLeast(0)
+        if (expectedBytes == 0) return ByteArray(0)
+
+        val rawBlockIdx = index.validBlockIndices[validIdx]
+        val blockStart = index.entryOffset + index.headerSize.toLong() + (rawBlockIdx.toLong() * index.blockSize.toLong())
+        val entryEnd = index.entryOffset + index.entrySize
+        val actualBlockSize = minOf(index.blockSize.toLong(), entryEnd - blockStart).toInt()
+        if (actualBlockSize <= 2048) return ByteArray(expectedBytes)
+
+        val blockBytes = ByteArray(actualBlockSize)
+        val bytesRead = readFully(channel, ByteBuffer.wrap(blockBytes), blockStart)
+        if (bytesRead <= 2048) return ByteArray(expectedBytes)
+
+        val bb = ByteBuffer.wrap(blockBytes, 0, minOf(128, bytesRead)).order(ByteOrder.LITTLE_ENDIAN)
+        val tblOff = bb.getLong(0).toInt().coerceIn(16, 64)
+        val outChannels = index.outChannels
+        if (tblOff + outChannels * 16 > bb.limit()) return ByteArray(expectedBytes)
+
+        val ch0StartChunk = bb.getInt(tblOff)
+        val ch0ByteOff = 2048 + (ch0StartChunk * 2048)
+        val ch1StartChunk = if (outChannels == 2) bb.getInt(tblOff + 16) else 0
+        val ch1ByteOff = 2048 + (ch1StartChunk * 2048)
+
+        val samples = index.blockSamples[validIdx].toInt().coerceAtLeast(0)
+        if (samples <= 0) return ByteArray(expectedBytes)
+
+        if (ch0ByteOff < 2048 || ch0ByteOff >= bytesRead) return ByteArray(expectedBytes)
+        if (outChannels == 2 && (ch1ByteOff < 2048 || ch1ByteOff >= bytesRead)) return ByteArray(expectedBytes)
+
+        if (!index.isCompressed) {
+            val out = ByteArray(expectedBytes)
+            val maxLeftSamples = ((bytesRead - ch0ByteOff) / 2).coerceAtLeast(0)
+            val maxRightSamples = if (outChannels == 2) ((bytesRead - ch1ByteOff) / 2).coerceAtLeast(0) else maxLeftSamples
+            val frames = minOf(samples, maxLeftSamples, maxRightSamples, expectedBytes / (outChannels * 2))
+            if (frames > 0) {
+                if (outChannels == 1) {
+                    System.arraycopy(blockBytes, ch0ByteOff, out, 0, frames * 2)
+                } else {
+                    var outPos = 0
+                    for (i in 0 until frames) {
+                        val lOff = ch0ByteOff + i * 2
+                        val rOff = ch1ByteOff + i * 2
+                        out[outPos++] = blockBytes[lOff]
+                        out[outPos++] = blockBytes[lOff + 1]
+                        out[outPos++] = blockBytes[rOff]
+                        out[outPos++] = blockBytes[rOff + 1]
+                    }
+                }
+            }
+            return out
+        }
+
+        val hdrBuf = ByteBuffer.wrap(index.headerBytes).order(ByteOrder.LITTLE_ENDIAN)
+        val firstSample = index.blockStartSamples[validIdx]
+        val startChunkIdx = (firstSample / 4096L).toInt()
+        val leftState = readHeaderAdpcmState(hdrBuf, index.chTableOffset, index.numChannels, 0, startChunkIdx) ?: AdpcmState()
+        val rightState = if (outChannels == 2) {
+            readHeaderAdpcmState(hdrBuf, index.chTableOffset, index.numChannels, 1, startChunkIdx) ?: AdpcmState()
+        } else {
+            AdpcmState()
+        }
+        val stateArray = intArrayOf(
+            leftState.valprev, leftState.index, rightState.valprev, rightState.index
+        )
+        val numBytesPerCh = (samples + 1) / 2
+        val availCh0 = (bytesRead - ch0ByteOff).coerceAtLeast(0)
+        val availCh1 = if (outChannels == 2) (bytesRead - ch1ByteOff).coerceAtLeast(0) else availCh0
+        val safeBytesPerCh = minOf(numBytesPerCh, availCh0, availCh1)
+        val safeSamples = minOf(samples, safeBytesPerCh * 2)
+        val decoded = if (safeBytesPerCh > 0 && safeSamples > 0) {
+            com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecodeRpf3ImaAdpcmToPcm16(
+                blockBytes, ch0ByteOff, ch1ByteOff, safeBytesPerCh, safeSamples, outChannels, stateArray
+            )
+        } else {
+            ByteArray(0)
+        }
+        return normalizeBlockPcmBytes(decoded, expectedBytes)
+    }
+
+    private fun normalizeBlockPcmBytes(pcm: ByteArray, expectedBytes: Int): ByteArray {
+        if (pcm.size == expectedBytes) return pcm
+        return ByteArray(expectedBytes).also { out ->
+            val copyLen = minOf(pcm.size, expectedBytes)
+            if (copyLen > 0) {
+                System.arraycopy(pcm, 0, out, 0, copyLen)
+            }
+        }
     }
 
     fun materializeAudioUri(trackKey: String): Uri? {
@@ -662,7 +1036,7 @@ class Rpf3Archive(
         val wihSize = fullHdr.getInt(wihPos + 12)
         val baseAfterWih = chTableOffset + numChannels * 16
         val wiStart = baseAfterWih + wihOffset
-        if (wihSize <= 56 || wiStart + 56 > fullHdr.limit()) return null
+        if (wiStart < 0 || wihSize <= 56 || wiStart + 56 > fullHdr.limit()) return null
 
         val offsetToStates = fullHdr.getLong(wiStart + 32).toInt().let { if (it in 32..128) it else 56 }
         val numStates = fullHdr.getInt(wiStart + 52)
@@ -697,7 +1071,7 @@ class Rpf3Archive(
 
         if (numBlocks <= 0 || blockSize <= 2048 || numChannels <= 0 || headerSize <= 0) return
 
-        val hdrReadSize = headerSize.coerceIn(128, 262144)
+        val hdrReadSize = headerSize.coerceIn(128, 524288)
         val hdrBuf = ByteBuffer.allocate(hdrReadSize).order(ByteOrder.LITTLE_ENDIAN)
         if (readFully(ch, hdrBuf, entry.offset) < 128) return
 
@@ -794,22 +1168,6 @@ class Rpf3Archive(
     }
 
     private fun writeWavHeader(out: BufferedOutputStream, pcmDataBytes: Int, sampleRate: Int, channels: Int) {
-        val byteRate = sampleRate * channels * 2
-        val blockAlign = (channels * 2).toShort()
-        val hdr = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
-        hdr.put("RIFF".toByteArray(Charsets.US_ASCII))
-        hdr.putInt(36 + pcmDataBytes)
-        hdr.put("WAVE".toByteArray(Charsets.US_ASCII))
-        hdr.put("fmt ".toByteArray(Charsets.US_ASCII))
-        hdr.putInt(16)
-        hdr.putShort(1.toShort()) // PCM
-        hdr.putShort(channels.toShort())
-        hdr.putInt(sampleRate)
-        hdr.putInt(byteRate)
-        hdr.putShort(blockAlign)
-        hdr.putShort(16.toShort()) // 16-bit
-        hdr.put("data".toByteArray(Charsets.US_ASCII))
-        hdr.putInt(pcmDataBytes)
-        out.write(hdr.array())
+        out.write(buildWavHeaderBytes(pcmDataBytes.toLong() and 0xFFFFFFFFL, sampleRate, channels))
     }
 }

@@ -866,6 +866,20 @@ class Rpf7Archive(
         return getEntry(trackKey.trim())?.isMultiChannel == true
     }
 
+    fun getEntryDurationMs(trackKey: String): Long? {
+        ensureIndexed()
+        val cleanKey = trackKey.trim()
+        val entry = getEntry(cleanKey)
+        if (entry != null && entry.isMultiChannel) {
+            return getOrBuildStreamIndex(entry.name)?.durationMs
+        }
+        val sub = bankSubTracks[cleanKey]
+        if (sub != null && sub.sampleRate > 0 && sub.numSamples > 0) {
+            return (sub.numSamples.toLong() * 1000L) / sub.sampleRate.toLong()
+        }
+        return null
+    }
+
     fun buildStreamUri(entryName: String): Uri {
         Rpf7StreamRegistry.register(archiveStreamId, this)
         Rpf7StreamingDataSource.ensureRegistered()

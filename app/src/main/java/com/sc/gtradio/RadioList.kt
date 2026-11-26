@@ -784,6 +784,13 @@ class RadioList : Fragment() {
             binding.themeControlsBlock.visibility = if (stripMode) View.GONE else View.VISIBLE
             binding.themeStripControlsBlock.visibility = if (stripMode) View.VISIBLE else View.GONE
             binding.themeHeaderTitle.gravity = Gravity.START
+            // Keep grid/strip metadata slots out of View.GONE so layout height never collapses
+            binding.themeNowPlayingGroup.visibility = if (stripMode) View.VISIBLE else View.INVISIBLE
+            binding.themeNowPlayingLabel.visibility = if (stripMode) View.VISIBLE else View.INVISIBLE
+            binding.themeSongArt.visibility = if (stripMode) View.VISIBLE else View.INVISIBLE
+            binding.themeSongTitle.visibility = if (stripMode) View.VISIBLE else View.INVISIBLE
+            binding.themeSongArtist.visibility = if (stripMode) View.VISIBLE else View.INVISIBLE
+            binding.themeSongAlbum.visibility = if (stripMode) View.VISIBLE else View.INVISIBLE
         }
 
         // Apply Header Title & Font
@@ -1387,6 +1394,7 @@ class RadioList : Fragment() {
         if (stripMode) {
             val statusColor = if (effectivePlaying) pack.activeTextColor else pack.labelColor
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
+            binding.themeNowPlayingLabel.visibility = View.VISIBLE
             binding.themeNowPlayingLabel.setTextColor(statusColor)
 
             binding.themeStripRadioLabel.setTextColor(statusColor)
@@ -1445,14 +1453,18 @@ class RadioList : Fragment() {
                     val cleanArtist = currentMetadata.artist?.toString() ?: ""
                     val cleanAlbum = currentMetadata.albumArtist?.toString() ?: currentMetadata.albumTitle?.toString() ?: ""
 
+                    binding.themeSongTitle.visibility = if (songTitle.isNotBlank()) View.VISIBLE else View.INVISIBLE
                     binding.themeSongTitle.text = songTitle.uppercase()
+                    binding.themeSongArtist.visibility = if (cleanArtist.isNotBlank()) View.VISIBLE else View.INVISIBLE
                     binding.themeSongArtist.text = cleanArtist.uppercase()
-                    binding.themeSongAlbum.visibility = View.VISIBLE
+                    binding.themeSongAlbum.visibility = if (cleanAlbum.isNotBlank()) View.VISIBLE else View.INVISIBLE
                     binding.themeSongAlbum.text = cleanAlbum.uppercase()
                 } else {
+                    binding.themeSongTitle.visibility = if (displayStationTitle.isNotBlank()) View.VISIBLE else View.INVISIBLE
                     binding.themeSongTitle.text = displayStationTitle.uppercase()
+                    binding.themeSongArtist.visibility = View.INVISIBLE
                     binding.themeSongArtist.text = ""
-                    binding.themeSongAlbum.visibility = View.VISIBLE
+                    binding.themeSongAlbum.visibility = View.INVISIBLE
                     binding.themeSongAlbum.text = ""
                 }
 
@@ -1468,6 +1480,7 @@ class RadioList : Fragment() {
                     binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
                 }
                 binding.themeSongArt.alpha = 1.0f
+                binding.themeSongArt.visibility = if (!isSongOrShow && pack.hideArtOnNonSong) View.INVISIBLE else View.VISIBLE
             } else {
                 val offArtBmp = stationOnBitmaps[selectedMediaId] ?: stationOffBitmaps[selectedMediaId]
                 if (offArtBmp != null) {
@@ -1476,9 +1489,12 @@ class RadioList : Fragment() {
                     binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
                 }
                 binding.themeSongArt.alpha = 0.45f
+                binding.themeSongArt.visibility = if (pack.hideArtOnNonSong) View.INVISIBLE else View.VISIBLE
+                binding.themeSongTitle.visibility = View.INVISIBLE
                 binding.themeSongTitle.text = ""
+                binding.themeSongArtist.visibility = View.INVISIBLE
                 binding.themeSongArtist.text = ""
-                binding.themeSongAlbum.visibility = View.VISIBLE
+                binding.themeSongAlbum.visibility = View.INVISIBLE
                 binding.themeSongAlbum.text = ""
             }
             return
@@ -1526,22 +1542,24 @@ class RadioList : Fragment() {
                     binding.themeSongArtist.visibility = View.VISIBLE
                     binding.themeSongArtist.text = cleanArtist.uppercase()
                 } else {
-                    binding.themeSongArtist.visibility = View.GONE
+                    binding.themeSongArtist.text = ""
+                    binding.themeSongArtist.visibility = View.INVISIBLE
                 }
 
                 if (cleanAlbum.isNotBlank()) {
                     binding.themeSongAlbum.visibility = View.VISIBLE
                     binding.themeSongAlbum.text = cleanAlbum.uppercase()
                 } else {
-                    binding.themeSongAlbum.visibility = View.GONE
+                    binding.themeSongAlbum.text = ""
+                    binding.themeSongAlbum.visibility = View.INVISIBLE
                 }
             } else {
-                binding.themeSongTitle.visibility = View.VISIBLE
+                binding.themeSongTitle.visibility = if (gridStationUpper.isNotBlank()) View.VISIBLE else View.INVISIBLE
                 binding.themeSongTitle.text = gridStationUpper
                 binding.themeSongArtist.text = ""
-                binding.themeSongArtist.visibility = View.GONE
+                binding.themeSongArtist.visibility = View.INVISIBLE
                 binding.themeSongAlbum.text = ""
-                binding.themeSongAlbum.visibility = View.GONE
+                binding.themeSongAlbum.visibility = View.INVISIBLE
             }
 
             var artBmp = currentMetadata.iconBitmap
@@ -1556,12 +1574,17 @@ class RadioList : Fragment() {
             } else {
                 binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
             }
-            binding.themeSongArt.visibility = View.VISIBLE
+            binding.themeSongArt.visibility = if (!isSongOrShow && pack.hideArtOnNonSong) View.INVISIBLE else View.VISIBLE
         } else {
             binding.themeNowPlayingGroup.visibility = View.INVISIBLE
+            binding.themeNowPlayingLabel.visibility = View.INVISIBLE
+            binding.themeSongArt.visibility = View.INVISIBLE
             binding.themeSongTitle.text = ""
+            binding.themeSongTitle.visibility = View.INVISIBLE
             binding.themeSongArtist.text = ""
+            binding.themeSongArtist.visibility = View.INVISIBLE
             binding.themeSongAlbum.text = ""
+            binding.themeSongAlbum.visibility = View.INVISIBLE
         }
     }
 

@@ -8,6 +8,8 @@ import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.TransferListener
+import com.sc.gtradio.media.rpf3.Rpf3StreamingDataSource
+import com.sc.gtradio.media.rpf7.Rpf7StreamingDataSource
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
@@ -101,6 +103,8 @@ class Gen3RoutingDataSourceFactory private constructor(
         }
 
         fun create(context: Context): Gen3RoutingDataSourceFactory {
+            Rpf3StreamingDataSource.ensureRegistered()
+            Rpf7StreamingDataSource.ensureRegistered()
             return Gen3RoutingDataSourceFactory(context.applicationContext)
         }
     }
