@@ -18,6 +18,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -50,7 +51,7 @@ class RadioWheelView @JvmOverloads constructor(
         set(value) {
             if (field != value) {
                 field = value
-                cancelArcAnimator()
+                cancelArcAnimator(notifyEnd = true)
                 scrollIndex = highlightedSlotIndex.toFloat()
                 invalidate()
             }
@@ -72,7 +73,7 @@ class RadioWheelView @JvmOverloads constructor(
             }
         }
 
-    var activeDiscColor: Int = Color.parseColor("#D8000000")
+    var activeDiscColor: Int = Color.parseColor("#E2000000")
         set(value) {
             if (field != value) {
                 field = value
@@ -82,6 +83,8 @@ class RadioWheelView @JvmOverloads constructor(
 
     var onSlotHovered: ((WheelSlot) -> Unit)? = null
     var onSlotCommitted: ((WheelSlot) -> Unit)? = null
+    var onInteractionStart: (() -> Unit)? = null
+    var onInteractionEnd: (() -> Unit)? = null
 
     private val slots = ArrayList<WheelSlot>()
     private var offSlotIndex: Int = -1
@@ -100,6 +103,7 @@ class RadioWheelView @JvmOverloads constructor(
     private var velocityTracker: VelocityTracker? = null
     private var isTrackingTouch = false
     private var isDragging = false
+    private var isInteractionActive = false
     private var downX = 0f
     private var downY = 0f
     private var lastTouchX = 0f
@@ -165,10 +169,24 @@ class RadioWheelView @JvmOverloads constructor(
         }
     }
 
+    private fun notifyInteractionStart() {
+        if (!isInteractionActive) {
+            isInteractionActive = true
+            onInteractionStart?.invoke()
+        }
+    }
+
+    private fun notifyInteractionEnd() {
+        if (isInteractionActive) {
+            isInteractionActive = false
+            onInteractionEnd?.invoke()
+        }
+    }
+
     fun setActiveMediaId(mediaId: String?, isPlaying: Boolean) {
         activeMediaId = mediaId
         isRadioPlaying = isPlaying
-        if (!isTrackingTouch) {
+        if (!isTrackingTouch && !isInteractionActive && arcAnimator == null) {
             syncTargetFromActiveState(animate = wheelMode != WheelMode.FULL_CIRCLE && width > 0)
             invalidate()
         }
@@ -188,10 +206,10 @@ class RadioWheelView @JvmOverloads constructor(
         }
         highlightedSlotIndex = targetIndex
         if (wheelMode == WheelMode.FULL_CIRCLE || !animate) {
-            cancelArcAnimator()
+            cancelArcAnimator(notifyEnd = false)
             scrollIndex = targetIndex.toFloat()
         } else {
-            animateArcToSlot(targetIndex, commitOnEnd = false, durationMs = 240L)
+            animateArcToSlot(targetIndex, commitOnEnd = false, durationMs = 220L)
         }
     }
 
@@ -205,41 +223,46 @@ class RadioWheelView @JvmOverloads constructor(
 
         if (wheelMode == WheelMode.FULL_CIRCLE) {
             val g = computeCircleGeometry(w, h)
-            val innerClear = (g.radius - g.iconRadius * 1.24f - 6f * density).coerceAtLeast(36f * density)
-            val halfSpan = innerClear * 0.70f
-            stageRect.set(g.cx - halfSpan, g.cy - halfSpan, g.cx + halfSpan, g.cy + halfSpan)
+            val innerR = (g.radius - g.iconRadius * 1.18f - 4f * density).coerceAtLeast(36f * density)
+            val halfW = innerR * 0.84f
+            val halfH = innerR * 0.92f
+            stageRect.set(g.cx - halfW, g.cy - halfH, g.cx + halfW, g.cy + halfH)
             return stageRect
         }
 
         val g = computeArcGeometry(w, h)
-        val stageHalfH = min(h * 0.42f, 178f * density)
+        val stageHalfH = min(h * 0.36f, 154f * density)
         val sinMax = (stageHalfH / g.arcRadius).coerceIn(0f, 0.86f)
         val arcBulge = g.arcRadius * (1f - sqrt(1f - sinMax * sinMax))
         val edgePad = 14f * density
-        val safeGap = g.iconRadius * 1.24f + arcBulge + 10f * density
+        val safeGap = g.iconRadius * 1.24f + arcBulge + 8f * density
+        val minPocketW = min(172f * density, w - edgePad * 2f)
+
+        val top = max(g.cy - stageHalfH, 54f * density)
+        val bottom = (g.cy + stageHalfH).coerceAtLeast(top + 80f * density)
 
         if (wheelMode == WheelMode.ARC_LEFT) {
-            val left = (g.spotlightX + safeGap).coerceAtMost(w * 0.52f)
+            val maxLeftForPocket = (w - edgePad - minPocketW).coerceAtLeast(g.spotlightX + g.iconRadius * 1.20f)
+            val left = (g.spotlightX + safeGap).coerceAtMost(maxLeftForPocket)
             val right = (w - edgePad).coerceAtLeast(left + 64f * density)
-            stageRect.set(left, g.cy - stageHalfH, right, g.cy + stageHalfH)
+            stageRect.set(left, top, right, bottom)
         } else {
-            val right = (g.spotlightX - safeGap).coerceAtLeast(w * 0.48f)
+            val minRightForPocket = (edgePad + minPocketW).coerceAtMost(g.spotlightX - g.iconRadius * 1.20f)
+            val right = (g.spotlightX - safeGap).coerceAtLeast(minRightForPocket)
             val left = edgePad.coerceAtMost(right - 64f * density)
-            stageRect.set(left, g.cy - stageHalfH, right, g.cy + stageHalfH)
+            stageRect.set(left, top, right, bottom)
         }
         return stageRect
     }
 
     private fun computeCircleGeometry(w: Float, h: Float): CircleGeometry {
         val count = slots.size.coerceAtLeast(1)
-        val outerPad = 8f * density
+        val outerPad = 4f * density
         val maxHalf = (min(w, h) / 2f - outerPad).coerceAtLeast(48f * density)
         val sinHalfStep = sin(PI / count).toFloat().coerceAtLeast(0.05f)
-        // Balance icon radius against perimeter spacing so icons never collide.
-        val targetRing = maxHalf * 0.82f
-        val maxIconByChord = targetRing * sinHalfStep * 0.80f
-        val iconRadius = min(23f * density, maxIconByChord).coerceAtLeast(12f * density)
-        val ringRadius = (maxHalf - iconRadius * 1.20f).coerceAtLeast(40f * density)
+        val maxIconByChord = (maxHalf * 0.90f) * sinHalfStep * 0.86f
+        val iconRadius = min(22.5f * density, maxIconByChord).coerceAtLeast(12f * density)
+        val ringRadius = (maxHalf - iconRadius * 1.14f).coerceAtLeast(40f * density)
         return CircleGeometry(
             cx = w / 2f,
             cy = h / 2f,
@@ -249,11 +272,17 @@ class RadioWheelView @JvmOverloads constructor(
     }
 
     private fun computeArcGeometry(w: Float, h: Float): ArcGeometry {
-        val iconRadius = 27f * density
+        val widthDp = w / density
+        val baseIconDp = if (widthDp < 340f) {
+            26f + ((widthDp - 280f) / 60f).coerceIn(0f, 1f) * 7f
+        } else {
+            33f
+        }
+        val iconRadius = baseIconDp * density
         val edgeMargin = 14f * density
         val spotlightOffset = edgeMargin + iconRadius * 1.18f
-        val arcRadius = (h * 0.64f).coerceIn(205f * density, 310f * density)
-        val slotArcStep = 60f * density
+        val arcRadius = (h * 0.56f).coerceIn(195f * density, 265f * density)
+        val slotArcStep = iconRadius * 2.26f
         val slotAngleStep = slotArcStep / arcRadius
         val cy = h / 2f
         return if (wheelMode == WheelMode.ARC_LEFT) {
@@ -308,12 +337,30 @@ class RadioWheelView @JvmOverloads constructor(
                 activeCenterX = sx
                 activeCenterY = sy
             } else {
-                drawSlotNode(canvas, slots[i], sx, sy, g.iconRadius, isActive = false, fadeAlpha = 1f)
+                drawSlotNode(
+                    canvas = canvas,
+                    slot = slots[i],
+                    cx = sx,
+                    cy = sy,
+                    baseRadius = g.iconRadius,
+                    focus = 0f,
+                    fadeAlpha = 1f,
+                    drawCircleRing = false
+                )
             }
         }
 
         if (activeIdx in slots.indices) {
-            drawSlotNode(canvas, slots[activeIdx], activeCenterX, activeCenterY, g.iconRadius, isActive = true, fadeAlpha = 1f)
+            drawSlotNode(
+                canvas = canvas,
+                slot = slots[activeIdx],
+                cx = activeCenterX,
+                cy = activeCenterY,
+                baseRadius = g.iconRadius,
+                focus = 1f,
+                fadeAlpha = 1f,
+                drawCircleRing = true
+            )
         }
     }
 
@@ -324,43 +371,88 @@ class RadioWheelView @JvmOverloads constructor(
         val count = slots.size
         val baseAngle = if (wheelMode == WheelMode.ARC_LEFT) PI.toFloat() else 0f
         val dirSign = if (wheelMode == WheelMode.ARC_LEFT) -1f else 1f
-        val halfAngleLimit = (PI.toFloat() / 2f) + 0.15f
+        val halfAngleLimit = (PI.toFloat() / 2f) + 0.08f
+        val angularFadeStart = 1.16f
         val spotlightIdx = wrapSlotIndex(scrollIndex.roundToInt(), count)
 
-        var activeX = 0f
-        var activeY = 0f
-        var activeFade = 1f
+        var activeX = g.spotlightX
+        var activeY = g.cy
+        var activeFade = 0f
+        var activeFocus = 0f
+        var activeDeltaAbs = 1f
+        var hasActive = false
 
         for (i in 0 until count) {
             val delta = wrappedDelta(i - scrollIndex, count)
             val offsetAngle = delta * g.slotAngleStep
-            if (abs(offsetAngle) > halfAngleLimit) continue
+            val absOffset = abs(offsetAngle)
+            if (absOffset > halfAngleLimit) continue
 
             val angle = baseAngle + dirSign * offsetAngle
             val sx = g.cx + g.arcRadius * cos(angle)
             val sy = g.cy + g.arcRadius * sin(angle)
-            if (sy < -g.iconRadius || sy > h + g.iconRadius) continue
 
-            // Fade smoothly near top and bottom bounds of the arc stage.
+            // Smooth vertical + angular alpha fade so discs dissolve cleanly instead of hard clipping.
             val edgeDist = min(sy, h - sy)
-            val fade = ((edgeDist - 4f * density) / (28f * density)).coerceIn(0f, 1f)
+            val verticalFade = ((edgeDist - g.iconRadius * 0.98f) / (26f * density)).coerceIn(0f, 1f)
+            val angularFade = if (absOffset <= angularFadeStart) {
+                1f
+            } else {
+                ((halfAngleLimit - absOffset) / (halfAngleLimit - angularFadeStart)).coerceIn(0f, 1f)
+            }
+            val fade = min(verticalFade, angularFade)
             if (fade <= 0.01f) continue
 
-            if (i == spotlightIdx && abs(delta) < 0.45f) {
+            val focus = (1f - abs(delta)).coerceIn(0f, 1f)
+            if (i == spotlightIdx && abs(delta) <= 0.5f) {
                 activeX = sx
                 activeY = sy
                 activeFade = fade
+                activeFocus = focus
+                activeDeltaAbs = abs(delta)
+                hasActive = true
             } else {
-                drawSlotNode(canvas, slots[i], sx, sy, g.iconRadius, isActive = false, fadeAlpha = fade)
+                drawSlotNode(
+                    canvas = canvas,
+                    slot = slots[i],
+                    cx = sx,
+                    cy = sy,
+                    baseRadius = g.iconRadius,
+                    focus = focus,
+                    fadeAlpha = fade,
+                    drawCircleRing = false
+                )
             }
         }
 
-        if (spotlightIdx in slots.indices && activeFade > 0.01f) {
-            drawSlotNode(canvas, slots[spotlightIdx], activeX, activeY, g.iconRadius, isActive = true, fadeAlpha = activeFade)
+        if (hasActive && spotlightIdx in slots.indices) {
+            drawSlotNode(
+                canvas = canvas,
+                slot = slots[spotlightIdx],
+                cx = activeX,
+                cy = activeY,
+                baseRadius = g.iconRadius,
+                focus = activeFocus,
+                fadeAlpha = activeFade,
+                drawCircleRing = false
+            )
         }
 
-        // Fixed middle spotlight ring locked at 9 o'clock (ARC_LEFT) or 3 o'clock (ARC_RIGHT).
-        drawSpotlightRing(canvas, g.spotlightX, g.cy, g.iconRadius * 1.16f)
+        // Smooth radial lock-in: centered at 9/3 o'clock mid-scroll and tracks nearest slot as it settles.
+        val lockT = if (hasActive) (1f - activeDeltaAbs / 0.5f).coerceIn(0f, 1f) else 0f
+        val ringCx = if (hasActive) g.spotlightX + (activeX - g.spotlightX) * lockT else g.spotlightX
+        val ringCy = if (hasActive) g.cy + (activeY - g.cy) * lockT else g.cy
+        val ringScale = 1.08f + (1.18f - 1.08f) * lockT
+        val ringStrokeDp = 2.2f + (3.2f - 2.2f) * lockT
+        val ringAlphaFactor = 0.55f + 0.45f * lockT
+        drawSpotlightRing(
+            canvas = canvas,
+            cx = ringCx,
+            cy = ringCy,
+            ringRadius = g.iconRadius * ringScale,
+            strokeWidthDp = ringStrokeDp,
+            alphaFactor = ringAlphaFactor
+        )
     }
 
     private fun drawSlotNode(
@@ -369,20 +461,20 @@ class RadioWheelView @JvmOverloads constructor(
         cx: Float,
         cy: Float,
         baseRadius: Float,
-        isActive: Boolean,
-        fadeAlpha: Float
+        focus: Float,
+        fadeAlpha: Float,
+        drawCircleRing: Boolean
     ) {
-        val scale = if (isActive) 1.16f else 1.0f
+        val maxScale = if (wheelMode == WheelMode.FULL_CIRCLE) 1.16f else 1.18f
+        val scale = 1.0f + (maxScale - 1.0f) * focus
         val discR = baseRadius * scale
 
-        discPaint.color = if (isActive) activeDiscColor else inactiveDiscColor
-        if (fadeAlpha < 1f) {
-            val origAlpha = Color.alpha(discPaint.color)
-            discPaint.alpha = (origAlpha * fadeAlpha).roundToInt().coerceIn(0, 255)
-        }
+        discPaint.color = blendColor(inactiveDiscColor, activeDiscColor, focus)
+        val origAlpha = Color.alpha(discPaint.color)
+        discPaint.alpha = (origAlpha * fadeAlpha).roundToInt().coerceIn(0, 255)
         canvas.drawCircle(cx, cy, discR, discPaint)
 
-        val iconAlpha = ((if (isActive) 255 else 182) * fadeAlpha).roundToInt().coerceIn(0, 255)
+        val iconAlpha = ((175f + (255f - 175f) * focus) * fadeAlpha).roundToInt().coerceIn(0, 255)
         val bmp = slot.icon
         if (bmp != null && !bmp.isRecycled) {
             val insetR = discR * 0.78f
@@ -403,20 +495,37 @@ class RadioWheelView @JvmOverloads constructor(
             drawOffVector(canvas, cx, cy, discR * 0.44f, iconAlpha)
         }
 
-        if (isActive && wheelMode == WheelMode.FULL_CIRCLE) {
-            drawSpotlightRing(canvas, cx, cy, discR)
+        if (drawCircleRing) {
+            drawSpotlightRing(canvas, cx, cy, discR, strokeWidthDp = 3.2f, alphaFactor = 1f)
         }
     }
 
-    private fun drawSpotlightRing(canvas: Canvas, cx: Float, cy: Float, ringRadius: Float) {
+    private fun blendColor(fromColor: Int, toColor: Int, t: Float): Int {
+        val clamped = t.coerceIn(0f, 1f)
+        val a = (Color.alpha(fromColor) + (Color.alpha(toColor) - Color.alpha(fromColor)) * clamped).roundToInt()
+        val r = (Color.red(fromColor) + (Color.red(toColor) - Color.red(fromColor)) * clamped).roundToInt()
+        val g = (Color.green(fromColor) + (Color.green(toColor) - Color.green(fromColor)) * clamped).roundToInt()
+        val b = (Color.blue(fromColor) + (Color.blue(toColor) - Color.blue(fromColor)) * clamped).roundToInt()
+        return Color.argb(a.coerceIn(0, 255), r.coerceIn(0, 255), g.coerceIn(0, 255), b.coerceIn(0, 255))
+    }
+
+    private fun drawSpotlightRing(
+        canvas: Canvas,
+        cx: Float,
+        cy: Float,
+        ringRadius: Float,
+        strokeWidthDp: Float = 3.2f,
+        alphaFactor: Float = 1f
+    ) {
+        val factor = alphaFactor.coerceIn(0f, 1f)
         glowPaint.color = accentColor
-        glowPaint.alpha = 72
-        glowPaint.strokeWidth = 6.5f * density
+        glowPaint.alpha = (80f * factor).roundToInt().coerceIn(0, 255)
+        glowPaint.strokeWidth = (strokeWidthDp + 3.5f) * density
         canvas.drawCircle(cx, cy, ringRadius + 1.5f * density, glowPaint)
 
         ringPaint.color = accentColor
-        ringPaint.alpha = 255
-        ringPaint.strokeWidth = 3.0f * density
+        ringPaint.alpha = (255f * factor).roundToInt().coerceIn(0, 255)
+        ringPaint.strokeWidth = strokeWidthDp * density
         canvas.drawCircle(cx, cy, ringRadius, ringPaint)
     }
 
@@ -452,6 +561,7 @@ class RadioWheelView @JvmOverloads constructor(
                     return false
                 }
                 parent?.requestDisallowInterceptTouchEvent(true)
+                notifyInteractionStart()
                 isTrackingTouch = true
                 isDragging = true
                 downX = event.x
@@ -482,6 +592,7 @@ class RadioWheelView @JvmOverloads constructor(
                 } else {
                     invalidate()
                 }
+                notifyInteractionEnd()
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
@@ -489,6 +600,7 @@ class RadioWheelView @JvmOverloads constructor(
                 isDragging = false
                 hoveredSlotIndex = -1
                 invalidate()
+                notifyInteractionEnd()
                 return true
             }
         }
@@ -521,12 +633,13 @@ class RadioWheelView @JvmOverloads constructor(
                 val dy = event.y - g.cy
                 val dist = hypot(dx, dy)
                 val onCorrectSide = if (wheelMode == WheelMode.ARC_LEFT) dx < 0f else dx > 0f
-                val band = g.iconRadius * 2.35f
+                val band = g.iconRadius * 2.15f
                 if (!onCorrectSide || dist < g.arcRadius - band || dist > g.arcRadius + band) {
                     return false
                 }
                 parent?.requestDisallowInterceptTouchEvent(true)
-                cancelArcAnimator()
+                cancelArcAnimator(notifyEnd = false)
+                notifyInteractionStart()
                 velocityTracker?.recycle()
                 velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
                 isTrackingTouch = true
@@ -547,16 +660,17 @@ class RadioWheelView @JvmOverloads constructor(
                     isDragging = true
                 }
                 if (isDragging) {
-                    val prevAngle = atan2(lastTouchY - g.cy, lastTouchX - g.cx)
-                    val curAngle = atan2(event.y - g.cy, event.x - g.cx)
-                    var dAngle = curAngle - prevAngle
-                    while (dAngle > PI.toFloat()) dAngle -= (2f * PI.toFloat())
-                    while (dAngle < -PI.toFloat()) dAngle += (2f * PI.toFloat())
-
-                    val indexDelta = if (wheelMode == WheelMode.ARC_LEFT) {
-                        dAngle / g.slotAngleStep
+                    val dy = event.y - lastTouchY
+                    // 1:1 vertical thumb tracking: dragging down (dy > 0) rotates arc icons down.
+                    val deltaAngle = if (wheelMode == WheelMode.ARC_LEFT) {
+                        dy / g.arcRadius
                     } else {
-                        -dAngle / g.slotAngleStep
+                        -(dy / g.arcRadius)
+                    }
+                    val indexDelta = if (wheelMode == WheelMode.ARC_LEFT) {
+                        -deltaAngle / g.slotAngleStep
+                    } else {
+                        deltaAngle / g.slotAngleStep
                     }
                     scrollIndex = wrapFloatIndex(scrollIndex + indexDelta, count)
                     val nearest = wrapSlotIndex(scrollIndex.roundToInt(), count)
@@ -591,17 +705,25 @@ class RadioWheelView @JvmOverloads constructor(
                         if (tappedIdx == curIdx) {
                             onSlotHovered?.invoke(slots[tappedIdx])
                         }
-                        animateArcToSlot(tappedIdx, commitOnEnd = true, durationMs = 200L)
+                        animateArcToSlot(tappedIdx, commitOnEnd = true, durationMs = 220L)
                     } else {
-                        animateArcToSlot(curIdx, commitOnEnd = false, durationMs = 150L)
+                        animateArcToSlot(curIdx, commitOnEnd = false, durationMs = 220L)
                     }
                 } else {
                     val slotArcPx = g.arcRadius * g.slotAngleStep
                     // Dragging down (yVel > 0) decreases scrollIndex (brings upper items down).
                     val slotsPerSec = -(yVel / slotArcPx)
-                    val projectedDelta = (slotsPerSec * 0.16f).coerceIn(-6f, 6f)
+                    val projectedDelta = if (abs(slotsPerSec) < 0.45f) {
+                        0f
+                    } else {
+                        (slotsPerSec * 0.16f).coerceIn(-6f, 6f)
+                    }
                     val targetUnwrapped = (scrollIndex + projectedDelta).roundToInt()
-                    val duration = (150L + (abs(projectedDelta) * 55f).toLong()).coerceIn(150L, 420L)
+                    val duration = if (abs(projectedDelta) < 0.5f) {
+                        220L
+                    } else {
+                        (220L + (abs(projectedDelta) * 35f).toLong()).coerceIn(220L, 420L)
+                    }
                     animateArcToUnwrappedTarget(targetUnwrapped.toFloat(), commitOnEnd = true, durationMs = duration)
                 }
                 return true
@@ -612,7 +734,7 @@ class RadioWheelView @JvmOverloads constructor(
                 isTrackingTouch = false
                 isDragging = false
                 val snapIdx = wrapSlotIndex(scrollIndex.roundToInt(), count)
-                animateArcToSlot(snapIdx, commitOnEnd = false, durationMs = 160L)
+                animateArcToSlot(snapIdx, commitOnEnd = false, durationMs = 220L)
                 return true
             }
         }
@@ -623,13 +745,13 @@ class RadioWheelView @JvmOverloads constructor(
         val count = slots.size
         val baseAngle = if (wheelMode == WheelMode.ARC_LEFT) PI.toFloat() else 0f
         val dirSign = if (wheelMode == WheelMode.ARC_LEFT) -1f else 1f
-        val hitR = g.iconRadius * 1.48f
+        val hitR = g.iconRadius * 1.35f
         var bestIdx = -1
         var bestDist = Float.MAX_VALUE
         for (i in 0 until count) {
             val delta = wrappedDelta(i - scrollIndex, count)
             val offsetAngle = delta * g.slotAngleStep
-            if (abs(offsetAngle) > (PI.toFloat() / 2f) + 0.15f) continue
+            if (abs(offsetAngle) > (PI.toFloat() / 2f) + 0.08f) continue
             val angle = baseAngle + dirSign * offsetAngle
             val sx = g.cx + g.arcRadius * cos(angle)
             val sy = g.cy + g.arcRadius * sin(angle)
@@ -652,22 +774,24 @@ class RadioWheelView @JvmOverloads constructor(
     private fun animateArcToUnwrappedTarget(targetUnwrapped: Float, commitOnEnd: Boolean, durationMs: Long) {
         val count = slots.size
         if (count <= 0) return
-        cancelArcAnimator()
+        cancelArcAnimator(notifyEnd = false)
         val start = scrollIndex
         if (abs(targetUnwrapped - start) < 0.005f) {
             scrollIndex = wrapFloatIndex(targetUnwrapped, count)
             val settledIdx = wrapSlotIndex(scrollIndex.roundToInt(), count)
             highlightedSlotIndex = settledIdx
+            hoveredSlotIndex = -1
             invalidate()
             if (commitOnEnd) {
                 onSlotCommitted?.invoke(slots[settledIdx])
             }
+            notifyInteractionEnd()
             return
         }
 
         val anim = ValueAnimator.ofFloat(start, targetUnwrapped).apply {
             duration = durationMs
-            interpolator = DecelerateInterpolator(1.6f)
+            interpolator = DecelerateInterpolator(1.5f)
             addUpdateListener { va ->
                 val cur = va.animatedValue as Float
                 scrollIndex = wrapFloatIndex(cur, count)
@@ -699,6 +823,7 @@ class RadioWheelView @JvmOverloads constructor(
                         if (commitOnEnd) {
                             onSlotCommitted?.invoke(slots[settledIdx])
                         }
+                        notifyInteractionEnd()
                     }
                 }
             })
@@ -707,9 +832,12 @@ class RadioWheelView @JvmOverloads constructor(
         anim.start()
     }
 
-    private fun cancelArcAnimator() {
+    private fun cancelArcAnimator(notifyEnd: Boolean = false) {
         arcAnimator?.cancel()
         arcAnimator = null
+        if (notifyEnd) {
+            notifyInteractionEnd()
+        }
     }
 
     private fun wrapSlotIndex(idx: Int, count: Int): Int {
@@ -735,7 +863,7 @@ class RadioWheelView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
-        cancelArcAnimator()
+        cancelArcAnimator(notifyEnd = true)
         velocityTracker?.recycle()
         velocityTracker = null
         super.onDetachedFromWindow()

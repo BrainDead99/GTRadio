@@ -53,7 +53,7 @@
             android:scaleType="centerCrop"
             tools:ignore="ContentDescription" />
 
-        <!-- Series Header Title (e.g. San Andreas Radio / Liberty City Radio) -->
+        <!-- Series Header Title -->
         <TextView
             android:id="@+id/themeHeaderTitle"
             android:layout_width="0dp"
@@ -61,6 +61,7 @@
             android:layout_marginStart="24dp"
             android:layout_marginTop="16dp"
             android:layout_marginEnd="16dp"
+            android:elevation="6dp"
             android:shadowColor="#CC000000"
             android:shadowDx="2"
             android:shadowDy="2"
@@ -403,15 +404,15 @@
                     android:paddingHorizontal="4dp"
                     android:text="NOW PLAYING"
                     android:textColor="#FFFFFF"
-                    android:textSize="11sp"
+                    android:textSize="13.5sp"
                     android:textStyle="bold" />
 
                 <ImageView
                     android:id="@+id/themeWheelArt"
-                    android:layout_width="96dp"
-                    android:layout_height="96dp"
-                    android:layout_marginTop="6dp"
-                    android:layout_marginBottom="6dp"
+                    android:layout_width="112dp"
+                    android:layout_height="112dp"
+                    android:layout_marginTop="4dp"
+                    android:layout_marginBottom="4dp"
                     android:background="#0A0A0A"
                     android:scaleType="centerCrop"
                     tools:ignore="ContentDescription" />
@@ -423,7 +424,7 @@
                     android:gravity="center"
                     android:paddingHorizontal="4dp"
                     android:textColor="#FFFFFF"
-                    android:textSize="13sp"
+                    android:textSize="14sp"
                     android:textStyle="bold"
                     tools:text="Station Name" />
 
@@ -431,11 +432,11 @@
                     android:id="@+id/themeWheelTitle"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="1dp"
                     android:gravity="center"
                     android:paddingHorizontal="4dp"
                     android:textColor="#FFFFFF"
-                    android:textSize="14sp"
+                    android:textSize="14.5sp"
                     android:textStyle="bold"
                     tools:text="Song Title" />
 
@@ -443,22 +444,22 @@
                     android:id="@+id/themeWheelArtist"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="1dp"
                     android:gravity="center"
                     android:paddingHorizontal="4dp"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="13sp"
                     tools:text="Artist" />
 
                 <com.sc.gtradio.OutlinedMarqueeTextView
                     android:id="@+id/themeWheelAlbum"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="2dp"
+                    android:layout_marginTop="1dp"
                     android:gravity="center"
                     android:paddingHorizontal="4dp"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="12.5sp"
                     tools:text="Album Name" />
 
                 <com.sc.gtradio.OutlinedMarqueeTextView
@@ -496,17 +497,16 @@
 
                 <LinearLayout
                     android:id="@+id/themeSettingsTab"
-                    android:layout_width="wrap_content"
+                    android:layout_width="116dp"
                     android:layout_height="wrap_content"
                     android:layout_gravity="start"
-                    android:background="#FFFFFFFF"
-                    android:minWidth="96dp"
+                    android:background="#FFFFFF"
                     android:orientation="vertical">
 
                     <View
                         android:id="@+id/themeSettingsTabAccent"
                         android:layout_width="match_parent"
-                        android:layout_height="3.5dp"
+                        android:layout_height="4dp"
                         android:background="#5EC2F2" />
 
                     <TextView
@@ -515,11 +515,11 @@
                         android:layout_height="wrap_content"
                         android:gravity="center"
                         android:letterSpacing="0.06"
-                        android:paddingHorizontal="14dp"
-                        android:paddingVertical="4dp"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="3dp"
                         android:text="SETTINGS"
                         android:textColor="#000000"
-                        android:textSize="12sp"
+                        android:textSize="17sp"
                         android:textStyle="bold" />
                 </LinearLayout>
             </FrameLayout>
@@ -546,7 +546,7 @@
                         android:layout_weight="1"
                         android:text="Radio Volume"
                         android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:textSize="16sp" />
 
                     <com.sc.gtradio.VolumeBarView
                         android:id="@+id/themeSettingsVolumeBar"
@@ -571,7 +571,7 @@
                         android:layout_weight="1"
                         android:text="Loudness Normalization"
                         android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:textSize="16sp" />
 
                     <TextView
                         android:id="@+id/themeSettingsLoudnessValue"
@@ -579,7 +579,7 @@
                         android:layout_height="wrap_content"
                         android:text="&lt; On &gt;"
                         android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:textSize="16sp" />
                 </LinearLayout>
 
                 <LinearLayout
@@ -599,7 +599,7 @@
                         android:layout_weight="1"
                         android:text="Car Stereo EQ"
                         android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:textSize="16sp" />
 
                     <TextView
                         android:id="@+id/themeSettingsEqValue"
@@ -607,7 +607,7 @@
                         android:layout_height="wrap_content"
                         android:text="&lt; Off &gt;"
                         android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:textSize="16sp" />
                 </LinearLayout>
 
                 <LinearLayout
@@ -628,7 +628,7 @@
                         android:layout_weight="1"
                         android:text="Wheel Layout"
                         android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:textSize="16sp" />
 
                     <TextView
                         android:id="@+id/themeSettingsWheelSideValue"
@@ -636,7 +636,7 @@
                         android:layout_height="wrap_content"
                         android:text="&lt; Left &gt;"
                         android:textColor="#FFFFFF"
-                        android:textSize="14sp" />
+                        android:textSize="16sp" />
                 </LinearLayout>
             </LinearLayout>
 
