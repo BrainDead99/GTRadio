@@ -17,6 +17,43 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Precomputed block geometry and virtual WAV layout for zero-cache streaming of an RPF7 MultiChannel entry.
+ */
+data class Rpf7StreamIndex(
+    val entryName: String,
+    val numBlocks: Int,
+    val blockSize: Int,
+    val channels: Int,
+    val sampleRate: Int,
+    val codec: Int,
+    val totalSamples: Long,
+    val dataChunkOffset: Long,
+    val dataChunkSize: Long,
+    val seekTable: LongArray,
+    val blockSamples: LongArray,
+    val blockPcmBytes: LongArray,
+    val blockStartWavByte: LongArray,
+    val totalPcmBytes: Long,
+    val totalVirtualWavBytes: Long,
+    val durationMs: Long
+)
+
+/**
+ * Thread-safe registry mapping active [Rpf7Archive.archiveStreamId] keys to their archives
+ * so [Rpf7StreamingDataSource] can resolve `gtradio-rpf7://` URIs without Context allocations.
+ */
+object Rpf7StreamRegistry {
+    private val archives = ConcurrentHashMap<String, Rpf7Archive>()
+
+    fun register(archiveId: String, archive: Rpf7Archive) {
+        archives[archiveId] = archive
+    }
+
+    fun get(archiveId: String): Rpf7Archive? = archives[archiveId]
+}
 
 /**
  * Metadata record for a continuous-mix sample-accurate trackid marker inside an AWC chunk 0xBD.
@@ -86,13 +123,60 @@ class Rpf7Archive(
     private val trackMarkersCache = ConcurrentHashMap<String, List<Rpf7TrackMarker>>()
     private val djMarkerCache = ConcurrentHashMap<String, DjMarkerWindow>()
     private val seekTableCache = ConcurrentHashMap<String, LongArray>()
+    private val streamIndexCache = ConcurrentHashMap<String, Rpf7StreamIndex>()
+    val archiveStreamId: String = "rpf7_${nextArchiveId.incrementAndGet()}_" +
+        rpfName.removeSuffix(".rpf").replace(Regex("[^A-Za-z0-9_]"), "_").lowercase(Locale.ROOT)
     @Volatile private var indexed = false
     val isIndexed: Boolean get() = indexed
 
+    init {
+        Rpf7StreamRegistry.register(archiveStreamId, this)
+        Rpf7StreamingDataSource.ensureRegistered()
+    }
+
     companion object {
+        private val nextArchiveId = AtomicLong(0L)
         const val CHUNK_BLOCKS = 4
         const val CHUNK_THRESHOLD_BLOCKS = 16
         private val NO_DJ_MARKERS = DjMarkerWindow()
+
+        fun buildWavHeaderBytes(
+            pcmDataBytes: Long,
+            sampleRate: Int,
+            channels: Int
+        ): ByteArray {
+            val totalDataLen = pcmDataBytes + 36L
+            val byteRate = sampleRate.toLong() * channels.toLong() * 2L
+            val blockAlign = channels * 2
+
+            val header = ByteArray(44)
+            header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
+            header[4] = (totalDataLen and 0xFFL).toByte()
+            header[5] = ((totalDataLen ushr 8) and 0xFFL).toByte()
+            header[6] = ((totalDataLen ushr 16) and 0xFFL).toByte()
+            header[7] = ((totalDataLen ushr 24) and 0xFFL).toByte()
+            header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
+            header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
+            header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
+            header[20] = 1; header[21] = 0 // 1 = PCM
+            header[22] = channels.toByte(); header[23] = 0
+            header[24] = (sampleRate and 0xFF).toByte()
+            header[25] = ((sampleRate ushr 8) and 0xFF).toByte()
+            header[26] = ((sampleRate ushr 16) and 0xFF).toByte()
+            header[27] = ((sampleRate ushr 24) and 0xFF).toByte()
+            header[28] = (byteRate and 0xFFL).toByte()
+            header[29] = ((byteRate ushr 8) and 0xFFL).toByte()
+            header[30] = ((byteRate ushr 16) and 0xFFL).toByte()
+            header[31] = ((byteRate ushr 24) and 0xFFL).toByte()
+            header[32] = blockAlign.toByte(); header[33] = 0
+            header[34] = 16; header[35] = 0 // 16-bit
+            header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
+            header[40] = (pcmDataBytes and 0xFFL).toByte()
+            header[41] = ((pcmDataBytes ushr 8) and 0xFFL).toByte()
+            header[42] = ((pcmDataBytes ushr 16) and 0xFFL).toByte()
+            header[43] = ((pcmDataBytes ushr 24) and 0xFFL).toByte()
+            return header
+        }
 
         private const val MAX_CACHE_BYTES = 150L * 1024L * 1024L // 150 MB cap
         private const val TARGET_CACHE_BYTES = 100L * 1024L * 1024L // Evict down to 100 MB
@@ -775,6 +859,350 @@ class Rpf7Archive(
     }
 
     // ------------------------------------------------------------------------
+    // Zero-Cache Streaming Index & Single-Block Decoder
+    // ------------------------------------------------------------------------
+
+    fun isMultiChannelEntry(trackKey: String): Boolean {
+        return getEntry(trackKey.trim())?.isMultiChannel == true
+    }
+
+    fun buildStreamUri(entryName: String): Uri {
+        Rpf7StreamRegistry.register(archiveStreamId, this)
+        Rpf7StreamingDataSource.ensureRegistered()
+        val entry = getEntry(entryName.trim())
+        val targetName = entry?.name ?: entryName.trim().let {
+            if (it.endsWith(".awc", ignoreCase = true)) it else "$it.awc"
+        }
+        return Uri.parse("${Rpf7StreamingDataSource.SCHEME}://$archiveStreamId/${Uri.encode(targetName)}.wav")
+    }
+
+    fun openStreamPfd(): android.os.ParcelFileDescriptor? {
+        return try {
+            context.contentResolver.openFileDescriptor(sourceUri, "r")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun getOrBuildStreamIndex(entryName: String): Rpf7StreamIndex? {
+        ensureIndexed()
+        val entry = getEntry(entryName.trim()) ?: return null
+        if (!entry.isMultiChannel || entry.dataChunkSize <= 0L) return null
+
+        streamIndexCache[entry.name]?.let { return it }
+
+        val numBlocks = entry.numBlocks
+        val blockSize = entry.blockSize
+        val channels = entry.channels
+        val sampleRate = entry.sampleRate
+        val totalSamples = entry.totalSamples.toLong() and 0xFFFFFFFFL
+        if (channels !in 1..2 || sampleRate <= 0 || numBlocks <= 0 || blockSize <= 0 || totalSamples <= 0L) {
+            return null
+        }
+
+        if (!seekTableCache.containsKey(entry.name)) {
+            readTrackMarkers(entry.name)
+        }
+        val rawSeek = seekTableCache[entry.name]
+        val seekTable = if (rawSeek != null && rawSeek.size == numBlocks && isMonotonicSeekTable(rawSeek, totalSamples)) {
+            rawSeek.copyOf()
+        } else {
+            LongArray(numBlocks) { b -> (b.toLong() * totalSamples) / numBlocks.toLong() }
+        }
+
+        val bytesPerFrame = channels.toLong() * 2L
+        val blockSamples = LongArray(numBlocks)
+        val blockPcmBytes = LongArray(numBlocks)
+        val blockStartWavByte = LongArray(numBlocks)
+        for (b in 0 until numBlocks) {
+            val endSample = if (b + 1 < numBlocks) seekTable[b + 1] else totalSamples
+            val samples = (endSample - seekTable[b]).coerceAtLeast(0L)
+            blockSamples[b] = samples
+            blockPcmBytes[b] = samples * bytesPerFrame
+            blockStartWavByte[b] = 44L + seekTable[b] * bytesPerFrame
+        }
+
+        val totalPcmBytes = totalSamples * bytesPerFrame
+        val totalVirtualWavBytes = 44L + totalPcmBytes
+        val durationMs = (totalSamples * 1000L) / sampleRate.toLong()
+
+        val index = Rpf7StreamIndex(
+            entryName = entry.name,
+            numBlocks = numBlocks,
+            blockSize = blockSize,
+            channels = channels,
+            sampleRate = sampleRate,
+            codec = entry.codec,
+            totalSamples = totalSamples,
+            dataChunkOffset = entry.dataChunkOffset,
+            dataChunkSize = entry.dataChunkSize,
+            seekTable = seekTable,
+            blockSamples = blockSamples,
+            blockPcmBytes = blockPcmBytes,
+            blockStartWavByte = blockStartWavByte,
+            totalPcmBytes = totalPcmBytes,
+            totalVirtualWavBytes = totalVirtualWavBytes,
+            durationMs = durationMs
+        )
+        return streamIndexCache.putIfAbsent(entry.name, index) ?: index
+    }
+
+    private fun isMonotonicSeekTable(tbl: LongArray, totalSamples: Long): Boolean {
+        if (tbl.isEmpty() || tbl[0] != 0L) return false
+        for (i in 1 until tbl.size) {
+            if (tbl[i] < tbl[i - 1]) return false
+        }
+        return tbl[tbl.size - 1] < totalSamples
+    }
+
+    /**
+     * Decodes a single MultiChannel block [blockIdx] into raw interleaved 16-bit PCM bytes whose
+     * exact length matches `index.blockPcmBytes[blockIdx]`.
+     */
+    fun decodeSingleBlockToPcmBytes(
+        index: Rpf7StreamIndex,
+        blockIdx: Int,
+        prevWarmupByChannel: Array<ByteArray?>? = null,
+        outTailWarmupByChannel: Array<ByteArray?>? = null,
+        openChannel: FileChannel? = null
+    ): ByteArray {
+        if (blockIdx !in 0 until index.numBlocks) return ByteArray(0)
+        val expectedBytes = index.blockPcmBytes[blockIdx].toInt().coerceAtLeast(0)
+        if (expectedBytes == 0) return ByteArray(0)
+
+        val entry = getEntry(index.entryName) ?: return ByteArray(expectedBytes)
+        val keys = Rpf7KeyManager.getKeys(context) ?: return ByteArray(expectedBytes)
+
+        fun decodeWithChannel(ch: FileChannel): ByteArray {
+            val blkSize = index.blockSize
+            val baseDataOffset = entry.offset + index.dataChunkOffset
+            val dataEndPos = baseDataOffset + index.dataChunkSize
+            val chCount = index.channels
+
+            val blockOffset = baseDataOffset + blockIdx.toLong() * blkSize.toLong()
+            val actualBlockSize = Math.min(blkSize.toLong(), dataEndPos - blockOffset).toInt()
+            if (actualBlockSize <= 0) return ByteArray(expectedBytes)
+
+            val blockBytes = ByteArray(actualBlockSize)
+            val bytesRead = readFullyAt(ch, blockOffset, blockBytes, actualBlockSize)
+            if (bytesRead <= 0) return ByteArray(expectedBytes)
+
+            if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
+                Rpf7Crypto.decryptRsxxtea(blockBytes, 0, bytesRead and -4, keys.awcKey)
+            }
+
+            if (index.codec == 7) {
+                val warmup = prevWarmupByChannel ?: if (blockIdx > 0) {
+                    extractCodec7WarmupFromBlock(ch, entry, baseDataOffset, dataEndPos, blkSize, chCount, blockIdx - 1, keys)
+                } else {
+                    Array(chCount) { null }
+                }
+                return decodeCodec7BlockBytes(
+                    blockBytes = blockBytes,
+                    actualBlockSize = bytesRead,
+                    chCount = chCount,
+                    prevWarmup = warmup,
+                    outTailWarmup = outTailWarmupByChannel,
+                    expectedBytes = expectedBytes
+                )
+            }
+
+            // Codec 4 (IMA ADPCM) or other non-MP3 multi-channel stream
+            var rpos = 0
+            val blockCounts = IntArray(chCount)
+            val sampleCounts = IntArray(chCount)
+            for (c in 0 until chCount) {
+                if (rpos + 24 <= bytesRead) {
+                    blockCounts[c] = readIntLe(blockBytes, rpos + 4)
+                    sampleCounts[c] = readIntLe(blockBytes, rpos + 12)
+                }
+                rpos += 24
+            }
+            for (c in 0 until chCount) {
+                rpos += blockCounts[c] * 4
+            }
+            val pad = (2048 - (rpos % 2048)) % 2048
+            rpos += pad
+
+            val bcnt0 = (blockCounts[0] * 2048).coerceIn(0, (bytesRead - rpos).coerceAtLeast(0))
+            val sCount0 = sampleCounts[0]
+            val rightOff = rpos + bcnt0
+            val bcnt1 = if (chCount > 1) {
+                (blockCounts[1] * 2048).coerceIn(0, (bytesRead - rightOff).coerceAtLeast(0))
+            } else 0
+            val sCount1 = if (chCount > 1) sampleCounts[1] else 0
+
+            val decoded = com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecodeImaAdpcmToPcm16(
+                blockBytes,
+                rpos.coerceAtMost(bytesRead),
+                bcnt0,
+                sCount0,
+                if (chCount > 1) blockBytes else null,
+                rightOff.coerceAtMost(bytesRead),
+                bcnt1,
+                sCount1
+            )
+            return normalizeBlockPcmBytes(decoded, expectedBytes)
+        }
+
+        return if (openChannel != null) {
+            decodeWithChannel(openChannel)
+        } else {
+            context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                    decodeWithChannel(ch)
+                }
+            } ?: ByteArray(expectedBytes)
+        }
+    }
+
+    private fun extractCodec7WarmupFromBlock(
+        channel: FileChannel,
+        entry: Rpf7Entry,
+        baseDataOffset: Long,
+        dataEndPos: Long,
+        blkSize: Int,
+        chCount: Int,
+        prevBlockIdx: Int,
+        keys: Rpf7KeySet
+    ): Array<ByteArray?> {
+        val prevWarmup = Array<ByteArray?>(chCount) { null }
+        if (prevBlockIdx < 0) return prevWarmup
+        try {
+            val prevBlockOffset = baseDataOffset + prevBlockIdx.toLong() * blkSize.toLong()
+            val actualPrevSize = Math.min(blkSize.toLong(), dataEndPos - prevBlockOffset).toInt()
+            if (actualPrevSize <= 2048) return prevWarmup
+
+            val prevBlockBytes = ByteArray(actualPrevSize)
+            val bytesRead = readFullyAt(channel, prevBlockOffset, prevBlockBytes, actualPrevSize)
+            if (bytesRead <= 2048) return prevWarmup
+
+            if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
+                Rpf7Crypto.decryptRsxxtea(prevBlockBytes, 0, bytesRead and -4, keys.awcKey)
+            }
+            val prevByteLengths = IntArray(chCount)
+            var dPos = 0
+            for (c in 0 until chCount) {
+                if (dPos + 24 <= bytesRead) {
+                    prevByteLengths[c] = readIntLe(prevBlockBytes, dPos + 20)
+                }
+                dPos += 24
+            }
+            var cPos = 2048
+            for (c in 0 until chCount) {
+                val chLen = prevByteLengths[c]
+                val chOff = cPos
+                cPos = (cPos + chLen + 15) and -16
+                val safeLen = Math.max(0, Math.min(chLen, bytesRead - chOff))
+                if (safeLen > 0 && chOff < bytesRead) {
+                    val warmupSize = Math.min(2048, safeLen)
+                    val warmupBytes = ByteArray(warmupSize)
+                    System.arraycopy(prevBlockBytes, chOff + safeLen - warmupSize, warmupBytes, 0, warmupSize)
+                    prevWarmup[c] = warmupBytes
+                }
+            }
+        } catch (e: Exception) {
+            GTRadioLogger.logVerbose("DECODE") { "Failed warmup read on blk $prevBlockIdx: ${e.message}" }
+        }
+        return prevWarmup
+    }
+
+    private fun decodeCodec7BlockBytes(
+        blockBytes: ByteArray,
+        actualBlockSize: Int,
+        chCount: Int,
+        prevWarmup: Array<ByteArray?>,
+        outTailWarmup: Array<ByteArray?>?,
+        expectedBytes: Int
+    ): ByteArray {
+        val samplesToSkip = IntArray(chCount)
+        val sampleCounts = IntArray(chCount)
+        val byteLengths = IntArray(chCount)
+
+        var descPos = 0
+        for (c in 0 until chCount) {
+            if (descPos + 24 <= actualBlockSize) {
+                samplesToSkip[c] = readIntLe(blockBytes, descPos + 8)
+                sampleCounts[c] = readIntLe(blockBytes, descPos + 12)
+                byteLengths[c] = readIntLe(blockBytes, descPos + 20)
+            }
+            descPos += 24
+        }
+
+        var curPos = 2048
+        val chOffsets = IntArray(chCount)
+        val chSafeLens = IntArray(chCount)
+        for (c in 0 until chCount) {
+            val chByteLen = byteLengths[c]
+            chOffsets[c] = curPos
+            curPos = (curPos + chByteLen + 15) and -16
+            chSafeLens[c] = Math.max(0, Math.min(chByteLen, actualBlockSize - chOffsets[c]))
+        }
+
+        val leftPayload = ByteArray(chSafeLens[0])
+        if (chSafeLens[0] > 0 && chOffsets[0] < actualBlockSize) {
+            System.arraycopy(blockBytes, chOffsets[0], leftPayload, 0, chSafeLens[0])
+        }
+        val rightPayload = if (chCount >= 2 && chSafeLens[1] > 0 && chOffsets[1] < actualBlockSize) {
+            ByteArray(chSafeLens[1]).also { rBuf ->
+                System.arraycopy(blockBytes, chOffsets[1], rBuf, 0, chSafeLens[1])
+            }
+        } else null
+
+        if (outTailWarmup != null) {
+            for (c in 0 until minOf(chCount, outTailWarmup.size)) {
+                val pBuf = if (c == 0) leftPayload else rightPayload
+                val sLen = pBuf?.size ?: 0
+                if (pBuf != null && sLen > 0) {
+                    val warmupSize = Math.min(2048, sLen)
+                    val tail = ByteArray(warmupSize)
+                    System.arraycopy(pBuf, sLen - warmupSize, tail, 0, warmupSize)
+                    outTailWarmup[c] = tail
+                } else {
+                    outTailWarmup[c] = null
+                }
+            }
+        }
+
+        // AWC Codec 7 sampleCount includes leading samplesToSkip; native decoder takes net output samples
+        val netLeft = (sampleCounts[0] - samplesToSkip[0]).coerceAtLeast(0)
+        val netRight = if (chCount >= 2) (sampleCounts[1] - samplesToSkip[1]).coerceAtLeast(0) else 0
+
+        val blockPcm = NativeMp3Decoder.nativeDecodeDualMonoMp3BlockToPcmBytes(
+            leftPayload,
+            prevWarmup.getOrNull(0),
+            samplesToSkip[0],
+            netLeft,
+            rightPayload,
+            if (chCount >= 2) prevWarmup.getOrNull(1) else null,
+            if (chCount >= 2) samplesToSkip[1] else 0,
+            netRight
+        )
+        return normalizeBlockPcmBytes(blockPcm, expectedBytes)
+    }
+
+    private fun normalizeBlockPcmBytes(pcm: ByteArray, expectedBytes: Int): ByteArray {
+        if (pcm.size == expectedBytes) return pcm
+        return ByteArray(expectedBytes).also { out ->
+            val copyLen = minOf(pcm.size, expectedBytes)
+            if (copyLen > 0) {
+                System.arraycopy(pcm, 0, out, 0, copyLen)
+            }
+        }
+    }
+
+    private fun readFullyAt(channel: FileChannel, position: Long, dst: ByteArray, length: Int): Int {
+        val buf = ByteBuffer.wrap(dst, 0, length)
+        var total = 0
+        while (buf.hasRemaining()) {
+            val n = channel.read(buf, position + total)
+            if (n <= 0) break
+            total += n
+        }
+        return total
+    }
+
+    // ------------------------------------------------------------------------
     // Audio Materialization (Decoding to 16-bit PCM WAV)
     // ------------------------------------------------------------------------
 
@@ -1089,15 +1517,19 @@ class Rpf7Archive(
                 rBuf
             } else null
 
+            // AWC Codec 7 sampleCount includes leading samplesToSkip; native decoder takes net output samples
+            val netLeftCount = (sampleCounts[0] - samplesToSkip[0]).coerceAtLeast(0)
+            val netRightCount = if (chCount >= 2) (sampleCounts[1] - samplesToSkip[1]).coerceAtLeast(0) else 0
+
             val blockPcm = NativeMp3Decoder.nativeDecodeDualMonoMp3BlockToPcmBytes(
                 leftPayload,
                 prevChannelWarmup[0],
                 samplesToSkip[0],
-                sampleCounts[0],
+                netLeftCount,
                 rightPayload,
                 if (chCount >= 2) prevChannelWarmup[1] else null,
                 if (chCount >= 2) samplesToSkip[1] else 0,
-                if (chCount >= 2) sampleCounts[1] else 0
+                netRightCount
             )
 
             // Save trailing bytes for the next block warmup
@@ -1209,6 +1641,7 @@ class Rpf7Archive(
         val blkSize = entry.blockSize
         val baseDataOffset = entry.offset + entry.dataChunkOffset
         val chCount = Math.max(1, entry.channels)
+        val dataEndPos = baseDataOffset + entry.dataChunkSize
 
         // Temporary decode buffers (each byte of ADPCM decompresses to 2 PCM samples)
         val rawBlock = ByteArray(blkSize)
@@ -1220,14 +1653,14 @@ class Rpf7Archive(
             if (curBlockIdx >= entry.numBlocks) break
 
             val blockOffset = baseDataOffset + curBlockIdx.toLong() * blkSize.toLong()
-            val buf = ByteBuffer.wrap(rawBlock)
-            channel.position(blockOffset)
-            val bytesRead = channel.read(buf)
+            val actualBlockSize = Math.min(blkSize.toLong(), dataEndPos - blockOffset).toInt()
+            if (actualBlockSize <= 0) break
+            val bytesRead = readFullyAt(channel, blockOffset, rawBlock, actualBlockSize)
             if (bytesRead <= 0) break
 
             // RSXXTEA decrypt block payload if encrypted
             if (entry.isMultiChannelEncrypt && !entry.isWholeFileEncrypted) {
-                Rpf7Crypto.decryptRsxxtea(rawBlock, 0, bytesRead, keys.awcKey)
+                Rpf7Crypto.decryptRsxxtea(rawBlock, 0, bytesRead and -4, keys.awcKey)
             }
 
             // Parse block channel headers
@@ -1376,38 +1809,7 @@ class Rpf7Archive(
         sampleRate: Int,
         channels: Int
     ) {
-        val totalDataLen = pcmDataBytes + 36
-        val byteRate = sampleRate * channels * 2
-        val blockAlign = channels * 2
-
-        val header = ByteArray(44)
-        header[0] = 'R'.code.toByte(); header[1] = 'I'.code.toByte(); header[2] = 'F'.code.toByte(); header[3] = 'F'.code.toByte()
-        header[4] = (totalDataLen and 0xFF).toByte()
-        header[5] = ((totalDataLen ushr 8) and 0xFF).toByte()
-        header[6] = ((totalDataLen ushr 16) and 0xFF).toByte()
-        header[7] = ((totalDataLen ushr 24) and 0xFF).toByte()
-        header[8] = 'W'.code.toByte(); header[9] = 'A'.code.toByte(); header[10] = 'V'.code.toByte(); header[11] = 'E'.code.toByte()
-        header[12] = 'f'.code.toByte(); header[13] = 'm'.code.toByte(); header[14] = 't'.code.toByte(); header[15] = ' '.code.toByte()
-        header[16] = 16; header[17] = 0; header[18] = 0; header[19] = 0
-        header[20] = 1; header[21] = 0 // 1 = PCM
-        header[22] = channels.toByte(); header[23] = 0
-        header[24] = (sampleRate and 0xFF).toByte()
-        header[25] = ((sampleRate ushr 8) and 0xFF).toByte()
-        header[26] = ((sampleRate ushr 16) and 0xFF).toByte()
-        header[27] = ((sampleRate ushr 24) and 0xFF).toByte()
-        header[28] = (byteRate and 0xFF).toByte()
-        header[29] = ((byteRate ushr 8) and 0xFF).toByte()
-        header[30] = ((byteRate ushr 16) and 0xFF).toByte()
-        header[31] = ((byteRate ushr 24) and 0xFF).toByte()
-        header[32] = blockAlign.toByte(); header[33] = 0
-        header[34] = 16; header[35] = 0 // 16-bit
-        header[36] = 'd'.code.toByte(); header[37] = 'a'.code.toByte(); header[38] = 't'.code.toByte(); header[39] = 'a'.code.toByte()
-        header[40] = (pcmDataBytes and 0xFF).toByte()
-        header[41] = ((pcmDataBytes ushr 8) and 0xFF).toByte()
-        header[42] = ((pcmDataBytes ushr 16) and 0xFF).toByte()
-        header[43] = ((pcmDataBytes ushr 24) and 0xFF).toByte()
-
-        out.write(header)
+        out.write(buildWavHeaderBytes(pcmDataBytes.toLong() and 0xFFFFFFFFL, sampleRate, channels))
     }
 
     private fun cleanCacheIfNeeded(cacheDir: File, currentSafeFileName: String) {

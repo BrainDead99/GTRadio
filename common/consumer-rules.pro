@@ -50,6 +50,31 @@
     *;
 }
 
+-keep class com.sc.gtradio.media.core.Gen3RoutingDataSourceFactory {
+    *;
+}
+-keep class com.sc.gtradio.media.core.Gen3RoutingDataSourceFactory$* {
+    *;
+}
+
+-keep class com.sc.gtradio.media.rpf7.Rpf7StreamingDataSource {
+    *;
+}
+-keep class com.sc.gtradio.media.rpf7.Rpf7StreamingDataSource$* {
+    *;
+}
+
+-keep class com.sc.gtradio.media.rpf7.Rpf7StreamRegistry {
+    *;
+}
+-keep class com.sc.gtradio.media.rpf7.Rpf7StreamRegistry$* {
+    *;
+}
+
+-keep class com.sc.gtradio.media.rpf7.Rpf7StreamIndex {
+    *;
+}
+
 -keep class com.sc.gtradio.media.GTRadioMusicService {
     *;
 }

@@ -324,14 +324,15 @@ class Rpf7RadioDirector<TSong, TClip>(
 
     companion object {
         /**
-         * Returns true for low-bitrate in-game TV commercials (e.g. mono_tv_ad_*)
+         * Returns true for ALL non-radio TV content (TV commercials AND full ~12-min TV shows
+         * such as mono_tv_ad_*, mono_tv_prb_*, mono_tv_mrhd_*, mono_tv_rsr_*, mono_tv_bright_*)
          * that must be excluded from FM radio commercial breaks.
          */
         fun isTvAdvertStem(nameOrStem: String): Boolean {
             val stem = nameOrStem.lowercase(Locale.ROOT).removeSuffix(".awc")
-            return stem.startsWith("mono_tv_ad_") ||
-                stem.contains("_tv_ad_") ||
-                stem.startsWith("tv_ad_")
+            return stem.startsWith("mono_tv_") ||
+                stem.startsWith("tv_") ||
+                stem.contains("_tv_")
         }
     }
 }

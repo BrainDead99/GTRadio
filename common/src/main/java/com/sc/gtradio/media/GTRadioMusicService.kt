@@ -26,6 +26,7 @@ import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.DefaultMediaNotificationProvider
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
@@ -124,6 +125,7 @@ open class GTRadioMusicService : MediaLibraryService() {
             .build()
 
         ExoPlayer.Builder(this, renderersFactory)
+            .setMediaSourceFactory(DefaultMediaSourceFactory(Gen3RoutingDataSourceFactory.create(this)))
             .setLoadControl(loadControl)
             .setAudioAttributes(gtrAudioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
@@ -1067,7 +1069,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                         persistPlaybackState()
 
                         var waitedMs = 0L
-                        while (waitedMs < 120L &&
+                        while (waitedMs < 400L &&
                             switchToken == stationSwitchToken &&
                             radioPlayer.exoPlayer.playbackState != Player.STATE_READY &&
                             !(radioPlayer.exoPlayer.mediaItemCount == 0 && djVoiceOverlayPlayer.isPlaying)
