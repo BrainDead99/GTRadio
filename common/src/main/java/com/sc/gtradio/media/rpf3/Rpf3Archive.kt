@@ -259,8 +259,16 @@ class Rpf3Archive(
         return File(context.cacheDir, "rpf3_tracks").apply { mkdirs() }
     }
 
-    @Synchronized
+    private val indexLock = Any()
+
     fun ensureIndexed() {
+        if (indexed) return
+        synchronized(indexLock) {
+            ensureIndexedLocked()
+        }
+    }
+
+    private fun ensureIndexedLocked() {
         if (indexed) return
         Rpf3MetadataRepository.ensureLoaded(context)
         try {
@@ -1029,7 +1037,7 @@ class Rpf3Archive(
         channelIdx: Int,
         chunkIndex: Int
     ): AdpcmState? {
-        if (chunkIndex <= 0 || channelIdx >= numChannels) return AdpcmState(0, 0)
+        if (chunkIndex < 0 || channelIdx >= numChannels) return AdpcmState(0, 0)
         val wihPos = chTableOffset + channelIdx * 16
         if (wihPos + 16 > fullHdr.limit()) return null
         val wihOffset = fullHdr.getLong(wihPos).toInt()
@@ -1042,7 +1050,7 @@ class Rpf3Archive(
         val numStates = fullHdr.getInt(wiStart + 52)
         if (numStates <= 0) return null
 
-        val stateIdx = (chunkIndex - 1).coerceIn(0, numStates - 1)
+        val stateIdx = chunkIndex.coerceIn(0, numStates - 1)
         val statePos = wiStart + offsetToStates + stateIdx * 3
         if (statePos + 3 > fullHdr.limit()) return null
 
@@ -1146,6 +1154,36 @@ class Rpf3Archive(
                 val numBytesPerCh = (ch0Samples + 1) / 2
                 if (ch0ByteOff + numBytesPerCh > blockSize) continue
                 if (outChannels == 2 && ch1ByteOff + numBytesPerCh > blockSize) continue
+
+                val sampleTblOff = tblOff + outChannels * 16
+                val blockFirstSample = if (sampleTblOff + 4 <= bb.limit()) {
+                    bb.getInt(sampleTblOff).coerceAtLeast(0)
+                } else 0
+                val blockStartChunkIdx = if (blockFirstSample > 0 || b == 0) {
+                    blockFirstSample / 4096
+                } else {
+                    b * (if (outChannels == 2) 123 else 247)
+                }
+                val blkLeft = if (b == firstBlock && prevState != null) {
+                    AdpcmState(prevState[0], prevState[1])
+                } else {
+                    readHeaderAdpcmState(hdrBuf, chTableOffset, numChannels, 0, blockStartChunkIdx)
+                        ?: AdpcmState(stateArray[0], stateArray[1])
+                }
+                val blkRight = if (outChannels == 2) {
+                    if (b == firstBlock && prevState != null) {
+                        AdpcmState(prevState[2], prevState[3])
+                    } else {
+                        readHeaderAdpcmState(hdrBuf, chTableOffset, numChannels, 1, blockStartChunkIdx)
+                            ?: AdpcmState(stateArray[2], stateArray[3])
+                    }
+                } else {
+                    AdpcmState()
+                }
+                stateArray[0] = blkLeft.valprev
+                stateArray[1] = blkLeft.index
+                stateArray[2] = blkRight.valprev
+                stateArray[3] = blkRight.index
 
                 val blockPcm = com.sc.gtradio.media.core.Gen3NativeTurbo.nativeDecodeRpf3ImaAdpcmToPcm16(
                     blockBytes, ch0ByteOff, ch1ByteOff, numBytesPerCh, ch0Samples, outChannels, stateArray

@@ -884,6 +884,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                 activeTracklistIndex = -1
                 radioPlayer.stopCleanQueue()
                 mediaLibrarySession.setSessionExtras(buildSessionExtras())
+                radioPlayer.updateSessionMetadata(MediaMetadata.EMPTY)
                 return
             }
 
@@ -893,6 +894,8 @@ open class GTRadioMusicService : MediaLibraryService() {
             radioPlayer.setStreamMuted(false)
             stationToStop?.stop()
             radioPlayer.stopInternal()
+            mediaLibrarySession.setSessionExtras(buildSessionExtras())
+            radioPlayer.updateSessionMetadata(MediaMetadata.EMPTY)
         } finally {
             isHandlingStop = false
         }
@@ -1445,6 +1448,16 @@ open class GTRadioMusicService : MediaLibraryService() {
         return groups
     }
 
+    private fun buildLibrarySignature(groups: List<StationGroup>): List<String> {
+        return groups.map { g ->
+            val groupArt = g.mediaItem.mediaMetadata.artworkUri?.toString().orEmpty()
+            val stationsSig = g.stationList.joinToString(",") { st ->
+                "${st.mediaId}:${st.mediaMetadata.title}:${st.mediaMetadata.artworkUri}"
+            }
+            "${g.mediaItem.mediaId}|${g.groupName}|$groupArt|${g.stationList.size}|$stationsSig"
+        }
+    }
+
     private suspend fun ensureGroupsLoadedSync(currentUri: String) {
         if (groupsLoaded && cachedUri == currentUri) return
         scanMutex.withLock {
@@ -1454,6 +1467,7 @@ open class GTRadioMusicService : MediaLibraryService() {
                 val cached = LibraryIndexCache.loadCache(applicationContext, currentUri)
                 if (cached != null) {
                     val hydratedGroups = LibraryIndexCache.hydrateGroups(cached, applicationContext)
+                    val hydratedSignature = buildLibrarySignature(hydratedGroups)
                     val flatList = ArrayList(hydratedGroups.map { it.stationList }.flatten())
                     val cacheElapsed = System.currentTimeMillis() - cacheStart
                     synchronized(this) {
@@ -1471,16 +1485,20 @@ open class GTRadioMusicService : MediaLibraryService() {
                             DynamicThemeManager.refreshIfNeeded(applicationContext, cached.themeDirUri)
                             AlbumHintRepository.ensureLoaded(applicationContext)
                             val freshGroups = getStationGroups()
+                            val freshSignature = buildLibrarySignature(freshGroups)
                             val freshList = ArrayList(freshGroups.map { x -> x.stationList }.flatten())
                             synchronized(this@GTRadioMusicService) {
                                 stationGroups = freshGroups
                                 fullStationList = freshList
                             }
                             LibraryIndexCache.saveCache(applicationContext, currentUri, freshGroups)
-                            GTRadioLogger.log("[SCAN] LibraryIndexCache: Background SAF validation complete, ${freshGroups.size} group(s)")
-                            withContext(Dispatchers.Main.immediate) {
-                                mediaLibrarySession.notifyChildrenChanged("root", freshGroups.size, null)
-                                mediaLibrarySession.notifyChildrenChanged(TracklistContract.ROOT_ID, freshGroups.size, null)
+                            val libraryChanged = freshSignature != hydratedSignature
+                            GTRadioLogger.log("[SCAN] LibraryIndexCache: Background SAF validation complete, ${freshGroups.size} group(s), changed=$libraryChanged")
+                            if (libraryChanged) {
+                                withContext(Dispatchers.Main.immediate) {
+                                    mediaLibrarySession.notifyChildrenChanged("root", freshGroups.size, null)
+                                    mediaLibrarySession.notifyChildrenChanged(TracklistContract.ROOT_ID, freshGroups.size, null)
+                                }
                             }
                         } catch (e: Exception) {
                             if (e is CancellationException) throw e

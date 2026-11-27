@@ -36,6 +36,7 @@ object AlbumArtDownloader {
     var appContext: Context? = null
 
     private val albumNameCache = ConcurrentHashMap<String, String>()
+    private val negativeArtCache = ConcurrentHashMap.newKeySet<String>()
     private val memoryArtCache = object : LruCache<String, Bitmap>(64) {
         override fun sizeOf(key: String, value: Bitmap): Int = 1
     }
@@ -119,6 +120,10 @@ object AlbumArtDownloader {
 
     fun cacheKey(artist: String, songTitle: String): String {
         return CACHE_KEY_REGEX.replace("${artist.lowercase(Locale.ROOT)}_${songTitle.lowercase(Locale.ROOT)}", "")
+    }
+
+    private fun negativeCacheKey(artist: String, songTitle: String, preferredYear: Int, maxYear: Int): String {
+        return "${normalizeText(artist)}|${normalizeText(songTitle)}|$preferredYear|$maxYear"
     }
 
     fun shouldSkip(artist: String, songTitle: String): Boolean {
@@ -1015,6 +1020,10 @@ object AlbumArtDownloader {
         }
 
         val key = cacheKey(artist, songTitle)
+        val negKey = negativeCacheKey(artist, songTitle, preferredYear, maxYear)
+        if (negativeArtCache.contains(negKey)) {
+            return false
+        }
         val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
         val imgFile = File(dir, "$key.jpg")
         if (imgFile.exists() && imgFile.length() > 0) {
@@ -1084,6 +1093,7 @@ object AlbumArtDownloader {
             return true
         }
 
+        negativeArtCache.add(negKey)
         GTRadioLogger.logVerbose("ART") {
             "No match [NONE]: '$artist - $cleanSong' [preferredYear=$preferredYear, maxYear=$maxYear]"
         }
@@ -1101,6 +1111,10 @@ object AlbumArtDownloader {
         if (appContext == null) appContext = context.applicationContext
 
         val key = cacheKey(artist, songTitle)
+        val negKey = negativeCacheKey(artist, songTitle, preferredYear, maxYear)
+        if (negativeArtCache.contains(negKey)) {
+            return
+        }
         val dir = File(context.filesDir, "era_album_art").apply { mkdirs() }
         val imgFile = File(dir, "$key.jpg")
         if (imgFile.exists() && imgFile.length() > 0) return
@@ -1143,6 +1157,7 @@ object AlbumArtDownloader {
             }
         }
         albumNameCache.clear()
+        negativeArtCache.clear()
         synchronized(memoryArtCache) {
             memoryArtCache.evictAll()
         }

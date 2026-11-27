@@ -70,6 +70,7 @@ class RadioList : Fragment() {
         private const val PREF_CAR_EQ = "car_stereo_eq_enabled"
         private const val PREF_WHEEL_ARC_SIDE = "theme_wheel_arc_side"
         private const val RADIO_OFF_COMMIT_KEY = "__RADIO_OFF__"
+        private const val STRIP_OFF_COMMIT_KEY = "__STRIP_OFF__"
     }
 
     private var activeThemePack: DynamicThemePack? = null
@@ -91,8 +92,11 @@ class RadioList : Fragment() {
 
     private var selectedStationTitle: String = ""
     private var centeredMediaId: String = ""
-    private var pendingTappedMediaId: String? = null
-    private var pendingTapTimestampMs: Long = 0L
+    private var pendingStripCommitKey: String? = null
+    private var pendingStripCommitUntilMs: Long = 0L
+    private var stripPendingPostRunnable: Runnable? = null
+    private var stripProgrammaticEndRunnable: Runnable? = null
+    private var stripTouchDownScrollX: Int = 0
     private var isUserScrollingStrip: Boolean = false
     private var isProgrammaticScroll: Boolean = false
 
@@ -175,6 +179,8 @@ class RadioList : Fragment() {
 
         val nowPlayingId = currentMetadata.mediaId ?: ""
         if (!currentPlaybackState.isPlaying || targetId != nowPlayingId) {
+            pendingStripCommitKey = targetId
+            pendingStripCommitUntilMs = SystemClock.elapsedRealtime() + 3500L
             lastAutoScrolledMediaId = targetId
             musicServiceConnection?.transportControls?.playFromMediaId(targetId, null)
         }
@@ -374,8 +380,9 @@ class RadioList : Fragment() {
     private fun recenterInfiniteScrollIfNeeded() {
         if (_binding == null || stripCycleWidthPx <= 0) return
         val scrollView = binding.themeStripIconScroll
+        val sidePad = binding.themeStripIconRow.paddingStart
         val curX = scrollView.scrollX
-        val curCycle = curX / stripCycleWidthPx
+        val curCycle = ((curX - sidePad).coerceAtLeast(0)) / stripCycleWidthPx
         if (curCycle < 2 || curCycle > REPEAT_CYCLES - 3) {
             val deltaCycles = MIDDLE_CYCLE - curCycle
             val newX = (curX + deltaCycles * stripCycleWidthPx).coerceAtLeast(0)
@@ -424,12 +431,27 @@ class RadioList : Fragment() {
         return bestSlot
     }
 
+    private fun cancelStripProgrammaticScroll() {
+        stripPendingPostRunnable?.let { r ->
+            _binding?.themeStripIconScroll?.removeCallbacks(r)
+        }
+        stripPendingPostRunnable = null
+        stripProgrammaticEndRunnable?.let { scrollHandler.removeCallbacks(it) }
+        stripProgrammaticEndRunnable = null
+        isProgrammaticScroll = false
+    }
+
     private fun scrollSlotToCenter(slot: StripSlot, smooth: Boolean = true) {
-        if (_binding == null) return
+        val b = _binding ?: return
         val iv = slot.imageView
-        val scrollView = binding.themeStripIconScroll
-        scrollView.post {
-            if (_binding == null) return@post
+        val scrollView = b.themeStripIconScroll
+        stripPendingPostRunnable?.let { scrollView.removeCallbacks(it) }
+        stripProgrammaticEndRunnable?.let { scrollHandler.removeCallbacks(it) }
+        stripProgrammaticEndRunnable = null
+
+        val postRunnable = Runnable {
+            stripPendingPostRunnable = null
+            if (_binding == null) return@Runnable
             val targetX = ((iv.left + iv.right) / 2 - (scrollView.width / 2)).coerceAtLeast(0)
             isProgrammaticScroll = true
             if (smooth) {
@@ -437,15 +459,25 @@ class RadioList : Fragment() {
             } else {
                 scrollView.scrollTo(targetX, 0)
             }
-            scrollHandler.postDelayed({
+            val endRunnable = Runnable {
+                stripProgrammaticEndRunnable = null
                 isProgrammaticScroll = false
-                recenterInfiniteScrollIfNeeded()
-            }, 240L)
+                if (_binding != null && !isUserScrollingStrip) {
+                    recenterInfiniteScrollIfNeeded()
+                }
+            }
+            stripProgrammaticEndRunnable = endRunnable
+            scrollHandler.postDelayed(endRunnable, 240L)
         }
+        stripPendingPostRunnable = postRunnable
+        scrollView.post(postRunnable)
     }
 
     private fun scrollIconToCenter(mediaId: String, smooth: Boolean = true) {
         if (_binding == null || mediaId.isBlank()) return
+        if (!isUserScrollingStrip) {
+            recenterInfiniteScrollIfNeeded()
+        }
         val slot = findClosestSlotForMediaId(mediaId) ?: return
         scrollSlotToCenter(slot, smooth)
     }
@@ -463,13 +495,14 @@ class RadioList : Fragment() {
         selectedStationTitle = title
 
         if (currentPlaybackState.isPlaying && clickedId == activeMediaId) {
-            pendingTappedMediaId = null
+            pendingStripCommitKey = STRIP_OFF_COMMIT_KEY
+            pendingStripCommitUntilMs = SystemClock.elapsedRealtime() + 3500L
             DynamicThemeManager.stopTuningNoise("user_stop")
             musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
             transportControls?.stop()
         } else {
-            pendingTappedMediaId = clickedId
-            pendingTapTimestampMs = SystemClock.elapsedRealtime()
+            pendingStripCommitKey = clickedId
+            pendingStripCommitUntilMs = SystemClock.elapsedRealtime() + 3500L
             centeredMediaId = clickedId
             lastAutoScrolledMediaId = clickedId
 
@@ -518,10 +551,16 @@ class RadioList : Fragment() {
 
     private fun toggleRadioPower() {
         val transportControls = musicServiceConnection?.transportControls
+        val inStrip = activeThemePack?.let { isStripLayout(it) } == true
         if (currentPlaybackState.isPlaying) {
+            if (inStrip) {
+                pendingStripCommitKey = STRIP_OFF_COMMIT_KEY
+                pendingStripCommitUntilMs = SystemClock.elapsedRealtime() + 3500L
+            }
             DynamicThemeManager.stopTuningNoise("user_power_off")
             musicServiceConnection?.sendCommand("setStreamMuted", Bundle().apply { putBoolean("muted", false) })
             transportControls?.stop()
+            if (inStrip) updateDynamicThemePlaybackUi()
         } else {
             val targetItem = loadedStations.find { it.mediaId == centeredMediaId }
                 ?: loadedStations.find { it.mediaMetadata.title?.toString().equals(selectedStationTitle, ignoreCase = true) }
@@ -530,8 +569,13 @@ class RadioList : Fragment() {
                 centeredMediaId = targetItem.mediaId
                 selectedStationTitle = targetItem.mediaMetadata.title?.toString() ?: ""
                 lastAutoScrolledMediaId = centeredMediaId
+                if (inStrip) {
+                    pendingStripCommitKey = targetItem.mediaId
+                    pendingStripCommitUntilMs = SystemClock.elapsedRealtime() + 3500L
+                }
                 scrollIconToCenter(centeredMediaId, smooth = true)
                 transportControls?.playFromMediaId(targetItem.mediaId, null)
+                if (inStrip) updateDynamicThemePlaybackUi()
             } else {
                 transportControls?.play()
             }
@@ -620,13 +664,14 @@ class RadioList : Fragment() {
         binding.themeStripIconScroll.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    pendingTappedMediaId = null
+                    cancelStripProgrammaticScroll()
+                    stripTouchDownScrollX = binding.themeStripIconScroll.scrollX
                     isUserScrollingStrip = true
                     scrollHandler.removeCallbacks(scrollSnapRunnable)
                     recenterInfiniteScrollIfNeeded()
+                    stripTouchDownScrollX = binding.themeStripIconScroll.scrollX
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    pendingTappedMediaId = null
                     isUserScrollingStrip = true
                     scrollHandler.removeCallbacks(scrollSnapRunnable)
                 }
@@ -644,7 +689,13 @@ class RadioList : Fragment() {
             if (!isStripLayout(pack)) return@addOnScrollChangedListener
 
             if (isUserScrollingStrip) {
+                val dragThresholdPx = (8 * resources.displayMetrics.density).roundToInt()
+                val movedPastThreshold = abs(binding.themeStripIconScroll.scrollX - stripTouchDownScrollX) > dragThresholdPx
                 val centerSlot = findClosestCenteredSlot()
+                val slotChanged = centerSlot != null && centerSlot.mediaId != centeredMediaId
+                if (movedPastThreshold || slotChanged) {
+                    pendingStripCommitKey = null
+                }
                 if (centerSlot != null) {
                     val cId = centerSlot.mediaId
                     val cTitle = centerSlot.item.mediaMetadata.title?.toString() ?: ""
@@ -1360,13 +1411,6 @@ class RadioList : Fragment() {
         val activeGroupId = currentPlaybackState.extras?.getString(TracklistContract.EXTRA_STATION_GROUP_ID)
             ?: sessionExtras?.getString(TracklistContract.EXTRA_STATION_GROUP_ID)
 
-        // Check if pending tapped station should expire or cleared
-        if (pendingTappedMediaId != null) {
-            if (activeMediaId == pendingTappedMediaId || SystemClock.elapsedRealtime() - pendingTapTimestampMs > 4500L) {
-                pendingTappedMediaId = null
-            }
-        }
-
         val isTracklist = playbackMode == "TRACKLIST" || activeMediaId.startsWith("tracklist_")
         val isDifferentGroup = !activeGroupId.isNullOrBlank() && stationGroupId.isNotBlank() && activeGroupId != stationGroupId
 
@@ -1392,28 +1436,59 @@ class RadioList : Fragment() {
         }
 
         if (stripMode) {
-            val statusColor = if (effectivePlaying) pack.activeTextColor else pack.labelColor
+            val stripCommitKey = pendingStripCommitKey
+            if (stripCommitKey != null) {
+                val now = SystemClock.elapsedRealtime()
+                val extraStationId = sessionExtras?.getString(TracklistContract.EXTRA_STATION_ID)
+                    ?.takeIf { it.isNotBlank() }
+                    ?: currentPlaybackState.extras?.getString(TracklistContract.EXTRA_STATION_ID)
+                        ?.takeIf { it.isNotBlank() }
+                val committedOff = stripCommitKey == STRIP_OFF_COMMIT_KEY
+                val serviceCaughtUp = if (committedOff) {
+                    !effectivePlaying
+                } else {
+                    effectivePlaying &&
+                        activeMediaId == stripCommitKey &&
+                        (extraStationId == null || extraStationId == stripCommitKey)
+                }
+                if (serviceCaughtUp || now >= pendingStripCommitUntilMs) {
+                    pendingStripCommitKey = null
+                }
+            }
+
+            val activePendingStrip = pendingStripCommitKey
+            val isPendingOff = activePendingStrip == STRIP_OFF_COMMIT_KEY
+            val stripDisplayPlaying = when {
+                isPendingOff -> false
+                activePendingStrip != null -> true
+                else -> effectivePlaying
+            }
+            val statusColor = if (stripDisplayPlaying) pack.activeTextColor else pack.labelColor
             binding.themeNowPlayingGroup.visibility = View.VISIBLE
             binding.themeNowPlayingLabel.visibility = View.VISIBLE
             binding.themeNowPlayingLabel.setTextColor(statusColor)
 
             binding.themeStripRadioLabel.setTextColor(statusColor)
-            binding.themeStripRadioState.text = if (effectivePlaying) "On" else "Off"
+            binding.themeStripRadioState.text = if (stripDisplayPlaying) "On" else "Off"
             binding.themeStripRadioState.setTextColor(statusColor)
             binding.themeStripVolumeLabel.setTextColor(statusColor)
             binding.themeStripStationLabel.setTextColor(statusColor)
 
-            val selectedItem = if (pendingTappedMediaId != null) {
-                loadedStations.find { it.mediaId == pendingTappedMediaId }
-            } else if (!isUserScrollingStrip && activeBelongsToThisSeries) {
-                loadedStations.find { it.mediaId == activeMediaId }
-            } else {
-                loadedStations.find { it.mediaId == centeredMediaId }
+            val selectedItem = when {
+                isUserScrollingStrip -> loadedStations.find { it.mediaId == centeredMediaId }
+                    ?: loadedStations.firstOrNull()
+                isPendingOff -> loadedStations.find { it.mediaId == centeredMediaId }
+                    ?: loadedStations.firstOrNull()
+                activePendingStrip != null -> loadedStations.find { it.mediaId == activePendingStrip }
+                    ?: loadedStations.find { it.mediaId == centeredMediaId }
+                    ?: loadedStations.firstOrNull()
+                activeBelongsToThisSeries -> loadedStations.find { it.mediaId == activeMediaId }
+                else -> loadedStations.find { it.mediaId == centeredMediaId }
                     ?: loadedStations.firstOrNull()
             }
-            val selectedMediaId = selectedItem?.mediaId ?: ""
+            val selectedMediaId = selectedItem?.mediaId ?: activePendingStrip?.takeUnless { isPendingOff } ?: ""
             val previouslyCenteredId = centeredMediaId
-            if (!isUserScrollingStrip && selectedMediaId.isNotBlank()) {
+            if (!isUserScrollingStrip && !isPendingOff && selectedMediaId.isNotBlank()) {
                 centeredMediaId = selectedMediaId
             }
 
@@ -1428,22 +1503,29 @@ class RadioList : Fragment() {
             binding.themeStripActiveStationName.isSelected = true
             binding.themeStripActiveStationName.setTextColor(statusColor)
 
-            val highlightedId = if (effectivePlaying || pendingTappedMediaId != null) {
-                if (isUserScrollingStrip) centeredMediaId else selectedMediaId
-            } else ""
+            val highlightedId = when {
+                isPendingOff -> ""
+                isUserScrollingStrip -> if (effectivePlaying) centeredMediaId else ""
+                activePendingStrip != null -> selectedMediaId
+                effectivePlaying -> selectedMediaId
+                else -> ""
+            }
             updateStripIconsHighlight(highlightedId)
 
-            if (!isUserScrollingStrip && selectedMediaId.isNotBlank() &&
+            if (!isUserScrollingStrip && activePendingStrip == null && selectedMediaId.isNotBlank() &&
                 selectedMediaId != lastAutoScrolledMediaId &&
                 selectedMediaId != previouslyCenteredId) {
                 lastAutoScrolledMediaId = selectedMediaId
                 scrollIconToCenter(selectedMediaId, smooth = true)
             }
 
-            val isSongOrShow = effectivePlaying && !DynamicThemeManager.isPlayingTuningNoise() &&
+            val showLivePlayingMeta = effectivePlaying &&
+                !isPendingOff &&
+                (activePendingStrip == null || activePendingStrip == activeMediaId)
+            val isSongOrShow = showLivePlayingMeta && !DynamicThemeManager.isPlayingTuningNoise() &&
                 currentMetadata.isSong
 
-            if (effectivePlaying) {
+            if (showLivePlayingMeta) {
                 binding.themeSongTitle.setTextColor(pack.activeTextColor)
                 binding.themeSongArtist.setTextColor(pack.activeTextColor)
                 binding.themeSongAlbum.setTextColor(pack.activeTextColor)
@@ -1488,7 +1570,7 @@ class RadioList : Fragment() {
                 } else {
                     binding.themeSongArt.setImageResource(R.drawable.outline_radio_24)
                 }
-                binding.themeSongArt.alpha = 0.45f
+                binding.themeSongArt.alpha = if (activePendingStrip != null && !isPendingOff) 1.0f else 0.45f
                 binding.themeSongArt.visibility = if (pack.hideArtOnNonSong) View.INVISIBLE else View.VISIBLE
                 binding.themeSongTitle.visibility = View.INVISIBLE
                 binding.themeSongTitle.text = ""
@@ -1590,6 +1672,10 @@ class RadioList : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        cancelStripProgrammaticScroll()
+        if (stationGroupId.isNotBlank()) {
+            musicServiceConnection?.unsubscribe(stationGroupId, subscriptionCallback)
+        }
         bgHandler.removeCallbacksAndMessages(null)
         scrollHandler.removeCallbacksAndMessages(null)
         context?.applicationContext?.let { appCtx ->

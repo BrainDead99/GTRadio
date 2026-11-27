@@ -24,6 +24,10 @@ import com.sc.gtradio.databinding.FragmentStationgroupitemBinding
 import com.sc.gtradio.media.MusicServiceConnection
 import com.sc.gtradio.media.SubscriptionCallback
 import com.sc.gtradio.utils.InjectorUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class GroupList : Fragment() {
     private var _binding: FragmentGrouplistBinding? = null
@@ -31,33 +35,32 @@ class GroupList : Fragment() {
 
     private val subscriptionCallback = object : SubscriptionCallback() {
         override fun onChildrenLoaded(parentId: String, children: List<MediaItem>) {
+            if (_binding == null || !isAdded) return
             GTRadioLogger.log("GroupList.onChildrenLoaded: parentId=$parentId, count=${children.size}")
-            if (_binding != null) {
-                binding.groupLoadingProgress.visibility = View.GONE
-                val hasValidFolder = hasValidLibraryPermission()
-                if (children.isEmpty()) {
-                    binding.stationList.visibility = View.GONE
-                    if (hasValidFolder) {
-                        binding.textviewNogroups.visibility = View.VISIBLE
-                        binding.sadFaceIcon.visibility = View.VISIBLE
-                        binding.buttonSelect.visibility = View.GONE
-                        binding.textviewNofolder.visibility = View.GONE
-                        binding.textviewDisclaimer.visibility = View.GONE
-                    } else {
-                        binding.textviewNogroups.visibility = View.INVISIBLE
-                        binding.sadFaceIcon.visibility = View.INVISIBLE
-                        binding.buttonSelect.visibility = View.VISIBLE
-                        binding.textviewNofolder.visibility = View.VISIBLE
-                        binding.textviewDisclaimer.visibility = View.VISIBLE
-                    }
-                } else {
-                    binding.stationList.visibility = View.VISIBLE
+            binding.groupLoadingProgress.visibility = View.GONE
+            val hasValidFolder = hasValidLibraryPermission()
+            if (children.isEmpty()) {
+                binding.stationList.visibility = View.GONE
+                if (hasValidFolder) {
+                    binding.textviewNogroups.visibility = View.VISIBLE
+                    binding.sadFaceIcon.visibility = View.VISIBLE
                     binding.buttonSelect.visibility = View.GONE
                     binding.textviewNofolder.visibility = View.GONE
                     binding.textviewDisclaimer.visibility = View.GONE
+                } else {
                     binding.textviewNogroups.visibility = View.INVISIBLE
                     binding.sadFaceIcon.visibility = View.INVISIBLE
+                    binding.buttonSelect.visibility = View.VISIBLE
+                    binding.textviewNofolder.visibility = View.VISIBLE
+                    binding.textviewDisclaimer.visibility = View.VISIBLE
                 }
+            } else {
+                binding.stationList.visibility = View.VISIBLE
+                binding.buttonSelect.visibility = View.GONE
+                binding.textviewNofolder.visibility = View.GONE
+                binding.textviewDisclaimer.visibility = View.GONE
+                binding.textviewNogroups.visibility = View.INVISIBLE
+                binding.sadFaceIcon.visibility = View.INVISIBLE
             }
             listAdapter.submitList(children)
         }
@@ -141,9 +144,7 @@ class GroupList : Fragment() {
         sharedPref.registerOnSharedPreferenceChangeListener(sharedPrefListener)
 
         if (musicServiceConnection == null) {
-            musicServiceConnection = InjectorUtils.provideMusicServiceConnection(requireContext()).also {
-                it.subscribe("root", subscriptionCallback)
-            }
+            musicServiceConnection = InjectorUtils.provideMusicServiceConnection(requireContext())
         }
 
         _binding = FragmentGrouplistBinding.inflate(inflater, container, false)
@@ -161,10 +162,20 @@ class GroupList : Fragment() {
         updateLibrarySelectedComponents()
     }
 
+    override fun onStart() {
+        super.onStart()
+        musicServiceConnection?.unsubscribe("root", subscriptionCallback)
+        musicServiceConnection?.subscribe("root", subscriptionCallback)
+    }
+
     override fun onResume() {
         super.onResume()
         updateLibrarySelectedComponents()
-        reloadRootSubscription()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        musicServiceConnection?.unsubscribe("root", subscriptionCallback)
     }
 
     private fun updateLibrarySelectedComponents() {
@@ -200,6 +211,7 @@ class GroupList : Fragment() {
 
     override fun onDestroyView() {
         super.onDestroyView()
+        musicServiceConnection?.unsubscribe("root", subscriptionCallback)
         val sharedPref = PreferenceManager.getDefaultSharedPreferences(requireActivity().applicationContext)
         sharedPref.unregisterOnSharedPreferenceChangeListener(sharedPrefListener)
         _binding = null
@@ -222,11 +234,25 @@ class StationGroupMediaItemListAdapter(
             holder.item = mediaItem
             holder.titleView.text = mediaItem.mediaMetadata.title
             val artUri = mediaItem.mediaMetadata.artworkUri
-            val bmp = if (artUri != null) DynamicThemeManager.loadBitmap(holder.itemView.context, artUri, 512) else null
-            if (bmp != null) {
-                holder.groupArt.setImageBitmap(bmp)
+            holder.groupArt.tag = artUri
+            val cachedBmp = artUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) }
+            if (cachedBmp != null) {
+                holder.groupArt.setImageBitmap(cachedBmp)
             } else {
                 holder.groupArt.setImageResource(R.drawable.outline_radio_24)
+                if (artUri != null) {
+                    val ctx = holder.itemView.context.applicationContext
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val loaded = DynamicThemeManager.loadBitmap(ctx, artUri, 512)
+                        if (loaded != null) {
+                            withContext(Dispatchers.Main.immediate) {
+                                if (holder.bindingAdapterPosition != RecyclerView.NO_POSITION && holder.groupArt.tag == artUri) {
+                                    holder.groupArt.setImageBitmap(loaded)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

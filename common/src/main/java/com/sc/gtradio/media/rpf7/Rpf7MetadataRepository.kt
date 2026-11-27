@@ -118,6 +118,12 @@ object Rpf7MetadataRepository {
         }
     }
 
+    fun isLoaded(): Boolean = loaded && trackMetaMap.isNotEmpty()
+
+    fun getTrackByTrackIdIfLoaded(trackId: Int): Rpf7TrackMeta? {
+        return trackIdMetaMapInternal[trackId]
+    }
+
     fun getTrackByTrackId(trackId: Int, context: Context? = null): Rpf7TrackMeta? {
         ensureLoaded(context)
         return trackIdMetaMapInternal[trackId]

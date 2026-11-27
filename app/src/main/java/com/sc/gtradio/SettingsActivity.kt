@@ -215,7 +215,6 @@ class SettingsActivity : AppCompatActivity() {
                     val now = System.currentTimeMillis()
                     sharedPref.edit()
                         .putLong("game_keys_updated", now)
-                        .putLong("gtav_keys_updated", now)
                         .apply()
                 }
             }

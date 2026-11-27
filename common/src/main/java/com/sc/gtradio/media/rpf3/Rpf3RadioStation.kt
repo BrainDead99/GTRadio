@@ -71,11 +71,25 @@ private val RPF3_INTRO_ALIASES = mapOf(
 
     private val stationTitle: String = stationName
     private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: "GTA IV").toString()
-    private val stationLogo: Bitmap? by lazy { mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) ?: DynamicThemeManager.loadBitmap(context, it, 512) } }
+    @Volatile private var cachedStationLogo: Bitmap? = null
     private val mainHandler = Handler(Looper.getMainLooper())
     private val rng = Random()
 
-    private var _currentMetadata: MediaMetadata = buildStationMetadata(stationTitle, "", stationLogo)
+    private fun getCachedStationLogoOnly(): Bitmap? {
+        cachedStationLogo?.let { return it }
+        val bmp = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) }
+        if (bmp != null) cachedStationLogo = bmp
+        return bmp
+    }
+
+    private fun ensureStationLogoLoadedOnIo(): Bitmap? {
+        getCachedStationLogoOnly()?.let { return it }
+        val bmp = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
+        if (bmp != null) cachedStationLogo = bmp
+        return bmp
+    }
+
+    private var _currentMetadata: MediaMetadata = buildStationMetadata(stationTitle, "", getCachedStationLogoOnly())
     override val metadata: MediaMetadata
         get() = _currentMetadata
 
@@ -146,6 +160,8 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private var seamlessPrepareJob: Job? = null
     private var activeCleanJob: Job? = null
     private var activePollerJob: Job? = null
+    private var activeMixMarkerLoadJob: Job? = null
+    private var activeMetadataJob: Job? = null
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
     private val playGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
@@ -308,6 +324,8 @@ private val RPF3_INTRO_ALIASES = mapOf(
     private fun ensureStationIndexed() {
         if (initialized) return
         initialized = true
+        Rpf3MetadataRepository.ensureLoaded(context)
+        ensureStationLogoLoadedOnIo()
 
         val keyLower = stationKey.lowercase(Locale.ROOT)
 
@@ -595,7 +613,7 @@ private val RPF3_INTRO_ALIASES = mapOf(
     }
 
     private fun setStationOnlyMetadata() {
-        notifyMetadataChanged(buildStationMetadata(stationTitle, "", stationLogo))
+        notifyMetadataChanged(buildStationMetadata(stationTitle, "", getCachedStationLogoOnly()))
     }
 
     private fun applySongOrShowMetadata(item: Rpf3SongItem) {
@@ -609,49 +627,64 @@ private val RPF3_INTRO_ALIASES = mapOf(
             return
         }
 
-        val meta = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)
-        val displayTitle = meta?.title ?: item.trackName.replace('_', ' ')
-        val displayArtist = meta?.artist ?: stationTitle
-        val isTalk = isTalkRadio || (meta?.isTalkShow == true)
+        val expectedGen = playGeneration.get()
+        val albumArtEnabled = isAlbumArtEnabled()
+        activeMetadataJob?.cancel()
+        activeMetadataJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            if (!_playing || playGeneration.get() != expectedGen || lastSegment != RadioSegmentType.Song || currentSongItem != item) {
+                return@launch
+            }
+            val logo = ensureStationLogoLoadedOnIo()
+            val meta = Rpf3MetadataRepository.getTrackMeta(context, item.trackName, stationTitle)
+            val displayTitle = meta?.title ?: item.trackName.replace('_', ' ')
+            val displayArtist = meta?.artist ?: stationTitle
+            val isTalk = isTalkRadio || (meta?.isTalkShow == true)
 
-        if (isTalk) {
-            val subtitle = if (displayArtist.isNotBlank() && displayArtist != stationTitle) "$displayArtist • $stationTitle" else stationTitle
-            val m = buildStationMetadata(
-                trackTitle = displayTitle,
-                trackSubtitle = subtitle,
-                art = stationLogo,
-                isSongOrShow = true,
-                cleanArtist = displayArtist,
-                cleanAlbum = ""
-            )
-            notifyMetadataChanged(m)
-            return
-        }
+            if (isTalk) {
+                val subtitle = if (displayArtist.isNotBlank() && displayArtist != stationTitle) "$displayArtist • $stationTitle" else stationTitle
+                val m = buildStationMetadata(
+                    trackTitle = displayTitle,
+                    trackSubtitle = subtitle,
+                    art = logo,
+                    isSongOrShow = true,
+                    cleanArtist = displayArtist,
+                    cleanAlbum = ""
+                )
+                withContext(Dispatchers.Main.immediate) {
+                    if (_playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
+                        notifyMetadataChanged(m)
+                    }
+                }
+                return@launch
+            }
 
-        val maxYear = 2009
-        var art: Bitmap? = stationLogo
-        if (isAlbumArtEnabled()) {
-            val cached = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
-            if (cached != null) {
-                art = cached
-            } else {
-                val expectedGen = playGeneration.get()
+            val maxYear = 2009
+            val cached = if (albumArtEnabled) {
+                Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
+            } else null
+            val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+            val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
+            val built = buildStationMetadata(displayTitle, subtitle, cached ?: logo, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum)
+            withContext(Dispatchers.Main.immediate) {
+                if (_playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
+                    notifyMetadataChanged(built)
+                }
+            }
+
+            if (albumArtEnabled && cached == null && _playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
                 Gen2MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
+                    val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: logo
+                    val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+                    val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
+                    val updated = buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb)
                     mainHandler.post {
                         if (_playing && playGeneration.get() == expectedGen && lastSegment == RadioSegmentType.Song && currentSongItem == item) {
-                            val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
-                            val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
-                            val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
-                            notifyMetadataChanged(buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb))
+                            notifyMetadataChanged(updated)
                         }
                     }
                 }
             }
         }
-
-        val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
-        val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
-        notifyMetadataChanged(buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum))
     }
 
     private var isStationActive = false
@@ -1590,6 +1623,10 @@ private val RPF3_INTRO_ALIASES = mapOf(
         activeCleanJob = null
         activeOverlayJob?.cancel()
         activeOverlayJob = null
+        activeMixMarkerLoadJob?.cancel()
+        activeMixMarkerLoadJob = null
+        activeMetadataJob?.cancel()
+        activeMetadataJob = null
         plannedOverlayCue = null
         plannedPreRollCue = null
         player.djVoiceOverlayPlayer?.stopOverlay()
@@ -2349,9 +2386,11 @@ private val RPF3_INTRO_ALIASES = mapOf(
         lookAheadJob?.cancel()
         isPrefetching = false
         val songItem = currentSongItem
-        val markers = songItem?.let { it.archive.readDjMarkers(it.trackName) }
 
         lookAheadJob = stationScope.launch {
+            val markers = withContext(StationDispatchers.ioDispatcher) {
+                songItem?.let { it.archive.readDjMarkers(it.trackName) }
+            }
             var outroOverlapHandled = false
             while (isActive && _playing && playGeneration.get() == expectedGen) {
                 delay(250L)
@@ -2855,12 +2894,20 @@ private val RPF3_INTRO_ALIASES = mapOf(
         if (exo.playbackState != Player.STATE_READY) return
         val item = currentSongItem ?: return
         if (activeMixMarkers.isEmpty()) {
-            val markers = item.archive.readTrackMarkers(item.trackName)
-            if (markers.isNotEmpty()) {
-                activeMixMarkers = markers
+            if (activeMixMarkerLoadJob?.isActive != true) {
+                val expectedGen = playGeneration.get()
+                activeMixMarkerLoadJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+                    val markers = item.archive.readTrackMarkers(item.trackName)
+                    withContext(Dispatchers.Main.immediate) {
+                        if (_playing && playGeneration.get() == expectedGen && currentSongItem == item && markers.isNotEmpty()) {
+                            activeMixMarkers = markers
+                            updateMixTrackMetadata()
+                        }
+                    }
+                }
             }
+            return
         }
-        if (activeMixMarkers.isEmpty()) return
         if (!isMetadataEnabled()) {
             setStationOnlyMetadata()
             return
@@ -2883,42 +2930,66 @@ private val RPF3_INTRO_ALIASES = mapOf(
         }
 
         if (resolvedTrackId == lastDisplayedMixTrackId) return
-        lastDisplayedMixTrackId = resolvedTrackId
 
-        GTRadioLogger.logVerbose("TRACKID") {
-            "Rpf3RadioStation[$stationTitle]: TRACKID transition -> $resolvedTrackId at ${currentMs}ms"
-        }
-
-        val meta = if (resolvedTrackId > 0) Rpf3MetadataRepository.getTrackByTrackId(resolvedTrackId) else null
+        val meta = if (resolvedTrackId > 0) Rpf3MetadataRepository.getTrackByTrackIdIfLoaded(resolvedTrackId) else null
         if (meta != null) {
+            lastDisplayedMixTrackId = resolvedTrackId
+            GTRadioLogger.logVerbose("TRACKID") {
+                "Rpf3RadioStation[$stationTitle]: TRACKID transition -> $resolvedTrackId at ${currentMs}ms"
+            }
             val displayTitle = meta.title
             val displayArtist = meta.artist
             val maxYear = 2009
-            var art: Bitmap? = stationLogo
-            if (isAlbumArtEnabled()) {
-                val cached = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
-                if (cached != null) {
-                    art = cached
-                } else {
-                    val expectedGen = playGeneration.get()
-                    val currentTid = resolvedTrackId
+            val expectedGen = playGeneration.get()
+            val currentTid = resolvedTrackId
+            val albumArtEnabled = isAlbumArtEnabled()
+            activeMetadataJob?.cancel()
+            activeMetadataJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+                val logo = ensureStationLogoLoadedOnIo()
+                val cachedArt = if (albumArtEnabled) {
+                    Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle)
+                } else null
+                val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+                val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
+                val builtMeta = buildStationMetadata(displayTitle, subtitle, cachedArt ?: logo, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum)
+                withContext(Dispatchers.Main.immediate) {
+                    if (_playing && playGeneration.get() == expectedGen && lastDisplayedMixTrackId == currentTid) {
+                        notifyMetadataChanged(builtMeta)
+                    }
+                }
+                if (albumArtEnabled && cachedArt == null && _playing && playGeneration.get() == expectedGen && lastDisplayedMixTrackId == currentTid) {
                     Gen2MetadataRepository.fetchEraAccurateArtAsync(context, displayArtist, displayTitle, maxYear) {
+                        val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: logo
+                        val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
+                        val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
+                        val updatedMeta = buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb)
                         mainHandler.post {
                             if (_playing && playGeneration.get() == expectedGen && lastDisplayedMixTrackId == currentTid) {
-                                val newArt = Gen2MetadataRepository.getCachedAlbumArt(context, displayArtist, displayTitle) ?: stationLogo
-                                val alb = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
-                                val sub = if (alb.isNotBlank()) "$displayArtist • $alb" else "$displayArtist • $stationTitle"
-                                notifyMetadataChanged(buildStationMetadata(displayTitle, sub, newArt, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = alb))
+                                notifyMetadataChanged(updatedMeta)
                             }
                         }
                     }
                 }
             }
-            val eraAlbum = Gen2MetadataRepository.getCachedAlbumName(context, displayArtist, displayTitle) ?: ""
-            val subtitle = if (eraAlbum.isNotBlank()) "$displayArtist • $eraAlbum" else "$displayArtist • $stationTitle"
-            notifyMetadataChanged(buildStationMetadata(displayTitle, subtitle, art, isSongOrShow = true, cleanArtist = displayArtist, cleanAlbum = eraAlbum))
+        } else if (resolvedTrackId > 0 && !Rpf3MetadataRepository.isLoaded()) {
+            val expectedGen = playGeneration.get()
+            activeMetadataJob?.cancel()
+            activeMetadataJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+                Rpf3MetadataRepository.ensureLoaded(context)
+                withContext(Dispatchers.Main.immediate) {
+                    if (_playing && playGeneration.get() == expectedGen) {
+                        updateMixTrackMetadata()
+                    }
+                }
+            }
         } else {
-            setStationOnlyMetadata()
+            if (lastDisplayedMixTrackId != resolvedTrackId) {
+                lastDisplayedMixTrackId = resolvedTrackId
+                GTRadioLogger.logVerbose("TRACKID") {
+                    "Rpf3RadioStation[$stationTitle]: TRACKID transition -> $resolvedTrackId at ${currentMs}ms"
+                }
+                setStationOnlyMetadata()
+            }
         }
     }
 

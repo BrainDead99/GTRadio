@@ -442,8 +442,16 @@ class Rpf7Archive(
         return prefixed
     }
 
-    @Synchronized
+    private val indexLock = Any()
+
     fun ensureIndexed() {
+        if (indexed) return
+        synchronized(indexLock) {
+            ensureIndexedLocked()
+        }
+    }
+
+    private fun ensureIndexedLocked() {
         if (indexed) return
 
         val keys = Rpf7KeyManager.getKeys(context)
@@ -1173,6 +1181,9 @@ class Rpf7Archive(
             }
         }
         trackMarkersCache[cacheKey] = deduped
+        if (!seekTableCache.containsKey(cacheKey)) {
+            seekTableCache[cacheKey] = LongArray(0)
+        }
         return deduped
     }
 
@@ -1201,6 +1212,10 @@ class Rpf7Archive(
         val cleanKey = trackKey.trim()
         val entry = getEntry(cleanKey)
         if (entry != null && entry.isMultiChannel) {
+            val totalSamples = entry.totalSamples.toLong() and 0xFFFFFFFFL
+            if (entry.sampleRate > 0 && totalSamples > 0L) {
+                return (totalSamples * 1000L) / entry.sampleRate.toLong()
+            }
             return getOrBuildStreamIndex(entry.name)?.durationMs
         }
         val sub = bankSubTracks[cleanKey]

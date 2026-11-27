@@ -218,6 +218,13 @@ object Rpf3MetadataRepository {
         return trackMetaMap[cleanKey]
     }
 
+    fun isLoaded(): Boolean = loaded && trackMetaMap.isNotEmpty()
+
+    fun getTrackByTrackIdIfLoaded(trackId: Int): Rpf3TrackMeta? {
+        if (trackId in setOf(0, 1, 153)) return null
+        return trackIdMetaMapInternal[trackId]
+    }
+
     fun getTrackByTrackId(trackId: Int, context: Context? = null): Rpf3TrackMeta? {
         if (trackId in setOf(0, 1, 153)) return null
         ensureLoaded(context)
