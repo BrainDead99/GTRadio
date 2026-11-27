@@ -29,7 +29,7 @@ data class AlbumHint(
 object AlbumHintRepository {
 
     private val STOP_WORDS_KEY = setOf("the", "a", "an", "in", "of", "on", "at", "to")
-    private val KNOWN_HINT_FILES = listOf("album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
+    private val KNOWN_HINT_FILES = listOf("album_hints_gen1.tsv", "album_hints_gen2.tsv", "album_hints_rpf3.tsv", "album_hints_rpf7.tsv")
 
     @Volatile
     private var loaded = false

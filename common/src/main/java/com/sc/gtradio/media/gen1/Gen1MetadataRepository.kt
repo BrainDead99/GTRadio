@@ -8,6 +8,7 @@ import android.os.Looper
 import android.util.LruCache
 import com.sc.gtradio.common.GTRadioLogger
 import com.sc.gtradio.media.artwork.AlbumArtDownloader
+import com.sc.gtradio.media.core.RadioSegmentType
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -28,12 +29,45 @@ data class Gen1StationInfo(
     val maxYear: Int = 2001
 )
 
+enum class Gen1CueType {
+    SONG,
+    TALK,
+    AD,
+    DJ,
+    ID;
+
+    fun toSegmentType(): RadioSegmentType = when (this) {
+        SONG -> RadioSegmentType.Song
+        TALK -> RadioSegmentType.Song
+        AD -> RadioSegmentType.Commercial
+        DJ -> RadioSegmentType.DJChatter
+        ID -> RadioSegmentType.Announcer
+    }
+
+    companion object {
+        fun fromToken(token: String?): Gen1CueType {
+            return when (token?.trim()?.uppercase()) {
+                "TALK" -> TALK
+                "AD", "ADVERT", "COMMERCIAL" -> AD
+                "DJ", "DJ_CHATTER" -> DJ
+                "ID", "STATION_ID", "ANNOUNCER" -> ID
+                else -> SONG
+            }
+        }
+    }
+}
+
 data class Gen1TrackCue(
     val startSec: Int,
     val endSec: Int,
     val title: String,
-    val artist: String
+    val artist: String,
+    val cueType: Gen1CueType = Gen1CueType.SONG,
+    val album: String = "",
+    val year: Int = 0
 )
+
+typealias Gen1Cue = Gen1TrackCue
 
 object Gen1MetadataRepository {
 
@@ -100,6 +134,8 @@ object Gen1MetadataRepository {
     private val lcsCuesByFile = HashMap<String, ArrayList<Gen1TrackCue>>()
     private val vcsCuesByFile = HashMap<String, ArrayList<Gen1TrackCue>>()
 
+    fun isLoaded(): Boolean = loaded && (gta3CuesByFile.isNotEmpty() || viceCityCuesByFile.isNotEmpty())
+
     @Synchronized
     fun ensureLoaded(context: Context? = AlbumArtDownloader.appContext) {
         if (loaded && (gta3CuesByFile.isNotEmpty() || viceCityCuesByFile.isNotEmpty())) return
@@ -120,7 +156,10 @@ object Gen1MetadataRepository {
                             val eSec = parts[3].toIntOrNull() ?: continue
                             val title = parts[4]
                             val artist = parts[5]
-                            val cue = Gen1TrackCue(sSec, eSec, title, artist)
+                            val cueType = Gen1CueType.fromToken(parts.getOrNull(6))
+                            val album = parts.getOrNull(7)?.trim().orEmpty()
+                            val year = parts.getOrNull(8)?.trim()?.toIntOrNull() ?: 0
+                            val cue = Gen1TrackCue(sSec, eSec, title, artist, cueType, album, year)
                             when (code) {
                                 1 -> viceCityCuesByFile.getOrPut(fname) { ArrayList() }.add(cue)
                                 2 -> gta3CuesByFile.getOrPut(fname) { ArrayList() }.add(cue)
@@ -166,6 +205,10 @@ object Gen1MetadataRepository {
             artCache.evictAll()
             failedKeys.clear()
         }
+    }
+
+    fun getCachedAlbumName(context: Context, artist: String, title: String): String? {
+        return AlbumArtDownloader.getCachedAlbumName(context, artist, title)
     }
 
     fun getCachedAlbumArt(artist: String, title: String): Bitmap? {

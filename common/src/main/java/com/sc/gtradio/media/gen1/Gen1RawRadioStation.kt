@@ -6,6 +6,7 @@ import com.sc.gtradio.media.GTRadioPlayer
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.MediaItem
@@ -18,6 +19,8 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.preference.PreferenceManager
 import com.sc.gtradio.common.DynamicThemeManager
 import com.sc.gtradio.common.GTRadioLogger
+import com.sc.gtradio.media.artwork.AlbumArtDownloader
+import com.sc.gtradio.media.artwork.AlbumHintRepository
 import kotlinx.coroutines.*
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -46,32 +49,51 @@ class Gen1RawRadioStation(
 
     private val stationTitle: String = stationName
     private val groupTitle: String = (mediaItem.mediaMetadata.subtitle ?: if (isXorAdf) "GTA Vice City" else "GTA III").toString()
-    private val stationLogo: Bitmap? by lazy {
-        mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) ?: DynamicThemeManager.loadBitmap(context, it, 512) }
-    }
+    @Volatile
+    private var cachedStationLogo: Bitmap? = null
     private val gameCode: Int = if (isXorAdf) 1 else 2
     private val rng = Random()
-
-    init {
-        Gen1MetadataRepository.ensureLoaded(context)
-    }
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var activePrepareJob: Job? = null
     private var seamlessPrepareJob: Job? = null
     private var activePollerJob: Job? = null
+    private var activeMetadataJob: Job? = null
     private val playGeneration = AtomicInteger(0)
 
     override val supportsSeamlessPrepare: Boolean get() = true
 
     private var _playing = false
     private var activeCueKey: String = "__INIT__"
-    private var _currentMetadata: MediaMetadata = buildMetadata(null, null)
+    private var currentSegmentType: RadioSegmentType = RadioSegmentType.None
+    private var _currentMetadata: MediaMetadata = buildStationOnlyMetadata(getCachedStationLogoOnly(), RadioSegmentType.None)
     override val metadata: MediaMetadata
         get() = _currentMetadata
 
     private var cachedDurationMs: Long = -1L
+
+    init {
+        stationScope.launch(StationDispatchers.ioDispatcher) {
+            Gen1MetadataRepository.ensureLoaded(context)
+            AlbumHintRepository.ensureLoaded(context)
+            ensureStationLogoLoadedOnIo()
+        }
+    }
+
+    private fun getCachedStationLogoOnly(): Bitmap? {
+        cachedStationLogo?.let { return it }
+        val bmp = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.getCachedBitmap(it, 512) }
+        if (bmp != null) cachedStationLogo = bmp
+        return bmp
+    }
+
+    private fun ensureStationLogoLoadedOnIo(): Bitmap? {
+        getCachedStationLogoOnly()?.let { return it }
+        val bmp = mediaItem.mediaMetadata.artworkUri?.let { DynamicThemeManager.loadBitmap(context, it, 512) }
+        if (bmp != null) cachedStationLogo = bmp
+        return bmp
+    }
 
     private fun isMetadataEnabled(): Boolean {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
@@ -80,52 +102,214 @@ class Gen1RawRadioStation(
 
     private fun isAlbumArtEnabled(): Boolean {
         val prefs = PreferenceManager.getDefaultSharedPreferences(context)
-        return prefs.getBoolean("fetch_album_art_enabled", true)
+        return if (prefs.contains("download_album_art_enabled")) {
+            prefs.getBoolean("download_album_art_enabled", true)
+        } else {
+            prefs.getBoolean("fetch_album_art_enabled", true)
+        }
+    }
+
+    private fun notifyMetadataChanged(meta: MediaMetadata) {
+        _currentMetadata = meta
+        onMetadataChanged?.invoke(meta)
     }
 
     private fun updateDynamicMetadataFromPosition() {
         if (!isMetadataEnabled()) {
             if (activeCueKey != "__DISABLED__") {
                 activeCueKey = "__DISABLED__"
-                _currentMetadata = buildMetadata(null, null)
-                onMetadataChanged?.invoke(_currentMetadata)
+                currentSegmentType = RadioSegmentType.None
+                val expectedGen = playGeneration.get()
+                activeMetadataJob?.cancel()
+                activeMetadataJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+                    val logo = ensureStationLogoLoadedOnIo()
+                    val disabledMeta = buildStationOnlyMetadata(logo, RadioSegmentType.None)
+                    withContext(Dispatchers.Main.immediate) {
+                        if (playGeneration.get() == expectedGen && activeCueKey == "__DISABLED__") {
+                            notifyMetadataChanged(disabledMeta)
+                        }
+                    }
+                }
             }
             return
         }
 
-        val durMs = estimateDurationMs().coerceAtLeast(1000L)
         val posMs = player.getCurrentTrackPosition()
+        if (!Gen1MetadataRepository.isLoaded() || cachedDurationMs <= 0L) {
+            val expectedGen = playGeneration.get()
+            stationScope.launch(StationDispatchers.ioDispatcher) {
+                Gen1MetadataRepository.ensureLoaded(context)
+                estimateDurationMs()
+                withContext(Dispatchers.Main.immediate) {
+                    if (_playing && playGeneration.get() == expectedGen) {
+                        updateDynamicMetadataFromPosition()
+                    }
+                }
+            }
+            return
+        }
+
+        val durMs = cachedDurationMs.coerceAtLeast(1000L)
         val effectiveMs = if (posMs >= 0L) (posMs % durMs) else (System.currentTimeMillis() % durMs)
         val posSec = (effectiveMs / 1000L).toInt()
 
         val cue = Gen1MetadataRepository.findCueAt(fileName, gameCode, posSec)
-        val newKey = if (cue != null) "${cue.title}|${cue.artist}" else "__HOST__"
+        val newKey = if (cue != null) {
+            "${cue.cueType.name}|${cue.startSec}|${cue.endSec}|${cue.title}|${cue.artist}"
+        } else {
+            "__HOST__"
+        }
 
         if (newKey != activeCueKey) {
             activeCueKey = newKey
+            val expectedGen = playGeneration.get()
+            val expectedKey = newKey
+            val albumArtEnabled = isAlbumArtEnabled()
             GTRadioLogger.logVerbose("GEN1") {
                 if (cue != null) {
-                    "Cue change [pos=${effectiveMs}ms, window=${cue.startSec}s..${cue.endSec}s]: '${cue.title}' by '${cue.artist}'"
+                    "Cue change [type=${cue.cueType}, pos=${effectiveMs}ms, window=${cue.startSec}s..${cue.endSec}s]: '${cue.title}' by '${cue.artist}'"
                 } else {
                     "Cue change [pos=${effectiveMs}ms]: Station Host / DJ chatter window"
                 }
             }
-            val cachedArt = if (cue != null && isAlbumArtEnabled()) {
-                Gen1MetadataRepository.getCachedAlbumArt(cue.artist, cue.title)
-            } else null
 
-            _currentMetadata = buildMetadata(cue, cachedArt)
-            onMetadataChanged?.invoke(_currentMetadata)
+            activeMetadataJob?.cancel()
+            activeMetadataJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+                if (!_playing || playGeneration.get() != expectedGen || activeCueKey != expectedKey) return@launch
+                val logo = ensureStationLogoLoadedOnIo()
 
-            if (cue != null && cachedArt == null && isAlbumArtEnabled()) {
-                val maxYear = stationInfo?.maxYear ?: if (isXorAdf) 1986 else 2001
-                val expectedKey = newKey
-                Gen1MetadataRepository.fetchAlbumArtAsync(cue.artist, cue.title, maxYear) { fetchedBmp ->
-                    if (_playing && activeCueKey == expectedKey && fetchedBmp != null) {
-                        stationScope.launch(Dispatchers.Main.immediate) {
-                            if (_playing && activeCueKey == expectedKey) {
-                                _currentMetadata = buildMetadata(cue, fetchedBmp)
-                                onMetadataChanged?.invoke(_currentMetadata)
+                if (cue == null) {
+                    val segType = if (!isXorAdf && stationInfo != null && stationInfo.hostName.isNotBlank()) {
+                        RadioSegmentType.DJChatter
+                    } else {
+                        RadioSegmentType.None
+                    }
+                    val built = if (segType == RadioSegmentType.DJChatter && stationInfo != null) {
+                        buildSegmentMetadata(
+                            title = stationTitle,
+                            subtitle = "Hosted by ${stationInfo.hostName} • ${stationInfo.genre}",
+                            artist = "DJ: ${stationInfo.hostName}",
+                            album = stationInfo.genre,
+                            art = logo,
+                            isSong = true,
+                            segmentType = segType,
+                            cueType = null
+                        )
+                    } else {
+                        buildStationOnlyMetadata(logo, segType)
+                    }
+                    withContext(Dispatchers.Main.immediate) {
+                        if (_playing && playGeneration.get() == expectedGen && activeCueKey == expectedKey) {
+                            currentSegmentType = segType
+                            notifyMetadataChanged(built)
+                        }
+                    }
+                    return@launch
+                }
+
+                when (cue.cueType) {
+                    Gen1CueType.SONG -> {
+                        val segType = RadioSegmentType.Song
+                        AlbumHintRepository.ensureLoaded(context)
+                        val hint = AlbumHintRepository.findHint(context, cue.artist, cue.title)
+                        val officialAlbum = hint?.officialAlbum?.ifBlank { null }
+                            ?: Gen1MetadataRepository.getCachedAlbumName(context, cue.artist, cue.title)?.ifBlank { null }
+                            ?: cue.album
+                        val noArt = hint?.status == "NO_ART"
+                        val cachedArt = if (albumArtEnabled && !noArt) {
+                            Gen1MetadataRepository.getCachedAlbumArt(cue.artist, cue.title)
+                        } else null
+                        val subtitle = if (officialAlbum.isNotBlank()) {
+                            "${cue.artist} • $officialAlbum"
+                        } else {
+                            "${cue.artist} • $stationTitle"
+                        }
+                        val initialMeta = buildSegmentMetadata(
+                            title = cue.title,
+                            subtitle = subtitle,
+                            artist = cue.artist,
+                            album = officialAlbum,
+                            art = cachedArt ?: logo,
+                            isSong = true,
+                            segmentType = segType,
+                            cueType = cue.cueType
+                        )
+                        withContext(Dispatchers.Main.immediate) {
+                            if (_playing && playGeneration.get() == expectedGen && activeCueKey == expectedKey) {
+                                currentSegmentType = segType
+                                notifyMetadataChanged(initialMeta)
+                            }
+                        }
+
+                        if (cachedArt == null && albumArtEnabled && !noArt) {
+                            val stationMax = stationInfo?.maxYear ?: if (isXorAdf) 1986 else 2001
+                            val maxYear = if (cue.year in 1950..2025) maxOf(stationMax, cue.year) else stationMax
+                            Gen1MetadataRepository.fetchAlbumArtAsync(cue.artist, cue.title, maxYear) { fetchedBmp ->
+                                if (_playing && playGeneration.get() == expectedGen && activeCueKey == expectedKey && fetchedBmp != null) {
+                                    stationScope.launch(StationDispatchers.ioDispatcher) {
+                                        if (!_playing || playGeneration.get() != expectedGen || activeCueKey != expectedKey) return@launch
+                                        val resolvedAlbum = hint?.officialAlbum?.ifBlank { null }
+                                            ?: Gen1MetadataRepository.getCachedAlbumName(context, cue.artist, cue.title)?.ifBlank { null }
+                                            ?: officialAlbum
+                                        val resolvedSubtitle = if (resolvedAlbum.isNotBlank()) {
+                                            "${cue.artist} • $resolvedAlbum"
+                                        } else {
+                                            "${cue.artist} • $stationTitle"
+                                        }
+                                        val updatedMeta = buildSegmentMetadata(
+                                            title = cue.title,
+                                            subtitle = resolvedSubtitle,
+                                            artist = cue.artist,
+                                            album = resolvedAlbum,
+                                            art = fetchedBmp,
+                                            isSong = true,
+                                            segmentType = segType,
+                                            cueType = cue.cueType
+                                        )
+                                        withContext(Dispatchers.Main.immediate) {
+                                            if (_playing && playGeneration.get() == expectedGen && activeCueKey == expectedKey) {
+                                                notifyMetadataChanged(updatedMeta)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Gen1CueType.TALK -> {
+                        val segType = cue.cueType.toSegmentType()
+                        val displayArtist = cue.artist.ifBlank { stationTitle }
+                        val subtitle = if (displayArtist != stationTitle) {
+                            "$displayArtist • $stationTitle"
+                        } else {
+                            stationTitle
+                        }
+                        val talkMeta = buildSegmentMetadata(
+                            title = cue.title,
+                            subtitle = subtitle,
+                            artist = displayArtist,
+                            album = "",
+                            art = logo,
+                            isSong = true,
+                            segmentType = segType,
+                            cueType = cue.cueType
+                        )
+                        withContext(Dispatchers.Main.immediate) {
+                            if (_playing && playGeneration.get() == expectedGen && activeCueKey == expectedKey) {
+                                currentSegmentType = segType
+                                notifyMetadataChanged(talkMeta)
+                            }
+                        }
+                    }
+
+                    Gen1CueType.AD, Gen1CueType.DJ, Gen1CueType.ID -> {
+                        val segType = cue.cueType.toSegmentType()
+                        val nonSongMeta = buildStationOnlyMetadata(logo, segType, cue.cueType)
+                        withContext(Dispatchers.Main.immediate) {
+                            if (_playing && playGeneration.get() == expectedGen && activeCueKey == expectedKey) {
+                                currentSegmentType = segType
+                                notifyMetadataChanged(nonSongMeta)
                             }
                         }
                     }
@@ -134,47 +318,52 @@ class Gen1RawRadioStation(
         }
     }
 
-    private fun buildMetadata(cue: Gen1TrackCue?, customArt: Bitmap?): MediaMetadata {
-        val showMeta = isMetadataEnabled()
-        val displayTitle: String
-        val displaySubtitle: String
-        val cleanArtist: String
-        val cleanAlbum: String
-        val isSong: Boolean
+    private fun buildStationOnlyMetadata(
+        art: Bitmap?,
+        segmentType: RadioSegmentType,
+        cueType: Gen1CueType? = null
+    ): MediaMetadata {
+        return buildSegmentMetadata(
+            title = stationTitle,
+            subtitle = "",
+            artist = "",
+            album = "",
+            art = art,
+            isSong = false,
+            segmentType = segmentType,
+            cueType = cueType
+        )
+    }
 
-        if (showMeta && cue != null) {
-            displayTitle = cue.title
-            displaySubtitle = "${cue.artist} • $stationTitle"
-            cleanArtist = cue.artist
-            cleanAlbum = stationTitle
-            isSong = true
-        } else if (showMeta && stationInfo != null && stationInfo.hostName.isNotBlank()) {
-            displayTitle = stationTitle
-            displaySubtitle = "Hosted by ${stationInfo.hostName} • ${stationInfo.genre}"
-            cleanArtist = "DJ: ${stationInfo.hostName}"
-            cleanAlbum = stationInfo.genre
-            isSong = true
-        } else {
-            displayTitle = stationTitle
-            displaySubtitle = groupTitle
-            cleanArtist = groupTitle
-            cleanAlbum = groupTitle
-            isSong = false
+    private fun buildSegmentMetadata(
+        title: String,
+        subtitle: String,
+        artist: String,
+        album: String,
+        art: Bitmap?,
+        isSong: Boolean,
+        segmentType: RadioSegmentType,
+        cueType: Gen1CueType?
+    ): MediaMetadata {
+        val extras = Bundle().apply {
+            putString("segment_type", segmentType.name)
+            putInt("segment_type_id", segmentType.value)
+            if (cueType != null) {
+                putString("cue_type", cueType.name)
+            }
         }
-
-        val artToUse = customArt ?: stationLogo
-
         return buildStationMediaMetadata(
             mediaId = mediaItem.mediaId,
-            title = displayTitle,
-            subtitle = displaySubtitle,
-            artist = cleanArtist,
-            albumArtist = cleanAlbum,
+            title = title,
+            subtitle = subtitle,
+            artist = artist.ifBlank { subtitle },
+            albumArtist = album,
             stationTitle = stationTitle,
             groupTitle = groupTitle,
-            art = artToUse,
+            art = art,
             isSong = isSong,
-            durationMs = -1L
+            durationMs = -1L,
+            extras = extras
         )
     }
 
@@ -270,6 +459,9 @@ class Gen1RawRadioStation(
         seamlessPrepareJob?.cancel()
         seamlessPrepareJob = stationScope.launch(StationDispatchers.ioDispatcher) {
             try {
+                Gen1MetadataRepository.ensureLoaded(context)
+                AlbumHintRepository.ensureLoaded(context)
+                ensureStationLogoLoadedOnIo()
                 val mediaSource = buildMediaSource()
                 val durMs = estimateDurationMs()
                 if (prepToken != playGeneration.get() || !isActive) return@launch
@@ -285,10 +477,13 @@ class Gen1RawRadioStation(
                         isStationActive = true
                         _playing = true
                         activeCueKey = "__INIT__"
+                        currentSegmentType = RadioSegmentType.None
                         activePrepareJob?.cancel()
                         activePrepareJob = null
                         activePollerJob?.cancel()
                         activePollerJob = null
+                        activeMetadataJob?.cancel()
+                        activeMetadataJob = null
 
                         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
                         player.repeatMode = Player.REPEAT_MODE_ONE
@@ -326,11 +521,14 @@ class Gen1RawRadioStation(
         }
         isStationActive = false
         _playing = false
+        currentSegmentType = RadioSegmentType.None
         playGeneration.incrementAndGet()
         activePrepareJob?.cancel()
         activePrepareJob = null
         activePollerJob?.cancel()
         activePollerJob = null
+        activeMetadataJob?.cancel()
+        activeMetadataJob = null
         lastStoppedTimeMs = System.currentTimeMillis()
         stoppedPositionMs = player.exoPlayer.currentPosition.coerceAtLeast(0L)
         player.stopInternal()
@@ -349,10 +547,13 @@ class Gen1RawRadioStation(
         isStationActive = true
         _playing = true
         activeCueKey = "__INIT__"
+        currentSegmentType = RadioSegmentType.None
         activePrepareJob?.cancel()
         activePrepareJob = null
         activePollerJob?.cancel()
         activePollerJob = null
+        activeMetadataJob?.cancel()
+        activeMetadataJob = null
 
         player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
         player.repeatMode = Player.REPEAT_MODE_ONE
@@ -365,6 +566,9 @@ class Gen1RawRadioStation(
         player.playInternal()
 
         activePrepareJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            Gen1MetadataRepository.ensureLoaded(context)
+            AlbumHintRepository.ensureLoaded(context)
+            ensureStationLogoLoadedOnIo()
             val durMs = estimateDurationMs()
             if (token != playGeneration.get() || !isActive || !_playing) return@launch
             val liveOffsetMs = computeLiveOffsetMs(durMs)

@@ -1,106 +1,298 @@
-game_code	file_name	start_sec	end_sec	title	artist
-1	flash.adf	0	232	Out of Touch	Hall & Oates
-1	flash.adf	239	431	Dance Hall Days	Wang Chung
-1	flash.adf	439	681	Billie Jean	Michael Jackson
-1	flash.adf	696	923	Self Control	Laura Branigan
-1	flash.adf	930	1132	Call Me	Go West
-1	flash.adf	1143	1356	Kiss the Dirt (Falling Down the Mountain)	INXS
-1	flash.adf	1486	1684	Run to You	Bryan Adams
-1	flash.adf	1684	1846	Four Little Diamonds	Electric Light Orchestra
-1	flash.adf	1855	2064	Owner of a Lonely Heart	Yes
-1	flash.adf	2076	2295	Video Killed the Radio Star	The Buggles
-1	flash.adf	2302	2498	Japanese Boy	Aneka
-1	flash.adf	2609	2795	Life's What You Make It	Talk Talk
-1	flash.adf	2809	3000	Your Love	The Outfield
-1	flash.adf	3014	3226	Steppin' Out	Joe Jackson
-1	flash.adf	3229	3425	One Thing Leads to Another	The Fixx
-1	flash.adf	3428	3585	Running with the Night	Lionel Richie
-1	vrock.adf	10	217	You've Got Another Thing Comin'	Judas Priest
-1	vrock.adf	225	454	Too Young to Fall in Love	Mötley Crüe
-1	vrock.adf	459	680	Peace Sells	Megadeth
-1	vrock.adf	689	861	Dangerous Bastard	Love Fist
-1	vrock.adf	1060	1274	Turn Up the Radio	Autograph
-1	vrock.adf	1280	1462	I Wanna Rock	Twisted Sister
-1	vrock.adf	1471	1712	Bark at the Moon	Ozzy Osbourne
-1	vrock.adf	1719	1927	Madhouse	Anthrax
-1	vrock.adf	1940	2145	2 Minutes to Midnight	Iron Maiden
-1	vrock.adf	2351	2542	Raining Blood	Slayer
-1	vrock.adf	2545	2743	Cumin' Atcha Live	Tesla
-1	vrock.adf	2746	2916	Fist Fury	Love Fist
-1	vrock.adf	2926	3113	Yankee Rose	David Lee Roth
-1	vrock.adf	3291	3548	Cum On Feel the Noize	Quiet Riot
-1	vrock.adf	3558	3728	God Blessed Video	Alcatrazz
-1	vrock.adf	3737	3879	Working for the Weekend	Loverboy
-1	vrock.adf	3891	4103	She Sells Sanctuary	The Cult
-1	wave.adf	14	209	Two Tribes	Frankie Goes to Hollywood
-1	wave.adf	219	416	Love Missile F1-11	Sigue Sigue Sputnik
-1	wave.adf	416	599	Cars	Gary Numan
-1	wave.adf	612	827	(Keep Feeling) Fascination	The Human League
-1	wave.adf	952	1102	Atomic	Blondie
-1	wave.adf	1102	1289	99 Luftballons	Nena
-1	wave.adf	1298	1499	Kids in America	Kim Wilde
-1	wave.adf	1505	1667	Pale Shelter	Tears for Fears
-1	wave.adf	1840	2035	Sunglasses at Night	Corey Hart
-1	wave.adf	2035	2239	Poison Arrow	ABC
-1	wave.adf	2250	2459	I Ran (So Far Away)	A Flock of Seagulls
-1	wave.adf	2471	2659	Love My Way	The Psychedelic Furs
-1	wave.adf	2773	3019	Obsession	Animotion
-1	wave.adf	3031	3269	Gold	Spandau Ballet
-1	wave.adf	3280	3503	Hyperactive!	Thomas Dolby
-1	wave.adf	3511	3749	Never Say Never	Romeo Void
-1	emotion.adf	6	268	Waiting for a Girl Like You	Foreigner
-1	emotion.adf	273	484	Wow	Kate Bush
-1	emotion.adf	506	732	Tempted	Squeeze
-1	emotion.adf	735	939	Keep On Loving You	REO Speedwagon
-1	emotion.adf	1081	1338	(I Just) Died in Your Arms	Cutting Crew
-1	emotion.adf	1345	1599	More Than This	Roxy Music
-1	emotion.adf	1612	1856	Africa	Toto
-1	emotion.adf	1862	2136	Broken Wings	Mr. Mister
-1	emotion.adf	2272	2488	Missing You	John Waite
-1	emotion.adf	2501	2723	Crockett's Theme	Jan Hammer
-1	emotion.adf	2898	3144	Sister Christian	Night Ranger
-1	emotion.adf	3159	3380	Never Too Much	Luther Vandross
-1	fever.adf	8	225	And the Beat Goes On	The Whispers
-1	fever.adf	225	433	Act Like You Know	Fat Larry's Band
-1	fever.adf	438	656	Get Down Saturday Night	Oliver Cheatham
-1	fever.adf	662	872	Automatic	The Pointer Sisters
-1	fever.adf	1019	1278	I'll Be Good	René & Angela
-1	fever.adf	1289	1505	All Night Long	Mary Jane Girls
-1	fever.adf	1512	1743	Ghetto Life	Rick James
-1	fever.adf	1919	2199	Wanna Be Startin' Somethin'	Michael Jackson
-1	fever.adf	2205	2447	Shame	Evelyn 'Champagne' King
-1	fever.adf	2447	2656	Behind the Groove	Teena Marie
-1	fever.adf	2773	3005	Juicy Fruit	Mtume
-1	fever.adf	3010	3228	Summer Madness	Kool & the Gang
-1	fever.adf	3238	3503	Last Night a D.J. Saved My Life	Indeep
-1	wild.adf	0	265	Pump Me Up	Trouble Funk
-1	wild.adf	274	557	One for the Treble (Fresh)	Davy DMX
-1	wild.adf	557	814	Clear	Cybotron
-1	wild.adf	825	1118	Al-Naafiysh (The Soul)	Hashim
-1	wild.adf	1118	1419	Rockit	Herbie Hancock
-1	wild.adf	1437	1840	Looking for the Perfect Beat	Afrika Bambaataa & the Soul Sonic Force
-1	wild.adf	1848	2168	Get It Girl	2 Live Crew
-1	wild.adf	2185	2469	Rock Box	Run-D.M.C.
-1	wild.adf	2472	2743	Bassline	Mantronix
-1	wild.adf	2748	3016	The Smurf	Tyrone Brunson
-1	wild.adf	3025	3364	Magic's Wand	Whodini
-1	wild.adf	3395	3646	More Bounce to the Ounce	Zapp & Roger
-1	wild.adf	3655	3915	The Message	Grandmaster Flash & the Furious Five
-1	wild.adf	3925	4107	The Breaks	Kurtis Blow
-1	espant.adf	9	268	A Gozar Con Mi Combo	Cachao
-1	espant.adf	268	462	The Bull is Wrong	Alpha Banditos
-1	espant.adf	474	727	Yo Te Miré	Tres Apenas Como Eso
-1	espant.adf	732	1019	Latin Flute	Deodato
-1	espant.adf	1116	1367	Mama Papa Tu	Mongo Santamaría
-1	espant.adf	1370	1684	Me and You Baby (Picao y Tostao)	Mongo Santamaría
-1	espant.adf	1691	1895	Mambo Mucho Mambo	Machito and His Afro-Cuban Orchestra
-1	espant.adf	1905	2152	La Vida Es Una Lenteja	Unaesta
-1	espant.adf	2295	2579	Expansions	Lonnie Liston Smith
-1	espant.adf	2588	2768	Añunga Ñunga	Irakere
-1	espant.adf	2773	3113	Super Strut	Deodato
-1	espant.adf	3120	3319	Jamay	Xavier Cugat and His Orchestra
-1	espant.adf	3334	3564	Maracaibo Oriental	Benny Moré
-1	espant.adf	3575	3698	Mambo Gozón	Tito Puente
+game_code	file_name	start_sec	end_sec	title	artist	cue_type	album	year
+1	flash.adf	0	9	Flash FM Station ID (Music for the Me Generation)	Flash FM	ID		
+1	flash.adf	9	191	Out of Touch	Daryl Hall & John Oates	SONG	Big Bam Boom	1984
+1	flash.adf	191	234	Rusty Brown's Ring Donuts	Vice City Commercial	AD		
+1	flash.adf	234	255	Knife After Dark	Vice City Commercial	AD		
+1	flash.adf	255	433	Dance Hall Days	Wang Chung	SONG	Points on the Curve	1983
+1	flash.adf	433	450	Flash FM Bumper & DJ Toni	Toni	DJ		
+1	flash.adf	450	722	Billie Jean	Michael Jackson	SONG	Thriller	1982
+1	flash.adf	722	932	Self Control	Laura Branigan	SONG	Self Control	1984
+1	flash.adf	932	956	Complete the Look	Vice City Commercial	AD		
+1	flash.adf	956	1004	Synth and Son	Vice City Commercial	AD		
+1	flash.adf	1004	1189	Call Me	Go West	SONG	Go West	1985
+1	flash.adf	1189	1396	Kiss the Dirt (Falling Down the Mountain)	INXS	SONG	Listen Like Thieves	1985
+1	flash.adf	1396	1400	Flash FM Stutter Bumper	Flash FM	ID		
+1	flash.adf	1400	1479	Just the Five of Us	Vice City Commercial	AD		
+1	flash.adf	1479	1693	Run to You	Bryan Adams	SONG	Reckless	1984
+1	flash.adf	1693	1710	Flash FM Promo (You Owe Us Your Livelihood)	Flash FM	ID		
+1	flash.adf	1710	1949	Four Little Diamonds	Electric Light Orchestra	SONG	Secret Messages	1983
+1	flash.adf	1949	2176	Owner of a Lonely Heart	Yes	SONG	90125	1983
+1	flash.adf	2176	2222	Sissy Spritz	Vice City Commercial	AD		
+1	flash.adf	2222	2228	Flash FM Bumper (Crazy People Love to Flash)	Flash FM	ID		
+1	flash.adf	2228	2390	Video Killed the Radio Star	The Buggles	SONG	The Age of Plastic	1980
+1	flash.adf	2390	2619	Japanese Boy	Aneka	SONG	Aneka	1981
+1	flash.adf	2619	2685	Degenatron	Vice City Commercial	AD		
+1	flash.adf	2685	2693	Flash FM Bumper (Like a Creature of the Night)	Flash FM	ID		
+1	flash.adf	2693	2893	Life's What You Make It	Talk Talk	SONG	The Colour of Spring	1986
+1	flash.adf	2893	3062	Your Love	The Outfield	SONG	Play Deep	1985
+1	flash.adf	3062	3072	Flash FM Bumper (Songs That Are Special to You)	Flash FM	ID		
+1	flash.adf	3072	3134	Blox	Vice City Commercial	AD		
+1	flash.adf	3134	3168	Patriotism (Anti-Communist PSA)	Vice City Commercial	AD		
+1	flash.adf	3168	3180	Flash FM Bumper (Play It 'Til You Like It)	Flash FM	ID		
+1	flash.adf	3180	3376	Steppin' Out	Joe Jackson	SONG	Night and Day	1982
+1	flash.adf	3376	3393	Flash FM Promo (Zero Commercials) & DJ Toni	Toni	DJ		
+1	flash.adf	3393	3545	One Thing Leads to Another	The Fixx	SONG	Reach the Beach	1983
+1	flash.adf	3545	3553	Flash FM Bumper (If It's Popular, We Do It)	Flash FM	ID		
+1	flash.adf	3553	3588	Giggle Cream	Vice City Commercial	AD		
+1	vrock.adf	0	9	V-Rock Station ID (Spandex Jumpsuit)	V-Rock	ID		
+1	vrock.adf	9	186	I Wanna Rock	Twisted Sister	SONG	Stay Hungry	1984
+1	vrock.adf	186	195	V-Rock Station ID (100% Official Home of Rebellion)	V-Rock	ID		
+1	vrock.adf	195	401	Too Young to Fall in Love	Mötley Crüe	SONG	Shout at the Devil	1983
+1	vrock.adf	401	407	V-Rock Bumper (Name Tags to Work)	V-Rock	ID		
+1	vrock.adf	407	471	Do the American Thing (Buy American Cars PSA)	Vice City Commercial	AD		
+1	vrock.adf	471	527	Love Fist: Steel Heart Stone Cold Prostate Tour	Vice City Commercial	AD		
+1	vrock.adf	527	535	DJ Lazlow (Welcome Back)	Lazlow	DJ		
+1	vrock.adf	535	819	Cum On Feel the Noize	Quiet Riot	SONG	Metal Health	1983
+1	vrock.adf	819	848	V-Rock ID & DJ Lazlow (Master of Darkness)	Lazlow	DJ		
+1	vrock.adf	848	919	Exploder: Evacuator Part 2	Vice City Commercial	AD		
+1	vrock.adf	919	1110	She Sells Sanctuary	The Cult	SONG	Love	1985
+1	vrock.adf	1110	1118	V-Rock Guest ID (Jezz Torrent)	Jezz Torrent	ID		
+1	vrock.adf	1118	1213	DJ Lazlow — Cousin Ed Call-In	Lazlow & Cousin Ed	DJ		
+1	vrock.adf	1213	1219	V-Rock Engine-Rev Bumper	V-Rock	ID		
+1	vrock.adf	1219	1468	Bark at the Moon	Ozzy Osbourne	SONG	Bark at the Moon	1983
+1	vrock.adf	1468	1489	DJ Lazlow (Crash and Burn Weekend)	Lazlow	DJ		
+1	vrock.adf	1489	1539	Maibatsu Thunder	Vice City Commercial	AD		
+1	vrock.adf	1539	1561	Complete the Look (Metal / Rebel Variant)	Vice City Commercial	AD		
+1	vrock.adf	1561	1711	Dangerous Bastard	Love Fist	SONG	Grand Theft Auto: Vice City (In-House Original)	1986
+1	vrock.adf	1711	1719	V-Rock Bumper (New Wave This, Pal)	V-Rock	ID		
+1	vrock.adf	1719	1789	Ammu-Nation	Vice City Commercial	AD		
+1	vrock.adf	1789	2156	2 Minutes to Midnight	Iron Maiden	SONG	Powerslave	1984
+1	vrock.adf	2156	2176	V-Rock ID (While Other Stations Are Playing This) & DJ Lazlow	Lazlow	DJ		
+1	vrock.adf	2176	2240	Exploder Survival Knife	Vice City Commercial	AD		
+1	vrock.adf	2240	2283	DJ Lazlow — Snow Dog Call-In	Lazlow & Snow Dog	DJ		
+1	vrock.adf	2283	2462	Working for the Weekend	Loverboy	SONG	Get Lucky	1981
+1	vrock.adf	2462	2522	DJ Lazlow — Big Mitch Baker Call-In	Lazlow & Mitch Baker	DJ		
+1	vrock.adf	2522	2737	God Blessed Video	Alcatrazz	SONG	Disturbing the Peace	1985
+1	vrock.adf	2737	2745	V-Rock Bumper (Fat Hog in a Trailer)	V-Rock	ID		
+1	vrock.adf	2745	2960	Cumin' Atcha Live	Tesla	SONG	Mechanical Resonance	1986
+1	vrock.adf	2960	2971	DJ Lazlow (Mega Music Marathon Intro)	Lazlow	DJ		
+1	vrock.adf	2971	3262	Turn Up the Radio	Autograph	SONG	Sign In Please	1984
+1	vrock.adf	3262	3491	Peace Sells	Megadeth	SONG	Peace Sells... but Who's Buying?	1986
+1	vrock.adf	3491	3501	V-Rock Bumper (Only Sissies Cry)	V-Rock	ID		
+1	vrock.adf	3501	3522	Knife After Dark	Vice City Commercial	AD		
+1	vrock.adf	3522	3540	DJ Lazlow (Flunked Out of School) & V-Rock Bumper	Lazlow	DJ		
+1	vrock.adf	3540	3747	Madhouse	Anthrax	SONG	Spreading the Disease	1985
+1	vrock.adf	3747	3944	Raining Blood	Slayer	SONG	Reign in Blood	1986
+1	vrock.adf	3944	3957	DJ Lazlow (Face for Radio)	Lazlow	DJ		
+1	vrock.adf	3957	3972	V-Rock Bumper (We're Shoplifting)	V-Rock	ID		
+1	vrock.adf	3972	3981	DJ Lazlow (Stupid Vulture)	Lazlow	DJ		
+1	vrock.adf	3981	4235	You've Got Another Thing Comin'	Judas Priest	SONG	Screaming for Vengeance	1982
+1	vrock.adf	4235	4243	V-Rock Bumper (New Wave This, Pal)	V-Rock	ID		
+1	vrock.adf	4243	4434	Fist Fury	Love Fist	SONG	Grand Theft Auto: Vice City (In-House Original)	1986
+1	vrock.adf	4434	4441	V-Rock Guitar-Scream Bumper	V-Rock	ID		
+1	vrock.adf	4441	4644	Yankee Rose	David Lee Roth	SONG	Eat 'Em and Smile	1986
+1	wave.adf	0	8	Wave 103 Station ID (Weight of the World)	Wave 103	ID		
+1	wave.adf	8	234	Two Tribes	Frankie Goes to Hollywood	SONG	Welcome to the Pleasuredome	1984
+1	wave.adf	234	258	DJ Adam First (Trevor Horn Outro & Break Intro)	Adam First	DJ		
+1	wave.adf	258	279	Complete the Look (Linen Suit Variant)	Vice City Commercial	AD		
+1	wave.adf	279	345	Yuppie and the Alien	Vice City Commercial	AD		
+1	wave.adf	345	357	Wave 103 Bumper (Boys and Girls Look the Same)	Wave 103	ID		
+1	wave.adf	357	510	Love Missile F1-11	Sigue Sigue Sputnik	SONG	Flaunt It	1986
+1	wave.adf	510	688	Cars	Gary Numan	SONG	The Pleasure Principle	1979
+1	wave.adf	688	709	Wave 103 ID (Sexual Ambiguity) & DJ Adam First	Adam First	DJ		
+1	wave.adf	709	931	(Keep Feeling) Fascination	The Human League	SONG	Fascination!	1983
+1	wave.adf	931	978	Sissy Spritz	Vice City Commercial	AD		
+1	wave.adf	978	1026	Synth and Son	Vice City Commercial	AD		
+1	wave.adf	1026	1037	Wave 103 Bumper (More Makeup Than the Girls)	Wave 103	ID		
+1	wave.adf	1037	1068	DJ Adam First (Glider Monologue & Blondie Intro)	Adam First	DJ		
+1	wave.adf	1068	1256	Atomic	Blondie	SONG	Eat to the Beat	1979
+1	wave.adf	1256	1462	99 Luftballons	Nena	SONG	Nena	1983
+1	wave.adf	1462	1470	Wave 103 Bumper (Synthesizer Thingies)	Wave 103	ID		
+1	wave.adf	1470	1665	Kids in America	Kim Wilde	SONG	Kim Wilde	1981
+1	wave.adf	1665	1896	Pale Shelter	Tears for Fears	SONG	The Hurting	1983
+1	wave.adf	1896	1904	Wave 103 Bumper (Drum Machines)	Wave 103	ID		
+1	wave.adf	1904	1970	In the Future, There Will Be Robots	Vice City Commercial	AD		
+1	wave.adf	1970	2184	Sunglasses at Night	Corey Hart	SONG	First Offense	1983
+1	wave.adf	2184	2364	Poison Arrow	ABC	SONG	The Lexicon of Love	1982
+1	wave.adf	2364	2571	I Ran (So Far Away)	A Flock of Seagulls	SONG	A Flock of Seagulls	1982
+1	wave.adf	2571	2579	Wave 103 Bumper (Great Excuse to Use Hairspray)	Wave 103	ID		
+1	wave.adf	2579	2641	Salivex	Vice City Commercial	AD		
+1	wave.adf	2641	2676	Giggle Cream	Vice City Commercial	AD		
+1	wave.adf	2676	2886	Love My Way	The Psychedelic Furs	SONG	Forever Now	1982
+1	wave.adf	2886	2895	Wave 103 Bumper (Riding the Wave)	Wave 103	ID		
+1	wave.adf	2895	3133	Obsession	Animotion	SONG	Animotion	1984
+1	wave.adf	3133	3213	Think Your Way to Success (Jeremy Robard)	Vice City Commercial	AD		
+1	wave.adf	3213	3439	Gold	Spandau Ballet	SONG	True	1983
+1	wave.adf	3439	3446	Wave 103 Bumper (Not Pop Music, It's New Wave)	Wave 103	ID		
+1	wave.adf	3446	3673	Hyperactive!	Thomas Dolby	SONG	The Flat Earth	1984
+1	wave.adf	3673	3681	Wave 103 Bumper (Synthesizer of Your Inner Soul)	Wave 103	ID		
+1	wave.adf	3681	3956	Never Say Never	Romeo Void	SONG	Never Say Never	1981
+1	wave.adf	3956	3967	Wave 103 Bumper (Catch the Wave)	Wave 103	ID		
+1	emotion.adf	0	7	Emotion 98.3 Station ID (More Mood Swings)	Emotion 98.3	ID		
+1	emotion.adf	7	278	Waiting for a Girl Like You	Foreigner	SONG	4	1981
+1	emotion.adf	278	290	Emotion 98.3 Bumper (24/7, Not Just Once a Month)	Emotion 98.3	ID		
+1	emotion.adf	290	337	Petstuffers	Vice City Commercial	AD		
+1	emotion.adf	337	357	Complete the Look (Men's Eyeliner Variant)	Vice City Commercial	AD		
+1	emotion.adf	357	551	Wow	Kate Bush	SONG	Lionheart	1978
+1	emotion.adf	551	578	DJ Fernando Martinez (Losing Myself in the Music)	Fernando Martinez	DJ		
+1	emotion.adf	578	621	Farewell Ranch	Vice City Commercial	AD		
+1	emotion.adf	621	630	Emotion 98.3 Bumper (We Express Emotion)	Emotion 98.3	ID		
+1	emotion.adf	630	844	Tempted	Squeeze	SONG	East Side Story	1981
+1	emotion.adf	844	1033	Keep On Loving You	REO Speedwagon	SONG	Hi Infidelity	1980
+1	emotion.adf	1033	1038	Emotion 98.3 Bumper (Crying Woman)	Emotion 98.3	ID		
+1	emotion.adf	1038	1315	(I Just) Died in Your Arms	Cutting Crew	SONG	Broadcast	1986
+1	emotion.adf	1315	1559	More Than This	Roxy Music	SONG	Avalon	1982
+1	emotion.adf	1559	1572	Emotion Sax Bumper & DJ Fernando Martinez	Fernando Martinez	DJ		
+1	emotion.adf	1572	1639	Pastor Richards Salvation Statue	Vice City Commercial	AD		
+1	emotion.adf	1639	1642	Emotion Quick Drop	Emotion 98.3	ID		
+1	emotion.adf	1642	1683	Pit Bomb	Vice City Commercial	AD		
+1	emotion.adf	1683	1692	Emotion 98.3 Bumper (Music to Cruise To)	Emotion 98.3	ID		
+1	emotion.adf	1692	1702	DJ Fernando Martinez (Wasn't That Beautiful?)	Fernando Martinez	DJ		
+1	emotion.adf	1702	1954	Africa	Toto	SONG	Toto IV	1982
+1	emotion.adf	1954	1965	Emotion 98.3 Bumper (Laughter and Sorrow)	Emotion 98.3	ID		
+1	emotion.adf	1965	2233	Broken Wings	Mr. Mister	SONG	Welcome to the Real World	1985
+1	emotion.adf	2233	2240	Emotion 98.3 Bumper (Prescription for Unwanted Emotions)	Emotion 98.3	ID		
+1	emotion.adf	2240	2446	Missing You	John Waite	SONG	No Brakes	1984
+1	emotion.adf	2446	2455	Emotion 98.3 Bumper (Crying & Snort)	Emotion 98.3	ID		
+1	emotion.adf	2455	2522	Shady Acres	Vice City Commercial	AD		
+1	emotion.adf	2522	2737	Crockett's Theme	Jan Hammer	SONG	Miami Vice II (Original Television Soundtrack)	1986
+1	emotion.adf	2737	2745	Emotion ID & DJ Fernando Martinez (Feeling Very Emotional)	Fernando Martinez	DJ		
+1	emotion.adf	2745	2806	Musty Pines	Vice City Commercial	AD		
+1	emotion.adf	2806	2815	DJ Fernando Martinez (Power of Music)	Fernando Martinez	DJ		
+1	emotion.adf	2815	3111	Sister Christian	Night Ranger	SONG	Midnight Madness	1983
+1	emotion.adf	3111	3164	Domestobot	Vice City Commercial	AD		
+1	emotion.adf	3164	3226	Fernando's Medallion Man	Vice City Commercial	AD		
+1	emotion.adf	3226	3433	Never Too Much	Luther Vandross	SONG	Never Too Much	1981
+1	emotion.adf	3433	3495	Thor's Personal Norse Power Program	Vice City Commercial	AD		
+1	emotion.adf	3495	3547	BJ's Fit For Football	Vice City Commercial	AD		
+1	fever.adf	0	8	Fever 105 Station ID (He Gave You the Fever)	Fever 105	ID		
+1	fever.adf	8	261	And the Beat Goes On	The Whispers	SONG	The Whispers	1979
+1	fever.adf	261	518	Act Like You Know	Fat Larry's Band	SONG	Breakin' Out	1982
+1	fever.adf	518	521	Fever 105 Stutter Bumper	Fever 105	ID		
+1	fever.adf	521	564	Rusty Brown's Ring Donuts	Vice City Commercial	AD		
+1	fever.adf	564	898	Get Down Saturday Night	Oliver Cheatham	SONG	Saturday Night	1983
+1	fever.adf	898	910	Fever 105 Bumper (Fever 105 Is Ill)	Fever 105	ID		
+1	fever.adf	910	972	DeLeo & Furex	Vice City Commercial	AD		
+1	fever.adf	972	1247	Automatic	Pointer Sisters	SONG	Break Out	1983
+1	fever.adf	1247	1495	I'll Be Good	René & Angela	SONG	Street Called Desire	1985
+1	fever.adf	1495	1762	All Night Long	Mary Jane Girls	SONG	Mary Jane Girls	1983
+1	fever.adf	1762	1768	Fever 105 Bumper (Soul Music for Lovers)	Fever 105	ID		
+1	fever.adf	1768	1825	BJ's Used Autos	Vice City Commercial	AD		
+1	fever.adf	1825	1829	Fever 105 Bumper (Maxin' and Relaxin')	Fever 105	ID		
+1	fever.adf	1829	2079	Ghetto Life	Rick James	SONG	Street Songs	1981
+1	fever.adf	2079	2433	Wanna Be Startin' Somethin'	Michael Jackson	SONG	Thriller	1982
+1	fever.adf	2433	2437	Fever 105 Bumper (Spoken 1-0-5)	Fever 105	ID		
+1	fever.adf	2437	2719	Shame	Evelyn "Champagne" King	SONG	Smooth Talk	1977
+1	fever.adf	2719	2731	Fever 105 Bumper (All Night Long or 4 Minutes)	Fever 105	ID		
+1	fever.adf	2731	2765	Giggle Cream	Vice City Commercial	AD		
+1	fever.adf	2765	2947	Behind the Groove	Teena Marie	SONG	Lady T	1980
+1	fever.adf	2947	2951	Fever 105 Bumper (Word to Daddy)	Fever 105	ID		
+1	fever.adf	2951	2963	DJ Oliver "Ladykiller" Biscuit (300 Pounds of Juice)	Oliver "Ladykiller" Biscuit	DJ		
+1	fever.adf	2963	3234	Juicy Fruit	Mtume	SONG	Juicy Fruit	1983
+1	fever.adf	3234	3486	Summer Madness	Kool & the Gang	SONG	Light of Worlds	1974
+1	fever.adf	3486	3491	Fever 105 Bumper (Cold Chillin')	Fever 105	ID		
+1	fever.adf	3491	3547	Farewell Ranch	Vice City Commercial	AD		
+1	fever.adf	3547	3556	Fever 105 Bumper (Who's Your Daddy?)	Fever 105	ID		
+1	fever.adf	3556	3787	Last Night a D.J. Saved My Life	Indeep	SONG	Last Night a D.J. Saved My Life!	1982
+1	fever.adf	3787	3793	Fever 105 Bumper (Back to the Clinic)	Fever 105	ID		
+1	wild.adf	0	286	Pump Me Up	Trouble Funk	SONG	Drop the Bomb	1982
+1	wild.adf	286	542	One for the Treble (Vocal Mix)	Davy DMX	SONG	One for the Treble	1984
+1	wild.adf	542	720	Clear	Cybotron	SONG	Enter	1983
+1	wild.adf	720	951	Al-Naafiysh (The Soul)	Hashim	SONG	Al-Naafiysh (The Soul)	1983
+1	wild.adf	951	978	Wildstyle Pirate Radio ID & DJ Mr. Magic Shout-Outs	Mr. Magic	DJ		
+1	wild.adf	978	1144	Rockit	Herbie Hancock	SONG	Future Shock	1983
+1	wild.adf	1144	1527	Looking for the Perfect Beat	Afrika Bambaataa & The Soul Sonic Force	SONG	Planet Rock: The Album	1983
+1	wild.adf	1527	1772	Get It Girl	2 Live Crew	SONG	The 2 Live Crew Is What We Are	1986
+1	wild.adf	1772	2034	Rock Box	Run-D.M.C.	SONG	Run-D.M.C.	1984
+1	wild.adf	2034	2273	Bassline	Mantronix	SONG	Mantronix: The Album	1985
+1	wild.adf	2273	2522	The Smurf	Tyrone Brunson	SONG	Sticky Situation	1983
+1	wild.adf	2522	2526	DJ Mr. Magic (Let's Rock This Joint)	Mr. Magic	DJ		
+1	wild.adf	2526	2811	Magic's Wand	Whodini	SONG	Whodini	1983
+1	wild.adf	2811	2833	Complete the Look (Hip-Hop / Gold Chain Variant)	Vice City Commercial	AD		
+1	wild.adf	2833	2838	Wildstyle Bumper (Mr. Magic World Premiere)	Wildstyle	ID		
+1	wild.adf	2838	3133	More Bounce to the Ounce	Zapp & Roger	SONG	Zapp	1980
+1	wild.adf	3133	3137	Wildstyle Bumper (Vocoder Drop)	Wildstyle	ID		
+1	wild.adf	3137	3486	The Message	Grandmaster Flash and the Furious Five	SONG	The Message	1982
+1	wild.adf	3486	3834	The Breaks	Kurtis Blow	SONG	Kurtis Blow	1980
+1	wild.adf	3834	4107	Hip Hop, Be Bop (Don't Stop)	Man Parrish	SONG	Man Parrish	1982
+1	espant.adf	0	345	A Gozar Con Mi Combo	Cachao	SONG	Master Sessions, Volume 1	1994
+1	espant.adf	345	566	The Bull Is Wrong	Alpha Banditos	SONG	Grand Theft Auto: Vice City (In-House Original)	2002
+1	espant.adf	566	777	Yo Te Miré	Tres Apenas Como Eso	SONG	Grand Theft Auto: Vice City (In-House Original)	2002
+1	espant.adf	777	789	DJ Pepe (Commercial Break Intro)	Pepe	DJ		
+1	espant.adf	789	862	Learn Redneck Pretty Fast	Vice City Commercial	AD		
+1	espant.adf	862	883	Complete the Look (Chest Wig Variant)	Vice City Commercial	AD		
+1	espant.adf	883	906	DJ Pepe (Giggle Cream Banter)	Pepe	DJ		
+1	espant.adf	906	1120	Latin Flute	Deodato	SONG	Deodato 2	1973
+1	espant.adf	1120	1347	Mama Papa Tú	Mongo Santamaría	SONG	Stone Soul	1969
+1	espant.adf	1347	1364	DJ Pepe (Commercial Break Intro)	Pepe	DJ		
+1	espant.adf	1364	1434	Fernando's Medallion Man	Vice City Commercial	AD		
+1	espant.adf	1434	1448	DJ Pepe (La Casa del Jazz / Tanto Café)	Pepe	DJ		
+1	espant.adf	1448	1686	Me and You Baby (Picao y Tostao)	Mongo Santamaría	SONG	Feelin' Alright	1970
+1	espant.adf	1686	1689	Radio Espantoso Bumper (Mega Mega Jazz)	Pepe	ID		
+1	espant.adf	1689	1846	Mambo Mucho Mambo	Machito and His Afro-Cuban Orchestra	SONG	Mambo Mucho Mambo: The Complete Columbia Masters	1952
+1	espant.adf	1846	2114	La Vida Es Una Lenteja	Unaesta	SONG	Grand Theft Auto: Vice City (In-House Original)	2002
+1	espant.adf	2114	2181	Shady Acres	Vice City Commercial	AD		
+1	espant.adf	2181	2382	Expansions	Lonnie Liston Smith	SONG	Expansions	1975
+1	espant.adf	2382	2756	Añunga Ñunga	Irakere	SONG	Irakere II	1979
+1	espant.adf	2756	3072	Super Strut	Deodato	SONG	Deodato 2	1973
+1	espant.adf	3072	3143	Pastor Richards Salvation Statue	Vice City Commercial	AD		
+1	espant.adf	3143	3281	Jamay	Xavier Cugat and His Orchestra	SONG	Mambo at the Waldorf	1955
+1	espant.adf	3281	3295	DJ Pepe (Italian Carjacker)	Pepe	DJ		
+1	espant.adf	3295	3480	Maracaibo Oriental	Benny Moré	SONG	Paré... Que Llegó el Bárbaro	1958
+1	espant.adf	3480	3486	DJ Pepe (Commercial Break Intro)	Pepe	DJ		
+1	espant.adf	3486	3545	BJ's Fit For Football	Vice City Commercial	AD		
+1	espant.adf	3545	3698	Mambo Gozón	Tito Puente	SONG	Dance Mania	1958
+1	kchat.adf	0	456	Jezz Torrent Interview (Part 1)	Amy Sheckenhausen & Jezz Torrent	TALK		
+1	kchat.adf	456	512	Farewell Ranch	Vice City Commercial	AD		
+1	kchat.adf	512	547	Giggle Cream	Vice City Commercial	AD		
+1	kchat.adf	547	567	Complete the Look (Ninja / Assassin Variant)	Vice City Commercial	AD		
+1	kchat.adf	567	862	Jezz Torrent Interview (Part 2)	Amy Sheckenhausen & Jezz Torrent	TALK		
+1	kchat.adf	862	926	Do the American Thing (Buy American Cars PSA)	Vice City Commercial	AD		
+1	kchat.adf	926	973	Petstuffers	Vice City Commercial	AD		
+1	kchat.adf	973	1020	Sissy Spritz	Vice City Commercial	AD		
+1	kchat.adf	1020	1347	Michaela Carapadis Interview (Part 1)	Amy Sheckenhausen & Michaela Carapadis	TALK		
+1	kchat.adf	1347	1369	Military Recruitment (1-800-BE-A-HERO)	Vice City Commercial	AD		
+1	kchat.adf	1369	1434	Yuppie and the Alien	Vice City Commercial	AD		
+1	kchat.adf	1434	1490	BJ's Used Autos	Vice City Commercial	AD		
+1	kchat.adf	1490	1673	Michaela Carapadis Interview (Part 2)	Amy Sheckenhausen & Michaela Carapadis	TALK		
+1	kchat.adf	1673	1708	Giggle Cream	Vice City Commercial	AD		
+1	kchat.adf	1708	1778	Exploder: Evacuator Part 2	Vice City Commercial	AD		
+1	kchat.adf	1778	2137	Pat "Mr. Zoo" Flannerdy Interview (Part 1)	Amy Sheckenhausen & Pat Flannerdy	TALK		
+1	kchat.adf	2137	2178	Pit Bomb	Vice City Commercial	AD		
+1	kchat.adf	2178	2257	Just the Five of Us	Vice City Commercial	AD		
+1	kchat.adf	2257	2652	Pat "Mr. Zoo" Flannerdy Interview (Part 2)	Amy Sheckenhausen & Pat Flannerdy	TALK		
+1	kchat.adf	2652	2723	Pastor Richards Salvation Statue	Vice City Commercial	AD		
+1	kchat.adf	2723	2773	Maibatsu Thunder	Vice City Commercial	AD		
+1	kchat.adf	2773	3034	Gethsemanee Starhawk Moonmaker Interview (Part 1)	Amy Sheckenhausen & Gethsemanee Starhawk Moonmaker	TALK		
+1	kchat.adf	3034	3090	Farewell Ranch	Vice City Commercial	AD		
+1	kchat.adf	3090	3154	Exploder Survival Knife	Vice City Commercial	AD		
+1	kchat.adf	3154	3566	Gethsemanee Starhawk Moonmaker Interview (Part 2)	Amy Sheckenhausen & Gethsemanee Starhawk Moonmaker	TALK		
+1	kchat.adf	3566	3625	BJ's Fit For Football	Vice City Commercial	AD		
+1	kchat.adf	3625	3678	Domestobot	Vice City Commercial	AD		
+1	kchat.adf	3678	3945	BJ Smith Interview (Part 1)	Amy Sheckenhausen & BJ Smith	TALK		
+1	kchat.adf	3945	4006	Musty Pines	Vice City Commercial	AD		
+1	kchat.adf	4006	4027	Knife After Dark	Vice City Commercial	AD		
+1	kchat.adf	4027	4322	BJ Smith Interview (Part 2)	Amy Sheckenhausen & BJ Smith	TALK		
+1	kchat.adf	4322	4388	Degenatron	Vice City Commercial	AD		
+1	kchat.adf	4388	4450	Salivex	Vice City Commercial	AD		
+1	kchat.adf	4450	4830	Claude Maginot Interview (Part 1)	Amy Sheckenhausen & Claude Maginot	TALK		
+1	kchat.adf	4830	4892	DeLeo & Furex	Vice City Commercial	AD		
+1	kchat.adf	4892	4962	Ammu-Nation	Vice City Commercial	AD		
+1	kchat.adf	4962	5147	Claude Maginot Interview (Part 2)	Amy Sheckenhausen & Claude Maginot	TALK		
+1	kchat.adf	5147	5197	Maibatsu Thunder	Vice City Commercial	AD		
+1	kchat.adf	5197	5231	Patriotism (Anti-Communist PSA)	Vice City Commercial	AD		
+1	kchat.adf	5231	5298	Pastor Richards Salvation Statue	Vice City Commercial	AD		
+1	kchat.adf	5298	5725	Thor Interview (Part 1)	Amy Sheckenhausen & Thor	TALK		
+1	kchat.adf	5725	5787	Fernando's Medallion Man	Vice City Commercial	AD		
+1	kchat.adf	5787	5835	Synth and Son	Vice City Commercial	AD		
+1	kchat.adf	5835	6091	Thor Interview (Part 2)	Amy Sheckenhausen & Thor	TALK		
+1	kchat.adf	6091	6134	Rusty Brown's Ring Donuts	Vice City Commercial	AD		
+1	kchat.adf	6134	6214	Think Your Way to Success (Jeremy Robard)	Vice City Commercial	AD		
+1	kchat.adf	6214	6236	Complete the Look (Hip-Hop / Gold Chain Variant)	Vice City Commercial	AD		
+1	vcpr.adf	0	789	Pressing Issues: Morality (Part 1)	Maurice Chavez, Pastor Richards, Jan Brown & Barry Stark	TALK		
+1	vcpr.adf	789	886	VCPR Pledge Drive (Bi-Daily Beg-a-Thon)	Jonathan Freeloader & Michelle Montanius	ID		
+1	vcpr.adf	886	1376	Pressing Issues: Morality (Part 2)	Maurice Chavez, Pastor Richards, Jan Brown & Barry Stark	TALK		
+1	vcpr.adf	1376	1435	VCPR Pledge Drive (Fran's $10 Pledge)	Michelle Montanius & Jonathan Freeloader	ID		
+1	vcpr.adf	1435	1989	Pressing Issues: Morality (Part 3)	Maurice Chavez, Pastor Richards, Jan Brown & Barry Stark	TALK		
+1	vcpr.adf	1989	2083	VCPR Pledge Drive ($30 Raised)	Jonathan Freeloader & Michelle Montanius	ID		
+1	vcpr.adf	2083	2787	Pressing Issues: Perception & Positive Thinking (Part 1)	Maurice Chavez, Konstantinos Smith, Jeremy Robard & Jenny Louise Crab	TALK		
+1	vcpr.adf	2787	2842	VCPR Pledge Drive (Listener Theft & Starfish Island)	Michelle Montanius & Jonathan Freeloader	ID		
+1	vcpr.adf	2842	3235	Pressing Issues: Perception & Positive Thinking (Part 2)	Maurice Chavez, Konstantinos Smith, Jeremy Robard & Jenny Louise Crab	TALK		
+1	vcpr.adf	3235	3303	VCPR Pledge Drive (Second Homes & Vacations)	Michelle Montanius & Jonathan Freeloader	ID		
+1	vcpr.adf	3303	4246	Pressing Issues: Public Safety (Part 1)	Maurice Chavez, Alex Shrub, Callum Crayshaw & John F. Hickory	TALK		
+1	vcpr.adf	4246	4368	VCPR Pledge Drive (Ammu-Nation & 10% Tithe)	Jonathan Freeloader & Michelle Montanius	ID		
+1	vcpr.adf	4368	5102	Pressing Issues: Public Safety (Part 2)	Maurice Chavez, Alex Shrub, Callum Crayshaw & John F. Hickory	TALK		
+1	vcpr.adf	5102	5184	VCPR Pledge Drive (Hike in the Park & Farewell Ranch)	Michelle Montanius & Jonathan Freeloader	ID		
 2	head.wav	13	161	Stripe Summer	Dil-Don't
 2	head.wav	199	371	Good Thing	Whatever
 2	head.wav	371	571	Fade Away	Craig Gray
