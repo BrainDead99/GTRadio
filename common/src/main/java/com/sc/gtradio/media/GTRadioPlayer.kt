@@ -314,7 +314,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
                 return@withContext
             }
             val startGain = switchFadeGain
-            val steps = (durationMs / 16L).coerceAtLeast(1L).toInt()
+            val steps = (durationMs / 12L).coerceAtLeast(1L).toInt()
             val stepDelay = (durationMs / steps).coerceAtLeast(1L)
             val delta = (target - startGain) / steps
             val fadeJob = launch {
@@ -352,8 +352,24 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         resetMusicDuckGain()
         setSwitchFadeGainImmediate(if (keepFadeMuted) 0f else 1.0f)
         djVoiceOverlayPlayer?.stopOverlay()
-        stopCleanQueue()
-        stopInternal()
+        cleanTrackListener?.let {
+            exoPlayer.removeListener(it)
+            cleanTrackListener = null
+        }
+        cleanSegmentDurationsMs = emptyList()
+        if (isTracklistMode) {
+            isTracklistMode = false
+            notifyAvailableCommandsChanged()
+        }
+        if (exoPlayer.playbackState != Player.STATE_IDLE) {
+            stopInternal()
+        } else {
+            radioPlaybackState = RadioState.STOPPED
+            notifyPlaybackStateChanged()
+        }
+        if (exoPlayer.mediaItemCount > 0) {
+            exoPlayer.clearMediaItems()
+        }
     }
 
     //region Customized Functionality
@@ -406,7 +422,9 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
 
     fun stopInternal() {
         radioPlaybackState = RadioState.STOPPED
-        super.stop()
+        if (exoPlayer.playbackState != Player.STATE_IDLE) {
+            super.stop()
+        }
         resetMusicDuckGain()
         djVoiceOverlayPlayer?.stopOverlay()
         notifyPlaybackStateChanged()

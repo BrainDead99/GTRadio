@@ -21,6 +21,7 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.Random
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -53,7 +54,8 @@ data class DynamicThemePack(
     val clickSoundUris: List<Uri> = emptyList(),
     val autoArcAbove: Int = 18,
     val showSettingsPanel: Boolean = false,
-    val hideArtOnNonSong: Boolean = false
+    val hideArtOnNonSong: Boolean = false,
+    val matchAliases: List<String> = emptyList()
 ) {
     val hasFullThemeUi: Boolean
         get() = hasThemeJson && (portraitBgUris.isNotEmpty() || landscapeBgUris.isNotEmpty())
@@ -269,13 +271,121 @@ object DynamicThemeManager {
         return exact
     }
 
+    private data class SeriesTokens(
+        val fullTokens: List<String>,
+        val coreTokens: List<String>
+    )
+
+    private val NON_ALNUM_REGEX = Regex("[^A-Z0-9]+")
+    private val GEN_NOISE_REGEX = Regex("^GEN[0-9]+$")
+    private val ALPHA_DIGIT_BOUNDARY_REGEX = Regex("(?<=[A-Z])(?=[0-9])|(?<=[0-9])(?=[A-Z])")
+    private val GENERIC_QUALIFIER_TOKENS = setOf(
+        "PC", "MOBILE", "ANDROID", "IOS", "PSP", "PS2", "PS3", "PS4", "PS5",
+        "XBOX", "CONSOLE", "ENHANCED", "LEGACY", "DEFINITIVE", "COMPLETE",
+        "REMASTERED", "EDITION", "AUDIO", "RADIO", "THEME", "PACK"
+    )
+
+    private fun romanTokenToNumber(token: String): String {
+        if (token.isEmpty()) return token
+        for (ch in token) {
+            if (ch != 'I' && ch != 'V') return token
+        }
+        var total = 0
+        var prev = 0
+        for (i in token.length - 1 downTo 0) {
+            val v = if (token[i] == 'V') 5 else 1
+            if (v < prev) total -= v else total += v
+            prev = v
+        }
+        val canonical = when (total) {
+            1 -> "I"
+            2 -> "II"
+            3 -> "III"
+            4 -> "IV"
+            5 -> "V"
+            6 -> "VI"
+            else -> null
+        }
+        return if (canonical == token) total.toString() else token
+    }
+
+    private fun tokenizeSeriesName(raw: String): SeriesTokens {
+        val rawTokens = raw.uppercase(Locale.ROOT)
+            .split(NON_ALNUM_REGEX)
+            .filter { it.isNotEmpty() }
+
+        val fullTokens = ArrayList<String>(rawTokens.size + 2)
+        for (tok in rawTokens) {
+            if (tok == "GTRADIO" || GEN_NOISE_REGEX.matches(tok)) continue
+            if (tok in GENERIC_QUALIFIER_TOKENS) {
+                fullTokens.add(tok)
+                continue
+            }
+            val splitParts = tok.split(ALPHA_DIGIT_BOUNDARY_REGEX)
+            for (part in splitParts) {
+                if (part.isNotEmpty()) {
+                    fullTokens.add(romanTokenToNumber(part))
+                }
+            }
+        }
+        val coreTokens = fullTokens.filterNot { it in GENERIC_QUALIFIER_TOKENS }
+        return SeriesTokens(fullTokens = fullTokens, coreTokens = coreTokens)
+    }
+
+    private fun findBestThemeMatch(packs: List<DynamicThemePack>, seriesName: String): DynamicThemePack? {
+        if (packs.isEmpty()) return null
+        val groupTokens = tokenizeSeriesName(seriesName)
+        if (groupTokens.fullTokens.isEmpty()) return null
+
+        val packTokensList = packs.map { pack ->
+            val primary = tokenizeSeriesName(pack.seriesName)
+            val aliases = pack.matchAliases.map { tokenizeSeriesName(it) }
+            Triple(pack, primary, aliases)
+        }
+
+        // Pass 1: Exact specificity (all normalized tokens match)
+        for ((pack, primary, aliases) in packTokensList) {
+            if (primary.fullTokens == groupTokens.fullTokens ||
+                aliases.any { it.fullTokens == groupTokens.fullTokens }
+            ) {
+                return pack
+            }
+        }
+
+        // Pass 2: Core token equality (ignoring platform/edition qualifiers)
+        if (groupTokens.coreTokens.isNotEmpty()) {
+            val groupFullSet = groupTokens.fullTokens.toSet()
+            var bestPack: DynamicThemePack? = null
+            var bestShared = -1
+            var bestUnmatched = Int.MAX_VALUE
+
+            for ((pack, primary, aliases) in packTokensList) {
+                val matchingTokens = when {
+                    primary.coreTokens == groupTokens.coreTokens -> primary
+                    else -> aliases.firstOrNull { it.coreTokens == groupTokens.coreTokens }
+                } ?: continue
+
+                val shared = matchingTokens.fullTokens.count { it in groupFullSet }
+                val unmatched = matchingTokens.fullTokens.size - shared
+                if (unmatched < bestUnmatched || (unmatched == bestUnmatched && shared > bestShared)) {
+                    bestPack = pack
+                    bestShared = shared
+                    bestUnmatched = unmatched
+                }
+            }
+            return bestPack
+        }
+
+        return null
+    }
+
     fun getCachedThemeForSeries(seriesName: String): DynamicThemePack? {
         if (seriesName.isBlank()) return null
         synchronized(packCache) {
             packCache[seriesName]?.let { return it }
         }
         val packs = scannedPacks ?: return null
-        val matched = packs.firstOrNull { matchesSeries(seriesName, it.seriesName) }
+        val matched = findBestThemeMatch(packs, seriesName)
         if (matched != null) {
             synchronized(packCache) {
                 packCache[seriesName] = matched
@@ -301,55 +411,13 @@ object DynamicThemeManager {
         }
 
         val packs = scannedPacks ?: scanAllThemePacks(context, libraryRootDoc).also { scannedPacks = it }
-        val matched = packs.firstOrNull { matchesSeries(seriesName, it.seriesName) }
+        val matched = findBestThemeMatch(packs, seriesName)
         if (matched != null) {
             synchronized(packCache) {
                 packCache[seriesName] = matched
             }
         }
         return matched
-    }
-
-    private fun matchesSeries(groupSeriesName: String, packSeriesName: String): Boolean {
-        val g = groupSeriesName.uppercase()
-        val p = packSeriesName.uppercase()
-        val gNorm = g.replace(Regex("[^A-Z0-9]"), "")
-        val pNorm = p.replace(Regex("[^A-Z0-9]"), "")
-        if (gNorm == pNorm) return true
-
-        val gIsSa = g.contains("SAN ANDREAS") || g.contains("GTA SA") || gNorm.contains("GTASA")
-        val pIsSa = p.contains("SAN ANDREAS") || p.contains("GTA SA") || pNorm.contains("GTASA")
-        if (gIsSa && pIsSa) return true
-
-        val gIsEflc = g.contains("EPISODES") || g.contains("EFLC") || g.contains("TLAD") || g.contains("TBOGT")
-        val pIsEflc = p.contains("EPISODES") || p.contains("EFLC") || p.contains("TLAD") || p.contains("TBOGT")
-        if (gIsEflc || pIsEflc) return gIsEflc && pIsEflc
-
-        val gIsIv = g.contains("GTA IV") || g.contains("GTA 4") || gNorm.contains("GTAIV")
-        val pIsIv = p.contains("GTA IV") || p.contains("GTA 4") || pNorm.contains("GTAIV")
-        if (gIsIv && pIsIv) return true
-
-        val gIs5 = g.contains("GTA V") || g.contains("GTA 5") || gNorm.contains("GTAV")
-        val pIs5 = p.contains("GTA V") || p.contains("GTA 5") || pNorm.contains("GTAV")
-        if (gIs5 && pIs5) return true
-
-        val gIsVcs = g.contains("VICE CITY STORIES") || g.contains("VCS")
-        val pIsVcs = p.contains("VICE CITY STORIES") || p.contains("VCS")
-        if (gIsVcs || pIsVcs) return gIsVcs && pIsVcs
-
-        val gIsVc = g.contains("VICE CITY") || g.contains("GTA VC")
-        val pIsVc = p.contains("VICE CITY") || p.contains("GTA VC")
-        if (gIsVc && pIsVc) return true
-
-        val gIsLcs = g.contains("LIBERTY CITY STORIES") || g.contains("LCS")
-        val pIsLcs = p.contains("LIBERTY CITY STORIES") || p.contains("LCS")
-        if (gIsLcs || pIsLcs) return gIsLcs && pIsLcs
-
-        val gIs3 = g.contains("GTA III") || g.contains("GTA 3")
-        val pIs3 = p.contains("GTA III") || p.contains("GTA 3")
-        if (gIs3 && pIs3) return true
-
-        return false
     }
 
     fun scanAllThemePacks(
@@ -483,34 +551,34 @@ object DynamicThemeManager {
         val obj = try { JSONObject(cleanJson) } catch (_: Exception) { JSONObject() }
 
         val seriesName = obj.optString("seriesName", folderName)
-        val isGta4Folder = seriesName.uppercase().contains("GTA IV") || folderName.uppercase().contains("GTA IV")
-        val defaultHeaderTitle = if (isGta4Folder) "Liberty City Radio" else "$folderName Radio"
-        var headerTitle = obj.optString("headerTitle", defaultHeaderTitle)
-        if (isGta4Folder && headerTitle.equals("GTA IV Radio", ignoreCase = true)) {
-            headerTitle = "Liberty City Radio"
+        val headerTitle = obj.optString("headerTitle", "$folderName Radio")
+
+        val matchAliases = ArrayList<String>()
+        val aliasesArr = obj.optJSONArray("matchAliases") ?: obj.optJSONArray("match_aliases")
+        if (aliasesArr != null) {
+            for (i in 0 until aliasesArr.length()) {
+                val alias = aliasesArr.optString(i, "").trim()
+                if (alias.isNotBlank()) {
+                    matchAliases.add(alias)
+                }
+            }
         }
 
         val bgIntervalSec = obj.optLong("backgroundIntervalSeconds", obj.optLong("backgroundIntervalSec", 8L)).coerceAtLeast(2L)
         val bgFadeMs = obj.optLong("backgroundFadeMs", obj.optLong("crossfadeDurationMs", 1000L)).coerceAtLeast(150L)
 
-        var headerFontName = obj.optString("headerFont", obj.optString("headerFontFile", if (isGta4Folder) "din1451alt G.ttf" else "diploma.ttf"))
-        var bodyFontName = obj.optString("bodyFont", obj.optString("uiFontFile", if (isGta4Folder) "din1451alt.ttf" else "BankGothic Bold.ttf"))
-        if (isGta4Folder && headerFontName.equals("diploma.ttf", ignoreCase = true)) {
-            headerFontName = "din1451alt G.ttf"
-            bodyFontName = "din1451alt.ttf"
-        }
+        val headerFontName = optStringAny(obj, "", "headerFont", "headerFontFile")
+        val bodyFontName = optStringAny(obj, "", "bodyFont", "uiFontFile")
 
-        val defaultGold = "#D49A2A"
-        val defaultGrey = "#8E8E8E"
-        val headerColorHex = obj.optString("headerColor", obj.optString("headerTextColor", if (isGta4Folder) defaultGold else "#D0E2F2"))
-        val labelColorHex = obj.optString("labelColor", obj.optString("labelTextColor", if (isGta4Folder) defaultGrey else "#6E849B"))
-        val activeColorHex = obj.optString("activeTextColor", obj.optString("valueTextColor", if (isGta4Folder) defaultGold else "#B8CFE6"))
-        val volColorHex = obj.optString("volumeBarColor", obj.optString("volumeActiveColor", if (isGta4Folder) "#9E9E9E" else "#B8CFE6"))
+        val headerColorHex = obj.optString("headerColor", obj.optString("headerTextColor", "#D0E2F2"))
+        val labelColorHex = obj.optString("labelColor", obj.optString("labelTextColor", "#6E849B"))
+        val activeColorHex = obj.optString("activeTextColor", obj.optString("valueTextColor", "#B8CFE6"))
+        val volColorHex = obj.optString("volumeBarColor", obj.optString("volumeActiveColor", "#B8CFE6"))
 
-        val headerColor = parseColorSafe(if (isGta4Folder && headerColorHex == "#D0E2F2") defaultGold else headerColorHex, Color.parseColor("#D0E2F2"))
-        val labelColor = parseColorSafe(if (isGta4Folder && labelColorHex == "#6E849B") defaultGrey else labelColorHex, Color.parseColor("#6E849B"))
-        val activeTextColor = parseColorSafe(if (isGta4Folder && activeColorHex == "#B8CFE6") defaultGold else activeColorHex, Color.parseColor("#B8CFE6"))
-        val volumeBarColor = parseColorSafe(if (isGta4Folder && volColorHex == "#B8CFE6") "#9E9E9E" else volColorHex, Color.parseColor("#B8CFE6"))
+        val headerColor = parseColorSafe(headerColorHex, Color.parseColor("#D0E2F2"))
+        val labelColor = parseColorSafe(labelColorHex, Color.parseColor("#6E849B"))
+        val activeTextColor = parseColorSafe(activeColorHex, Color.parseColor("#B8CFE6"))
+        val volumeBarColor = parseColorSafe(volColorHex, Color.parseColor("#B8CFE6"))
 
         val metadataFontName = optStringAny(obj, "", "metadataFont", "centerMetadataFont")
         val bleedStatusBar = optBooleanAny(obj, true, "bleedStatusBar", "bleed_status_bar", "hide_top_inset")
@@ -598,16 +666,20 @@ object DynamicThemeManager {
                         try {
                             val tf = Typeface.createFromFile(cachedFile)
                             val fLower = ff.name.lowercase()
-                            if (ff.name.equals(headerFontName, ignoreCase = true) ||
-                                (isGta4Folder && fLower.contains("din") && fLower.contains("g.ttf")) ||
-                                (!isGta4Folder && fLower.contains("diploma"))
-                            ) {
+                            val matchesHeader = if (headerFontName.isNotBlank()) {
+                                ff.name.equals(headerFontName, ignoreCase = true)
+                            } else {
+                                fLower.contains("diploma") || (fLower.contains("din") && fLower.contains("g.ttf")) || fLower.contains("pricedown")
+                            }
+                            if (matchesHeader && headerTf == null) {
                                 headerTf = tf
                             }
-                            if (ff.name.equals(bodyFontName, ignoreCase = true) ||
-                                (isGta4Folder && fLower == "din1451alt.ttf") ||
-                                (!isGta4Folder && fLower.contains("bankgothic"))
-                            ) {
+                            val matchesBody = if (bodyFontName.isNotBlank()) {
+                                ff.name.equals(bodyFontName, ignoreCase = true)
+                            } else {
+                                fLower.contains("bankgothic") || fLower == "din1451alt.ttf"
+                            }
+                            if (matchesBody && bodyTf == null) {
                                 bodyTf = tf
                             }
                             if (metadataFontName.isNotBlank() && ff.name.equals(metadataFontName, ignoreCase = true)) {
@@ -642,7 +714,7 @@ object DynamicThemeManager {
 
         val layoutStyle = optStringAny(
             obj,
-            if (isGta4Folder || offIcons.isNotEmpty()) "strip" else "grid",
+            if (offIcons.isNotEmpty()) "strip" else "grid",
             "layoutStyle",
             "layout_style"
         )
@@ -690,7 +762,8 @@ object DynamicThemeManager {
             clickSoundUris = clickUris,
             autoArcAbove = autoArcAbove,
             showSettingsPanel = showSettingsPanel,
-            hideArtOnNonSong = hideArtOnNonSong
+            hideArtOnNonSong = hideArtOnNonSong,
+            matchAliases = matchAliases
         )
     }
 

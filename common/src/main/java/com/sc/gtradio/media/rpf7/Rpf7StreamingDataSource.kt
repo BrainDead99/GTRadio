@@ -9,7 +9,9 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSourceException
 import androidx.media3.datasource.DataSpec
+import com.sc.gtradio.media.core.CachedStreamBlock
 import com.sc.gtradio.media.core.Gen3RoutingDataSourceFactory
+import com.sc.gtradio.media.core.Gen3StreamBlockCache
 import java.io.FileInputStream
 import java.io.IOException
 import java.nio.channels.FileChannel
@@ -17,15 +19,11 @@ import java.nio.channels.FileChannel
 /**
  * Zero-disk-cache Media3 [BaseDataSource] serving an RPF7 MultiChannel `.awc` stream as a
  * single continuous virtual 16-bit PCM WAV (`44 + totalPcmBytes`), decoding only the requested
- * block on demand into a tiny 2-block in-memory LRU cache.
+ * block on demand into the shared bounded [Gen3StreamBlockCache] and opening SAF PFDs lazily
+ * only on decoded-block cache misses.
  */
 @UnstableApi
 class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
-
-    private data class CachedBlock(
-        val pcmBytes: ByteArray,
-        val tailWarmupByChannel: Array<ByteArray?>?
-    )
 
     private var currentUri: Uri? = null
     private var activeArchive: Rpf7Archive? = null
@@ -40,14 +38,9 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
     private var bytesRemaining: Long = 0L
     private var opened: Boolean = false
 
-    private val blockCache = object : LinkedHashMap<Int, CachedBlock>(4, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, CachedBlock>?): Boolean {
-            return size > MAX_BLOCK_CACHE_SIZE
-        }
-    }
-
     @Throws(IOException::class)
     override fun open(dataSpec: DataSpec): Long {
+        closeChannelQuietly()
         val uri = dataSpec.uri
         val archiveId = uri.host
             ?: throw IOException("Missing archive host in RPF7 stream URI: $uri")
@@ -68,10 +61,6 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
 
         transferInitializing(dataSpec)
 
-        val pfd = archive.openStreamPfd()
-        val fis = pfd?.let { FileInputStream(it.fileDescriptor) }
-        val ch = fis?.channel
-
         currentUri = uri
         activeArchive = archive
         streamIndex = index
@@ -80,9 +69,9 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
             sampleRate = index.sampleRate,
             channels = index.channels
         )
-        openPfd = pfd
-        openFis = fis
-        fileChannel = ch
+        openPfd = null
+        openFis = null
+        fileChannel = null
         currentPos = startPos
         bytesRemaining = if (dataSpec.length != C.LENGTH_UNSET.toLong()) {
             minOf(dataSpec.length, totalLength - startPos).coerceAtLeast(0L)
@@ -114,6 +103,9 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
                 currentPos += copyLen
                 bytesRemaining -= copyLen
                 totalCopied += copyLen
+                if (currentPos >= WAV_HEADER_SIZE && totalCopied > 0) {
+                    break
+                }
             } else {
                 if (currentPos >= index.totalVirtualWavBytes) break
                 val blockIdx = findBlockForWavByte(index, currentPos)
@@ -146,10 +138,21 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
         activeArchive = null
         streamIndex = null
         headerBytes = null
-        blockCache.clear()
         currentPos = 0L
         bytesRemaining = 0L
 
+        val firstError = closeChannelQuietly()
+
+        if (opened) {
+            opened = false
+            transferEnded()
+        }
+        if (firstError != null) {
+            throw firstError
+        }
+    }
+
+    private fun closeChannelQuietly(): IOException? {
         var firstError: IOException? = null
         try {
             fileChannel?.close()
@@ -172,42 +175,38 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
         } finally {
             openPfd = null
         }
-
-        if (opened) {
-            opened = false
-            transferEnded()
-        }
-        if (firstError != null) {
-            throw firstError
-        }
+        return firstError
     }
 
-    private fun findBlockForWavByte(index: Rpf7StreamIndex, wavBytePos: Long): Int {
-        val starts = index.blockStartWavByte
-        var lo = 0
-        var hi = starts.size - 1
-        var res = 0
-        while (lo <= hi) {
-            val mid = (lo + hi) ushr 1
-            if (starts[mid] <= wavBytePos) {
-                res = mid
-                lo = mid + 1
-            } else {
-                hi = mid - 1
+    @Throws(IOException::class)
+    private fun ensureChannelOpen(archive: Rpf7Archive): FileChannel {
+        fileChannel?.let { return it }
+        val pfd = archive.openStreamPfd()
+            ?: throw IOException("Failed opening SAF file descriptor for RPF7 stream: $currentUri")
+        val fis = try {
+            FileInputStream(pfd.fileDescriptor)
+        } catch (t: Throwable) {
+            try {
+                pfd.close()
+            } catch (_: Throwable) {
             }
+            throw IOException("Failed opening stream channel for RPF7 stream: $currentUri", t)
         }
-        while (res + 1 < starts.size && wavBytePos >= starts[res] + index.blockPcmBytes[res]) {
-            res++
-        }
-        return res
+        openPfd = pfd
+        openFis = fis
+        return fis.channel.also { fileChannel = it }
     }
 
-    private fun getOrDecodeBlock(index: Rpf7StreamIndex, blockIdx: Int): CachedBlock {
-        blockCache[blockIdx]?.let { return it }
+    private fun getOrDecodeBlock(index: Rpf7StreamIndex, blockIdx: Int): CachedStreamBlock {
         val archive = activeArchive
             ?: throw IOException("RPF7 archive unavailable while decoding block $blockIdx")
+        val key = Gen3StreamBlockCache.buildKey(SCHEME, archive.archiveStreamId, index.entryName, blockIdx)
+        Gen3StreamBlockCache.get(key)?.let { return it }
+
+        val ch = ensureChannelOpen(archive)
         val prevWarmup = if (index.codec == 7 && blockIdx > 0) {
-            blockCache[blockIdx - 1]?.tailWarmupByChannel
+            val prevKey = Gen3StreamBlockCache.buildKey(SCHEME, archive.archiveStreamId, index.entryName, blockIdx - 1)
+            Gen3StreamBlockCache.get(prevKey)?.tailWarmupByChannel
         } else {
             null
         }
@@ -217,10 +216,10 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
             blockIdx = blockIdx,
             prevWarmupByChannel = prevWarmup,
             outTailWarmupByChannel = outTail,
-            openChannel = fileChannel
+            openChannel = ch
         )
-        val decoded = CachedBlock(pcm, outTail)
-        blockCache[blockIdx] = decoded
+        val decoded = CachedStreamBlock(pcm, outTail)
+        Gen3StreamBlockCache.put(key, decoded)
         return decoded
     }
 
@@ -231,7 +230,26 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
     companion object {
         const val SCHEME = "gtradio-rpf7"
         private const val WAV_HEADER_SIZE = 44L
-        private const val MAX_BLOCK_CACHE_SIZE = 2
+
+        fun findBlockForWavByte(index: Rpf7StreamIndex, wavBytePos: Long): Int {
+            val starts = index.blockStartWavByte
+            var lo = 0
+            var hi = starts.size - 1
+            var res = 0
+            while (lo <= hi) {
+                val mid = (lo + hi) ushr 1
+                if (starts[mid] <= wavBytePos) {
+                    res = mid
+                    lo = mid + 1
+                } else {
+                    hi = mid - 1
+                }
+            }
+            while (res + 1 < starts.size && wavBytePos >= starts[res] + index.blockPcmBytes[res]) {
+                res++
+            }
+            return res
+        }
 
         fun ensureRegistered() {
             Gen3RoutingDataSourceFactory.registerScheme(SCHEME, Factory)

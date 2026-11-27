@@ -41,6 +41,10 @@ interface RadioStation {
         onReady { play() }
     }
     fun cancelSeamlessPrepare() {}
+
+    val supportsNeighborPrewarm: Boolean get() = false
+    suspend fun prewarmNeighborForFastSwitch() {}
+    fun discardNeighborPrewarm() {}
 }
 
 object StationDispatchers {

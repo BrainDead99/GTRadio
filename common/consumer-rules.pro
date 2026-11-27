@@ -57,6 +57,17 @@
     *;
 }
 
+-keep class com.sc.gtradio.media.core.Gen3StreamBlockCache {
+    *;
+}
+-keep class com.sc.gtradio.media.core.Gen3StreamBlockCache$* {
+    *;
+}
+
+-keep class com.sc.gtradio.media.core.CachedStreamBlock {
+    *;
+}
+
 -keep class com.sc.gtradio.media.rpf3.Rpf3StreamingDataSource {
     *;
 }

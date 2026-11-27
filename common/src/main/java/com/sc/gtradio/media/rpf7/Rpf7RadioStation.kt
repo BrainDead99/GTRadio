@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -19,6 +20,7 @@ import com.sc.gtradio.common.GTRadioLogger
 import kotlinx.coroutines.*
 import kotlinx.coroutines.CancellationException
 import java.io.File
+import java.io.FileInputStream
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -123,6 +125,7 @@ data class Rpf7ClipRef(
     private val cleanPlayGeneration = java.util.concurrent.atomic.AtomicInteger(0)
 
     override val supportsSeamlessPrepare: Boolean get() = true
+    override val supportsNeighborPrewarm: Boolean get() = true
 
     private var _playing = false
     private var lastSegment = RadioSegmentType.None
@@ -136,6 +139,33 @@ data class Rpf7ClipRef(
         val preRoll: PlannedPreRollCue?,
         val overlayCue: PlannedOverlayCue?
     )
+
+    private data class PrewarmedTakeOver(
+        val createdAtElapsedMs: Long,
+        val uris: List<Uri>,
+        val windowDurationsMs: List<Long>,
+        val baseWindowIndex: Int,
+        val basePositionMs: Long,
+        val totalDurMs: Long,
+        val songItem: Rpf7SongItem?,
+        val segmentType: RadioSegmentType,
+        val introItemCount: Int,
+        val pendingBreakClips: List<StandaloneBreakClip<Rpf7ClipRef>>,
+        val preRoll: PlannedPreRollCue?,
+        val overlayCue: PlannedOverlayCue?,
+        val pinnedFiles: List<String>,
+        val isContinuousMix: Boolean,
+        val markContinuousMixStarted: Boolean,
+        val mixMarkers: List<Rpf7TrackMarker>,
+        val mixSampleRate: Int,
+        val consumedPreviousSegment: Boolean,
+        val usedPrefetchedItem: Boolean
+    )
+
+    private val prewarmGeneration = AtomicInteger(0)
+    private val prewarmLock = Any()
+    @Volatile private var prewarmedTakeOver: PrewarmedTakeOver? = null
+    @Volatile private var pendingPrewarmPinnedFiles: List<String> = emptyList()
 
     private var currentSegmentUris: List<Uri> = emptyList()
     private var currentSongItem: Rpf7SongItem? = null
@@ -608,6 +638,777 @@ data class Rpf7ClipRef(
         return dur
     }
 
+    override fun discardNeighborPrewarm() {
+        prewarmGeneration.incrementAndGet()
+        val stale = synchronized(prewarmLock) {
+            val old = prewarmedTakeOver
+            prewarmedTakeOver = null
+            old
+        }
+        stale?.pinnedFiles?.forEach { Rpf7Archive.unpinFile(it) }
+    }
+
+    private fun clearPendingPrewarmPins() {
+        val pins = pendingPrewarmPinnedFiles
+        pendingPrewarmPinnedFiles = emptyList()
+        for (p in pins) {
+            Rpf7Archive.unpinFile(p)
+        }
+    }
+
+    private fun collectAndPinNonStreamingFiles(
+        uris: List<Uri>,
+        extraUris: List<Uri> = emptyList()
+    ): List<String> {
+        val pinned = ArrayList<String>()
+        for (u in uris + extraUris) {
+            if (u.scheme != Rpf7StreamingDataSource.SCHEME) {
+                val p = u.toString()
+                Rpf7Archive.pinFile(p)
+                pinned.add(p)
+            }
+        }
+        return pinned
+    }
+
+    private fun advancePrewarmedPlayback(
+        prewarmed: PrewarmedTakeOver,
+        extraElapsedMs: Long
+    ): PreparedPlayback? {
+        var rem = extraElapsedMs.coerceAtLeast(0L)
+        var win = prewarmed.baseWindowIndex.coerceIn(0, (prewarmed.uris.size - 1).coerceAtLeast(0))
+        var pos = prewarmed.basePositionMs.coerceAtLeast(0L)
+        var landed = false
+        while (win < prewarmed.uris.size) {
+            val dur = prewarmed.windowDurationsMs.getOrElse(win) { 0L }
+            if (dur <= 0L) {
+                if (win == prewarmed.uris.lastIndex) {
+                    landed = true
+                    break
+                }
+                win++
+                pos = 0L
+                continue
+            }
+            val left = (dur - pos).coerceAtLeast(0L)
+            if (rem < left) {
+                pos += rem
+                landed = true
+                break
+            }
+            rem -= left
+            win++
+            pos = 0L
+        }
+        if (!landed) return null
+        val effectivePreRoll = if (prewarmed.preRoll != null && win == 0 && pos == 0L) prewarmed.preRoll else null
+        val effectiveOverlay = if (prewarmed.overlayCue != null && win == 0 && pos <= prewarmed.overlayCue.djStartMs) {
+            prewarmed.overlayCue
+        } else {
+            null
+        }
+        return PreparedPlayback(
+            uris = prewarmed.uris,
+            startWindowIndex = win,
+            startPositionMs = pos,
+            totalDurMs = prewarmed.totalDurMs,
+            preRoll = effectivePreRoll,
+            overlayCue = effectiveOverlay
+        )
+    }
+
+    private fun takeValidPrewarmedTakeOver(): Pair<PrewarmedTakeOver, PreparedPlayback>? {
+        prewarmGeneration.incrementAndGet()
+        val prewarmed = synchronized(prewarmLock) {
+            val p = prewarmedTakeOver
+            prewarmedTakeOver = null
+            p
+        } ?: return null
+
+        val extraMs = (SystemClock.elapsedRealtime() - prewarmed.createdAtElapsedMs).coerceAtLeast(0L)
+        val advanced = advancePrewarmedPlayback(prewarmed, extraMs)
+        if (advanced == null || !areSegmentFilesValid(prewarmed.uris)) {
+            prewarmed.pinnedFiles.forEach { Rpf7Archive.unpinFile(it) }
+            return null
+        }
+        return prewarmed to advanced
+    }
+
+    private fun applyPrewarmedStateForCommit(prewarmed: PrewarmedTakeOver, prepared: PreparedPlayback) {
+        if (prewarmed.consumedPreviousSegment) {
+            for (u in currentSegmentUris) {
+                unpinAudioUri(u)
+            }
+        }
+        if (prewarmed.usedPrefetchedItem) {
+            prefetchedItem = null
+        }
+        for (i in prepared.startWindowIndex until prepared.uris.size) {
+            pinAudioUri(prepared.uris[i])
+        }
+        prepared.preRoll?.let { pinAudioUri(it.djUri) }
+        prepared.overlayCue?.let { pinAudioUri(it.djUri) }
+
+        currentSegmentUris = prewarmed.uris
+        currentSongItem = prewarmed.songItem
+        lastSegment = prewarmed.segmentType
+        introItemCount = prewarmed.introItemCount
+        pendingBreakClips.clear()
+        pendingBreakClips.addAll(prewarmed.pendingBreakClips)
+        plannedOverlayCue = null
+        plannedPreRollCue = null
+
+        if (prewarmed.isContinuousMix) {
+            if (prewarmed.markContinuousMixStarted) {
+                hasStartedContinuousMix = true
+            }
+            pendingMixStartOffsetMs = 0L
+            savedMixAbsMs = 0L
+            continuousMixItem = prewarmed.songItem
+        }
+        if (prewarmed.mixMarkers.isNotEmpty()) {
+            activeMixMarkers = prewarmed.mixMarkers
+            activeMixSampleRate = prewarmed.mixSampleRate
+            lastDisplayedMixTrackId = -1
+            lastPolledMixPosMs = -1L
+        } else {
+            stopMixPoller(clearMarkers = true)
+        }
+    }
+
+    override suspend fun prewarmNeighborForFastSwitch() {
+        if (isStationActive || _playing || seamlessPrepareActive) return
+        val myGen = prewarmGeneration.get()
+
+        suspend fun isStillValid(): Boolean {
+            return currentCoroutineContext().isActive &&
+                prewarmGeneration.get() == myGen &&
+                !isStationActive &&
+                !_playing &&
+                !seamlessPrepareActive
+        }
+
+        val existing = synchronized(prewarmLock) { prewarmedTakeOver }
+        if (existing != null) {
+            val extraMs = (SystemClock.elapsedRealtime() - existing.createdAtElapsedMs).coerceAtLeast(0L)
+            val advanced = advancePrewarmedPlayback(existing, extraMs)
+            if (advanced != null && areSegmentFilesValid(existing.uris)) {
+                prewarmSingleTargetBlock(
+                    uris = advanced.uris,
+                    windowIndex = advanced.startWindowIndex,
+                    positionMs = advanced.startPositionMs,
+                    isStillValid = ::isStillValid
+                )
+                return
+            }
+            discardNeighborPrewarm()
+        }
+
+        if (!isStillValid()) return
+        ensureStationIndexed()
+        if (!isStillValid()) return
+
+        val snapshot = resolvePrewarmedTakeOver { !isStationActive && !_playing && !seamlessPrepareActive && prewarmGeneration.get() == myGen }
+            ?: return
+        if (!isStillValid()) {
+            snapshot.pinnedFiles.forEach { Rpf7Archive.unpinFile(it) }
+            return
+        }
+
+        var replacedOld: PrewarmedTakeOver? = null
+        val stored = synchronized(prewarmLock) {
+            if (prewarmGeneration.get() != myGen || isStationActive || _playing || seamlessPrepareActive) {
+                false
+            } else {
+                replacedOld = prewarmedTakeOver
+                prewarmedTakeOver = snapshot
+                true
+            }
+        }
+        replacedOld?.pinnedFiles?.forEach { Rpf7Archive.unpinFile(it) }
+        if (!stored) {
+            snapshot.pinnedFiles.forEach { Rpf7Archive.unpinFile(it) }
+            return
+        }
+
+        prewarmSingleTargetBlock(
+            uris = snapshot.uris,
+            windowIndex = snapshot.baseWindowIndex,
+            positionMs = snapshot.basePositionMs,
+            isStillValid = ::isStillValid
+        )
+    }
+
+    private suspend fun prewarmSingleTargetBlock(
+        uris: List<Uri>,
+        windowIndex: Int,
+        positionMs: Long,
+        isStillValid: suspend () -> Boolean
+    ) {
+        val winUri = uris.getOrNull(windowIndex)
+        val nextUri = uris.getOrNull(windowIndex + 1)
+        val (targetUri, targetSeekMs) = when {
+            winUri?.scheme == Rpf7StreamingDataSource.SCHEME -> winUri to positionMs
+            nextUri?.scheme == Rpf7StreamingDataSource.SCHEME -> nextUri to 0L
+            else -> return
+        }
+        val host = targetUri.host ?: return
+        val rawPath = targetUri.encodedPath?.removePrefix("/")?.removeSuffix(".wav") ?: return
+        val entryName = Uri.decode(rawPath)
+        val archive = Rpf7StreamRegistry.get(host) ?: return
+        val index = archive.getOrBuildStreamIndex(entryName) ?: return
+
+        val bytesPerFrame = index.channels.toLong() * 2L
+        val samplePos = (targetSeekMs.coerceAtLeast(0L) * index.sampleRate.toLong()) / 1000L
+        val targetWavByte = (44L + samplePos * bytesPerFrame)
+            .coerceIn(44L, (index.totalVirtualWavBytes - 1L).coerceAtLeast(44L))
+        val targetBlockIdx = Rpf7StreamingDataSource.findBlockForWavByte(index, targetWavByte)
+        val cacheKey = Gen3StreamBlockCache.buildKey(
+            Rpf7StreamingDataSource.SCHEME,
+            archive.archiveStreamId,
+            index.entryName,
+            targetBlockIdx
+        )
+        if (Gen3StreamBlockCache.get(cacheKey) != null) return
+        if (!isStillValid()) return
+
+        val prevWarmup = if (index.codec == 7 && targetBlockIdx > 0) {
+            val prevKey = Gen3StreamBlockCache.buildKey(
+                Rpf7StreamingDataSource.SCHEME,
+                archive.archiveStreamId,
+                index.entryName,
+                targetBlockIdx - 1
+            )
+            Gen3StreamBlockCache.get(prevKey)?.tailWarmupByChannel
+        } else {
+            null
+        }
+        val outTail = if (index.codec == 7) arrayOfNulls<ByteArray?>(index.channels) else null
+        var decodedPcm: ByteArray? = null
+        archive.openStreamPfd()?.use { pfd ->
+            FileInputStream(pfd.fileDescriptor).channel.use { ch ->
+                if (isStillValid()) {
+                    decodedPcm = archive.decodeSingleBlockToPcmBytes(
+                        index = index,
+                        blockIdx = targetBlockIdx,
+                        prevWarmupByChannel = prevWarmup,
+                        outTailWarmupByChannel = outTail,
+                        openChannel = ch
+                    )
+                }
+            }
+        }
+        val pcm = decodedPcm ?: return
+        if (pcm.isNotEmpty() && isStillValid()) {
+            Gen3StreamBlockCache.put(cacheKey, CachedStreamBlock(pcm, outTail))
+            GTRadioLogger.logVerbose("PREWARM") {
+                "Rpf7[$stationTitle]: Pre-warmed blk=$targetBlockIdx of '${index.entryName}' (${pcm.size / 1024} KB)"
+            }
+        }
+    }
+
+    private fun resolvePrewarmedTakeOver(isValid: () -> Boolean): PrewarmedTakeOver? {
+        val isContinuousMix = isContinuousMixStation()
+        val canResumeMix = isContinuousMix && savedMixAbsMs > 0L && continuousMixItem != null && lastStoppedTimeMs > 0L
+        if (canResumeMix) {
+            var item = continuousMixItem ?: return null
+            val elapsedMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+            var absMs = savedMixAbsMs + elapsedMs
+            val parts = getSortedContinuousMixParts()
+            if (parts.size > 1) {
+                val totalCycleMs = parts.sumOf { it.archive.getOrBuildStreamIndex(it.trackName)?.durationMs ?: 0L }
+                if (totalCycleMs > 0L) {
+                    absMs %= totalCycleMs
+                }
+                var guard = 0
+                while (guard < parts.size) {
+                    val pDurMs = item.archive.getOrBuildStreamIndex(item.trackName)?.durationMs ?: 0L
+                    if (pDurMs <= 0L || absMs < pDurMs) break
+                    absMs -= pDurMs
+                    val idx = parts.indexOfFirst { it.trackName.equals(item.trackName, ignoreCase = true) }
+                    item = parts[if (idx >= 0) (idx + 1) % parts.size else 0]
+                    guard++
+                }
+            }
+            val streamIdx = item.archive.getOrBuildStreamIndex(item.trackName) ?: return null
+            val totalMixDur = streamIdx.durationMs
+            val targetMixMs = if (totalMixDur > 0L) absMs % totalMixDur else 0L
+            val mainUri = item.archive.buildStreamUri(streamIdx.entryName)
+            durationCache[mainUri] = totalMixDur
+            if (!isValid()) return null
+            val markers = item.archive.readTrackMarkers(streamIdx.entryName)
+            return PrewarmedTakeOver(
+                createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                uris = listOf(mainUri),
+                windowDurationsMs = listOf(totalMixDur),
+                baseWindowIndex = 0,
+                basePositionMs = targetMixMs,
+                totalDurMs = totalMixDur,
+                songItem = item,
+                segmentType = RadioSegmentType.Song,
+                introItemCount = 0,
+                pendingBreakClips = emptyList(),
+                preRoll = null,
+                overlayCue = null,
+                pinnedFiles = emptyList(),
+                isContinuousMix = true,
+                markContinuousMixStarted = true,
+                mixMarkers = markers,
+                mixSampleRate = streamIdx.sampleRate.coerceAtLeast(1),
+                consumedPreviousSegment = true,
+                usedPrefetchedItem = false
+            )
+        }
+
+        val prevUris = currentSegmentUris.toList()
+        val canResumeTrack = !isContinuousMix &&
+            director.currentPhase != Gen3DirectorPhase.BREAK_BLOCK &&
+            lastStoppedTimeMs > 0L &&
+            areSegmentFilesValid(prevUris)
+        if (canResumeTrack) {
+            var remainingMs = (System.currentTimeMillis() - lastStoppedTimeMs).coerceAtLeast(0L)
+            val prevDurs = prevUris.map { getFileDurationMs(it) }
+            val winIdx = stoppedWindowIndex.coerceIn(0, (prevUris.size - 1).coerceAtLeast(0))
+            var posMs = stoppedPositionMs.coerceAtLeast(0L)
+
+            val prevMix = currentSongItem?.let { Rpf7MetadataRepository.getTrackMeta(it.trackName).isContinuousMix } == true
+            val markers = if ((isContinuousMix || prevMix) && currentSongItem != null) {
+                activeMixMarkers.ifEmpty { currentSongItem!!.archive.readTrackMarkers(currentSongItem!!.trackName) }
+            } else {
+                activeMixMarkers
+            }
+
+            for (i in winIdx until prevUris.size) {
+                val durMs = prevDurs[i]
+                val timeLeftMs = (durMs - posMs).coerceAtLeast(0L)
+                if (remainingMs < timeLeftMs && areSegmentFilesValid(prevUris.subList(i, prevUris.size))) {
+                    if (!isValid()) return null
+                    val pins = collectAndPinNonStreamingFiles(
+                        prevUris,
+                        listOfNotNull(plannedPreRollCue?.djUri, plannedOverlayCue?.djUri)
+                    )
+                    return PrewarmedTakeOver(
+                        createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                        uris = prevUris,
+                        windowDurationsMs = prevDurs,
+                        baseWindowIndex = i,
+                        basePositionMs = posMs + remainingMs,
+                        totalDurMs = prevDurs.sum(),
+                        songItem = currentSongItem,
+                        segmentType = lastSegment,
+                        introItemCount = introItemCount,
+                        pendingBreakClips = pendingBreakClips.toList(),
+                        preRoll = plannedPreRollCue,
+                        overlayCue = plannedOverlayCue,
+                        pinnedFiles = pins,
+                        isContinuousMix = false,
+                        markContinuousMixStarted = false,
+                        mixMarkers = markers,
+                        mixSampleRate = activeMixSampleRate,
+                        consumedPreviousSegment = false,
+                        usedPrefetchedItem = false
+                    )
+                } else {
+                    remainingMs -= timeLeftMs
+                    posMs = 0L
+                }
+            }
+
+            var checkedPrefetched = false
+            var safety = 0
+            while (safety < 6 && isValid()) {
+                safety++
+                val forceLand = (safety >= 6)
+
+                if (!checkedPrefetched) {
+                    checkedPrefetched = true
+                    val prefetched = prefetchedItem
+                    if (prefetched != null && areSegmentFilesValid(prefetched.uris)) {
+                        val durs = prefetched.uris.map { getFileDurationMs(it) }
+                        val introCount = if (prefetched.plannedOverlayCue != null || prefetched.plannedPreRollCue != null) {
+                            0
+                        } else if (prefetched.uris.size > 1 && prefetched.segmentType == RadioSegmentType.Song) {
+                            1
+                        } else {
+                            0
+                        }
+                        for (i in prefetched.uris.indices) {
+                            val durMs = durs[i]
+                            if (remainingMs < durMs) {
+                                if (!isValid()) return null
+                                val pins = collectAndPinNonStreamingFiles(
+                                    prefetched.uris,
+                                    listOfNotNull(prefetched.plannedPreRollCue?.djUri, prefetched.plannedOverlayCue?.djUri)
+                                )
+                                return PrewarmedTakeOver(
+                                    createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                                    uris = prefetched.uris,
+                                    windowDurationsMs = durs,
+                                    baseWindowIndex = i,
+                                    basePositionMs = remainingMs,
+                                    totalDurMs = durs.sum(),
+                                    songItem = prefetched.songItem,
+                                    segmentType = prefetched.segmentType,
+                                    introItemCount = introCount,
+                                    pendingBreakClips = prefetched.pendingBreakClips ?: emptyList(),
+                                    preRoll = prefetched.plannedPreRollCue,
+                                    overlayCue = prefetched.plannedOverlayCue,
+                                    pinnedFiles = pins,
+                                    isContinuousMix = false,
+                                    markContinuousMixStarted = false,
+                                    mixMarkers = emptyList(),
+                                    mixSampleRate = 48000,
+                                    consumedPreviousSegment = true,
+                                    usedPrefetchedItem = true
+                                )
+                            }
+                            remainingMs -= durMs
+                        }
+                        if (forceLand) {
+                            val pins = collectAndPinNonStreamingFiles(
+                                prefetched.uris,
+                                listOfNotNull(prefetched.plannedPreRollCue?.djUri, prefetched.plannedOverlayCue?.djUri)
+                            )
+                            return PrewarmedTakeOver(
+                                createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                                uris = prefetched.uris,
+                                windowDurationsMs = durs,
+                                baseWindowIndex = 0,
+                                basePositionMs = 0L,
+                                totalDurMs = durs.sum(),
+                                songItem = prefetched.songItem,
+                                segmentType = prefetched.segmentType,
+                                introItemCount = introCount,
+                                pendingBreakClips = prefetched.pendingBreakClips ?: emptyList(),
+                                preRoll = prefetched.plannedPreRollCue,
+                                overlayCue = prefetched.plannedOverlayCue,
+                                pinnedFiles = pins,
+                                isContinuousMix = false,
+                                markContinuousMixStarted = false,
+                                mixMarkers = emptyList(),
+                                mixSampleRate = 48000,
+                                consumedPreviousSegment = true,
+                                usedPrefetchedItem = true
+                            )
+                        }
+                        continue
+                    }
+                }
+
+                if (isContinuousMix && allSongItems.isNotEmpty()) {
+                    return buildColdContinuousMixPrewarmSnapshot(isValid)
+                }
+                if (director.songQueue.isEmpty()) return null
+
+                val event = director.pickNextEvent(
+                    pickIntro = { song ->
+                        if (song.introKeys.isNotEmpty()) {
+                            Rpf7ClipRef(song.archive, song.introKeys[rng.nextInt(song.introKeys.size)])
+                        } else null
+                    },
+                    pickFallbackIntro = {
+                        if (director.timeOfDayDjQueue.isNotEmpty()) {
+                            director.timeOfDayDjQueue.next()
+                        } else if (director.generalDjQueue.isNotEmpty()) {
+                            director.generalDjQueue.next()
+                        } else null
+                    }
+                )
+                val resolved = resolveEventForPrewarm(
+                    event = event,
+                    remainingMs = remainingMs,
+                    forceLand = forceLand,
+                    isColdStart = false,
+                    isValid = isValid
+                )
+                if (resolved.snapshot != null) {
+                    return resolved.snapshot
+                }
+                remainingMs = resolved.remainingMs
+            }
+            return null
+        }
+
+        if (isContinuousMix && allSongItems.isNotEmpty()) {
+            return buildColdContinuousMixPrewarmSnapshot(isValid)
+        }
+        if (director.songQueue.isEmpty()) return null
+
+        val event = director.pickNextEvent(
+            pickIntro = { song ->
+                if (song.introKeys.isNotEmpty()) {
+                    Rpf7ClipRef(song.archive, song.introKeys[rng.nextInt(song.introKeys.size)])
+                } else null
+            },
+            pickFallbackIntro = {
+                if (director.timeOfDayDjQueue.isNotEmpty()) {
+                    director.timeOfDayDjQueue.next()
+                } else if (director.generalDjQueue.isNotEmpty()) {
+                    director.generalDjQueue.next()
+                } else null
+            }
+        )
+        return resolveEventForPrewarm(
+            event = event,
+            remainingMs = 0L,
+            forceLand = true,
+            isColdStart = true,
+            isValid = isValid
+        ).snapshot
+    }
+
+    private fun buildColdContinuousMixPrewarmSnapshot(isValid: () -> Boolean): PrewarmedTakeOver? {
+        val parts = getSortedContinuousMixParts()
+        if (parts.isEmpty()) return null
+        val item = parts[rng.nextInt(parts.size)]
+        val streamIdx = item.archive.getOrBuildStreamIndex(item.trackName) ?: return null
+        val mainUri = item.archive.buildStreamUri(streamIdx.entryName)
+        val dur = streamIdx.durationMs
+        durationCache[mainUri] = dur
+        val startOff = if (dur > 30_000L) {
+            rng.nextInt((dur - 30_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()).toLong()
+        } else {
+            0L
+        }
+        val markers = item.archive.readTrackMarkers(streamIdx.entryName)
+        if (!isValid()) return null
+        return PrewarmedTakeOver(
+            createdAtElapsedMs = SystemClock.elapsedRealtime(),
+            uris = listOf(mainUri),
+            windowDurationsMs = listOf(dur),
+            baseWindowIndex = 0,
+            basePositionMs = startOff,
+            totalDurMs = dur,
+            songItem = item,
+            segmentType = RadioSegmentType.Song,
+            introItemCount = 0,
+            pendingBreakClips = emptyList(),
+            preRoll = null,
+            overlayCue = null,
+            pinnedFiles = emptyList(),
+            isContinuousMix = true,
+            markContinuousMixStarted = true,
+            mixMarkers = markers,
+            mixSampleRate = streamIdx.sampleRate.coerceAtLeast(1),
+            consumedPreviousSegment = true,
+            usedPrefetchedItem = false
+        )
+    }
+
+    private data class EventPrewarmResult(
+        val snapshot: PrewarmedTakeOver?,
+        val remainingMs: Long
+    )
+
+    private fun resolveEventForPrewarm(
+        event: Gen3BroadcastEvent<Rpf7SongItem, Rpf7ClipRef>,
+        remainingMs: Long,
+        forceLand: Boolean,
+        isColdStart: Boolean,
+        isValid: () -> Boolean
+    ): EventPrewarmResult {
+        var rem = remainingMs
+        when (event) {
+            is Gen3BroadcastEvent.SongEvent -> {
+                val item = event.song
+                val mainUri = resolvePlaybackUri(item.archive, item.trackName)
+                val mainDurMs = if (mainUri != null) getFileDurationMs(mainUri) else 0L
+                if (!isColdStart && !forceLand && mainDurMs > 0L && rem >= mainDurMs) {
+                    rem -= mainDurMs
+                    return EventPrewarmResult(null, rem)
+                }
+
+                val markers = item.archive.readDjMarkers(item.trackName)
+                var landedSeekMs = if (isColdStart) 0L else if (forceLand && rem >= mainDurMs) 0L else rem.coerceAtLeast(0L)
+                val introEstDur = if (!isColdStart && !event.isFallbackIntroOverlay && event.songIntroOverlay != null) {
+                    event.songIntroOverlay.archive.getEntryDurationMs(event.songIntroOverlay.trackKey) ?: 0L
+                } else 0L
+                val pastIntroEnd = !isColdStart && markers != null && markers.hasIntroWindow && landedSeekMs >= markers.introEndMs
+                val pastStandaloneIntro = !isColdStart && (markers == null || !markers.hasIntroWindow) && introEstDur > 0L && landedSeekMs >= introEstDur
+                val skipIntroDecode = pastIntroEnd || pastStandaloneIntro
+                if (pastStandaloneIntro) {
+                    landedSeekMs = (landedSeekMs - introEstDur).coerceAtLeast(0L)
+                }
+
+                val built = buildSongSegmentMedia(
+                    event = event,
+                    mainUri = mainUri,
+                    markers = markers,
+                    skipIntroDecode = skipIntroDecode,
+                    pinToActive = false
+                )
+                if (built.uris.isEmpty() || !isValid()) {
+                    built.pinnedFiles.forEach { Rpf7Archive.unpinFile(it) }
+                    return EventPrewarmResult(null, rem)
+                }
+
+                val durs = built.uris.map { getFileDurationMs(it) }
+                val totalDur = durs.sum()
+                val (winIdx, seekPos) = if (isColdStart) {
+                    val coldOffset = if (!isMixItem(item) && built.uris.size == 1 && mainDurMs > 45_000L && built.overlayCue == null && built.preRollCue == null) {
+                        rng.nextInt(25_000).toLong()
+                    } else {
+                        0L
+                    }
+                    0 to coldOffset
+                } else {
+                    val landed = resolveLandedWindowPlayback(built.uris, landedSeekMs, built.preRollCue, built.overlayCue)
+                    landed.startWindowIndex to landed.startPositionMs
+                }
+
+                val snapMarkers = if (isMixItem(item)) item.archive.readTrackMarkers(item.trackName) else emptyList()
+                val snapSr = if (snapMarkers.isNotEmpty()) item.archive.getEntrySampleRate(item.trackName).coerceAtLeast(1) else 48000
+                return EventPrewarmResult(
+                    snapshot = PrewarmedTakeOver(
+                        createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                        uris = built.uris,
+                        windowDurationsMs = durs,
+                        baseWindowIndex = winIdx,
+                        basePositionMs = seekPos,
+                        totalDurMs = totalDur,
+                        songItem = item,
+                        segmentType = RadioSegmentType.Song,
+                        introItemCount = built.introCount,
+                        pendingBreakClips = emptyList(),
+                        preRoll = built.preRollCue,
+                        overlayCue = built.overlayCue,
+                        pinnedFiles = built.pinnedFiles,
+                        isContinuousMix = isMixItem(item),
+                        markContinuousMixStarted = false,
+                        mixMarkers = snapMarkers,
+                        mixSampleRate = snapSr,
+                        consumedPreviousSegment = true,
+                        usedPrefetchedItem = false
+                    ),
+                    remainingMs = rem
+                )
+            }
+            is Gen3BroadcastEvent.BreakBlockEvent -> {
+                val standalone = ArrayList(event.standaloneClips)
+                if (standalone.isEmpty()) return EventPrewarmResult(null, rem)
+                if (!isColdStart && !forceLand) {
+                    var landedIdx = -1
+                    for (idx in standalone.indices) {
+                        val clipRef = standalone[idx].clip
+                        val clipDurMs = clipRef.archive.getEntryDurationMs(clipRef.trackKey) ?: 0L
+                        if (clipDurMs > 0L && rem >= clipDurMs) {
+                            rem -= clipDurMs
+                        } else {
+                            landedIdx = idx
+                            break
+                        }
+                    }
+                    if (landedIdx < 0) return EventPrewarmResult(null, rem)
+
+                    val landedClip = standalone[landedIdx]
+                    val u = resolvePlaybackUri(landedClip.clip.archive, landedClip.clip.trackKey)
+                    if (u != null && isValid()) {
+                        val durMs = getFileDurationMs(u)
+                        val seekMs = rem.coerceIn(0L, (durMs - 1L).coerceAtLeast(0L))
+                        val pins = collectAndPinNonStreamingFiles(listOf(u))
+                        val remainingClips = if (landedIdx + 1 < standalone.size) {
+                            standalone.subList(landedIdx + 1, standalone.size).toList()
+                        } else emptyList()
+                        return EventPrewarmResult(
+                            snapshot = PrewarmedTakeOver(
+                                createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                                uris = listOf(u),
+                                windowDurationsMs = listOf(durMs),
+                                baseWindowIndex = 0,
+                                basePositionMs = seekMs,
+                                totalDurMs = durMs,
+                                songItem = null,
+                                segmentType = landedClip.segmentType,
+                                introItemCount = 0,
+                                pendingBreakClips = remainingClips,
+                                preRoll = null,
+                                overlayCue = null,
+                                pinnedFiles = pins,
+                                isContinuousMix = false,
+                                markContinuousMixStarted = false,
+                                mixMarkers = emptyList(),
+                                mixSampleRate = 48000,
+                                consumedPreviousSegment = true,
+                                usedPrefetchedItem = false
+                            ),
+                            remainingMs = rem
+                        )
+                    }
+                } else {
+                    val firstClip = standalone.removeAt(0)
+                    val u = resolvePlaybackUri(firstClip.clip.archive, firstClip.clip.trackKey)
+                    if (u != null && isValid()) {
+                        val durMs = getFileDurationMs(u)
+                        val pins = collectAndPinNonStreamingFiles(listOf(u))
+                        return EventPrewarmResult(
+                            snapshot = PrewarmedTakeOver(
+                                createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                                uris = listOf(u),
+                                windowDurationsMs = listOf(durMs),
+                                baseWindowIndex = 0,
+                                basePositionMs = 0L,
+                                totalDurMs = durMs,
+                                songItem = null,
+                                segmentType = firstClip.segmentType,
+                                introItemCount = 0,
+                                pendingBreakClips = standalone,
+                                preRoll = null,
+                                overlayCue = null,
+                                pinnedFiles = pins,
+                                isContinuousMix = false,
+                                markContinuousMixStarted = false,
+                                mixMarkers = emptyList(),
+                                mixSampleRate = 48000,
+                                consumedPreviousSegment = true,
+                                usedPrefetchedItem = false
+                            ),
+                            remainingMs = rem
+                        )
+                    }
+                }
+            }
+            is Gen3BroadcastEvent.InterludeEvent -> {
+                val ref = event.clip
+                val clipDurMs = ref.archive.getEntryDurationMs(ref.trackKey) ?: 0L
+                if (!isColdStart && !forceLand && clipDurMs > 0L && rem >= clipDurMs) {
+                    rem -= clipDurMs
+                    return EventPrewarmResult(null, rem)
+                }
+                val u = resolvePlaybackUri(ref.archive, ref.trackKey)
+                if (u != null && isValid()) {
+                    val durMs = getFileDurationMs(u)
+                    val seekMs = if (isColdStart || (forceLand && rem >= durMs)) 0L else rem.coerceIn(0L, (durMs - 1L).coerceAtLeast(0L))
+                    val pins = collectAndPinNonStreamingFiles(listOf(u))
+                    return EventPrewarmResult(
+                        snapshot = PrewarmedTakeOver(
+                            createdAtElapsedMs = SystemClock.elapsedRealtime(),
+                            uris = listOf(u),
+                            windowDurationsMs = listOf(durMs),
+                            baseWindowIndex = 0,
+                            basePositionMs = seekMs,
+                            totalDurMs = durMs,
+                            songItem = null,
+                            segmentType = event.segmentType,
+                            introItemCount = 0,
+                            pendingBreakClips = emptyList(),
+                            preRoll = null,
+                            overlayCue = null,
+                            pinnedFiles = pins,
+                            isContinuousMix = false,
+                            markContinuousMixStarted = false,
+                            mixMarkers = emptyList(),
+                            mixSampleRate = 48000,
+                            consumedPreviousSegment = true,
+                            usedPrefetchedItem = false
+                        ),
+                        remainingMs = rem
+                    )
+                }
+            }
+        }
+        return EventPrewarmResult(null, rem)
+    }
+
     override fun cancelSeamlessPrepare() {
         playGeneration.incrementAndGet()
         seamlessPrepareJob?.cancel()
@@ -620,6 +1421,7 @@ data class Rpf7ClipRef(
             seamlessPreparePrevSavedMixAbsMs = null
             plannedOverlayCue = null
             plannedPreRollCue = null
+            clearPendingPrewarmPins()
             unpinAllActive()
         }
     }
@@ -634,6 +1436,39 @@ data class Rpf7ClipRef(
         }
         cancelSeamlessPrepare()
         val currentGen = playGeneration.incrementAndGet()
+
+        val takenPrewarm = takeValidPrewarmedTakeOver()
+        if (takenPrewarm != null) {
+            val (prewarmed, prepared) = takenPrewarm
+            pendingPrewarmPinnedFiles = prewarmed.pinnedFiles
+            seamlessPrepareActive = true
+            GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: prewarm HIT (win=${prepared.startWindowIndex}, pos=${prepared.startPositionMs}ms)")
+            onReady {
+                if (playGeneration.get() != currentGen) return@onReady
+                val commitGen = playGeneration.incrementAndGet()
+                GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: seamless prewarm commit() (gen=$commitGen)")
+                val stalePins = pendingPrewarmPinnedFiles
+                pendingPrewarmPinnedFiles = emptyList()
+                seamlessPrepareActive = false
+                seamlessPreparePrevHasStartedMix = null
+                seamlessPreparePrevSavedMixAbsMs = null
+                applyPrewarmedStateForCommit(prewarmed, prepared)
+                for (p in stalePins) {
+                    Rpf7Archive.unpinFile(p)
+                }
+                isStationActive = true
+                _playing = true
+                player.radioPlaybackState = GTRadioPlayer.RadioState.PLAYING
+                player.repeatMode = Player.REPEAT_MODE_OFF
+                player.playWhenReady = false
+                if (prepared.preRoll != null && prepared.startWindowIndex == 0 && prepared.startPositionMs == 0L) {
+                    setStationOnlyMetadata()
+                }
+                launchPreparedPlayback(prepared, commitGen)
+            }
+            return
+        }
+
         seamlessPreparePrevHasStartedMix = hasStartedContinuousMix
         seamlessPreparePrevSavedMixAbsMs = savedMixAbsMs
         seamlessPrepareActive = true
@@ -697,6 +1532,8 @@ data class Rpf7ClipRef(
         }
         val gen = playGeneration.incrementAndGet()
         GTRadioLogger.log("Rpf7RadioStation[$stationTitle]: stop() called (gen=$gen)")
+        discardNeighborPrewarm()
+        clearPendingPrewarmPins()
         seamlessPrepareJob?.cancel()
         seamlessPrepareJob = null
         if (seamlessPrepareActive) {
@@ -784,6 +1621,8 @@ data class Rpf7ClipRef(
             mainHandler.post { play() }
             return
         }
+        discardNeighborPrewarm()
+        clearPendingPrewarmPins()
         seamlessPrepareJob?.cancel()
         seamlessPrepareJob = null
         seamlessPrepareActive = false
@@ -1705,7 +2544,7 @@ data class Rpf7ClipRef(
             }
         } else {
             executeStartPlayback(uris, startWindowIndex, startPositionMs, expectedGen, totalDur)
-            if (overlayCue != null && startWindowIndex == 0 && startPositionMs == 0L) {
+            if (overlayCue != null && startWindowIndex == 0 && startPositionMs <= overlayCue.djStartMs) {
                 // Case 1: Fits in intro
                 activeOverlayJob?.cancel()
                 activeOverlayJob = stationScope.launch {
