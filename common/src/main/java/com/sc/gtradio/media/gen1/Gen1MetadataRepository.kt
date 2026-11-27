@@ -134,6 +134,16 @@ object Gen1MetadataRepository {
     private val lcsCuesByFile = HashMap<String, ArrayList<Gen1TrackCue>>()
     private val vcsCuesByFile = HashMap<String, ArrayList<Gen1TrackCue>>()
 
+    private val verifiedTracklistViceCityFiles: Set<String> = setOf(
+        "flash.adf",
+        "vrock.adf",
+        "wave.adf",
+        "emotion.adf",
+        "fever.adf",
+        "wild.adf",
+        "espant.adf"
+    )
+
     fun isLoaded(): Boolean = loaded && (gta3CuesByFile.isNotEmpty() || viceCityCuesByFile.isNotEmpty())
 
     @Synchronized
@@ -176,20 +186,61 @@ object Gen1MetadataRepository {
         }
     }
 
-    fun getStationInfo(fileName: String, gameCode: Int = 0): Gen1StationInfo? {
-        val lower = fileName.lowercase().trim()
-        return when (gameCode) {
-            1 -> viceCityStationsByFile[lower]
-            2 -> gta3StationsByFile[lower]
-            3 -> lcsStationsByFile[lower]
-            4 -> vcsStationsByFile[lower]
-            else -> viceCityStationsByFile[lower] ?: gta3StationsByFile[lower] ?: lcsStationsByFile[lower] ?: vcsStationsByFile[lower]
+    private fun resolveStationFileKey(fileName: String, gameCode: Int = 0): String {
+        val trimmed = fileName.trim()
+        val lower = trimmed.lowercase()
+        val maps: List<Map<String, Gen1StationInfo>> = when (gameCode) {
+            1 -> listOf(viceCityStationsByFile)
+            2 -> listOf(gta3StationsByFile)
+            3 -> listOf(lcsStationsByFile)
+            4 -> listOf(vcsStationsByFile)
+            else -> listOf(viceCityStationsByFile, gta3StationsByFile, lcsStationsByFile, vcsStationsByFile)
         }
+        for (map in maps) {
+            if (map.containsKey(lower)) return lower
+        }
+        for (map in maps) {
+            val byDisplay = map.values.firstOrNull { it.displayName.equals(trimmed, ignoreCase = true) }
+            if (byDisplay != null) return byDisplay.fileNameKey
+        }
+        return lower
+    }
+
+    fun getStationInfo(fileName: String, gameCode: Int = 0): Gen1StationInfo? {
+        val key = resolveStationFileKey(fileName, gameCode)
+        return when (gameCode) {
+            1 -> viceCityStationsByFile[key]
+            2 -> gta3StationsByFile[key]
+            3 -> lcsStationsByFile[key]
+            4 -> vcsStationsByFile[key]
+            else -> viceCityStationsByFile[key] ?: gta3StationsByFile[key] ?: lcsStationsByFile[key] ?: vcsStationsByFile[key]
+        }
+    }
+
+    fun isVerifiedForTracklist(stationFileKey: String, gameCode: Int = 1, context: Context? = null): Boolean {
+        if (gameCode != 1) return false
+        val key = resolveStationFileKey(stationFileKey, gameCode)
+        if (key !in verifiedTracklistViceCityFiles) return false
+        ensureLoaded(context)
+        val cues = viceCityCuesByFile[key] ?: return false
+        return cues.any { it.cueType == Gen1CueType.SONG && it.endSec > it.startSec }
+    }
+
+    fun hasVerifiedSongCues(stationFileKey: String, gameCode: Int = 1, context: Context? = null): Boolean {
+        return isVerifiedForTracklist(stationFileKey, gameCode, context)
+    }
+
+    fun getVerifiedSongCues(stationFileKey: String, gameCode: Int = 1, context: Context? = null): List<Gen1TrackCue> {
+        if (!isVerifiedForTracklist(stationFileKey, gameCode, context)) return emptyList()
+        val key = resolveStationFileKey(stationFileKey, gameCode)
+        return viceCityCuesByFile[key]
+            ?.filter { it.cueType == Gen1CueType.SONG && it.endSec > it.startSec }
+            .orEmpty()
     }
 
     fun findCueAt(fileName: String, gameCode: Int, posSec: Int, context: Context? = null): Gen1TrackCue? {
         ensureLoaded(context)
-        val lower = fileName.lowercase().trim()
+        val lower = resolveStationFileKey(fileName, gameCode)
         val list = when (gameCode) {
             1 -> viceCityCuesByFile[lower]
             2 -> gta3CuesByFile[lower]

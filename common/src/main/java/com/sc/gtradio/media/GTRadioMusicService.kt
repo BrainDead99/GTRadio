@@ -775,6 +775,9 @@ open class GTRadioMusicService : MediaLibraryService() {
             radioPlayer.notifyAvailableCommandsChanged()
 
             if (station == null || group == null) return
+            if (activeTracklistStation !== station) {
+                activeTracklistStation?.stopCleanTrackPlayback()
+            }
             activeTracklistStation = station
             activeTracklistStationId = stationId
             activeTracklistTracks = tracks

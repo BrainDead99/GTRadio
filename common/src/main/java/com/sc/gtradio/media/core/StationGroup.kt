@@ -715,7 +715,10 @@ class StationGroup private constructor(
 
                 if (group.isGen1RawGroup && st.fileUri.isNotBlank()) {
                     val uri = Uri.parse(st.fileUri)
-                    val sfi = SimpleFileInfo(uri, st.name, uri.lastPathSegment ?: "", false)
+                    val resolvedFileName = st.archiveKey.ifBlank {
+                        uri.lastPathSegment?.substringAfterLast('/') ?: st.name
+                    }
+                    val sfi = SimpleFileInfo(uri, resolvedFileName, uri.lastPathSegment ?: "", false)
                     group.gen1StationFiles[st.mediaId] = sfi
                     group.gen1StationFiles[st.name] = sfi
                 } else if (group.isRpf3Group && st.fileUri.isNotBlank()) {

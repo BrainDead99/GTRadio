@@ -156,7 +156,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
                 }
 
                 override fun onTimelineChanged(timeline: Timeline, reason: Int) {
-                    if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+                    if (isTracklistMode && cleanSegmentDurationsMs.isNotEmpty() && getDurationMs() > 0L) {
                         listener.onTimelineChanged(this@GTRadioPlayer.currentTimeline, reason)
                     } else {
                         listener.onTimelineChanged(timeline, reason)
@@ -652,7 +652,7 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     }
 
     override fun getCurrentTimeline(): Timeline {
-        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+        if (isTracklistMode && cleanSegmentDurationsMs.isNotEmpty() && getDurationMs() > 0L) {
             val item = getCurrentMediaItem() ?: MediaItem.Builder().setMediaId("gt_radio_active").setMediaMetadata(activeSessionMetadata).build()
             return TracklistUnifiedTimeline(getDurationMs() * 1000L, item)
         }
@@ -671,28 +671,28 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
     }
 
     override fun getCurrentMediaItemIndex(): Int {
-        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+        if (isTracklistMode && cleanSegmentDurationsMs.isNotEmpty() && getDurationMs() > 0L) {
             return 0
         }
         return super.getCurrentMediaItemIndex()
     }
 
     override fun getCurrentPeriodIndex(): Int {
-        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+        if (isTracklistMode && cleanSegmentDurationsMs.isNotEmpty() && getDurationMs() > 0L) {
             return 0
         }
         return super.getCurrentPeriodIndex()
     }
 
     override fun getCurrentWindowIndex(): Int {
-        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+        if (isTracklistMode && cleanSegmentDurationsMs.isNotEmpty() && getDurationMs() > 0L) {
             return 0
         }
         return super.getCurrentWindowIndex()
     }
 
     override fun getMediaItemCount(): Int {
-        if (isTracklistMode && cleanSegmentDurationsMs.size > 1 && getDurationMs() > 0L) {
+        if (isTracklistMode && cleanSegmentDurationsMs.isNotEmpty() && getDurationMs() > 0L) {
             return 1
         }
         val superCount = super.getMediaItemCount()
@@ -862,6 +862,44 @@ class GTRadioPlayer(val exoPlayer: ExoPlayer) : ForwardingPlayer(exoPlayer) {
         val totalDur = getDurationMs()
         if (totalDur > 0L) {
             onCleanQueuePrepared?.invoke(totalDur)
+        }
+
+        cleanTrackListener = object : Player.Listener {
+            private var handled = false
+            override fun onPlaybackStateChanged(state: Int) {
+                if (state == Player.STATE_ENDED && !handled) {
+                    handled = true
+                    exoPlayer.removeListener(this)
+                    cleanTrackListener = null
+                    onEnded()
+                }
+            }
+        }
+        exoPlayer.addListener(cleanTrackListener!!)
+        exoPlayer.prepare()
+        playInternal()
+        notifyPlaybackStateChanged()
+    }
+
+    fun playCleanMediaSource(
+        mediaSource: MediaSource,
+        expectedDurationMs: Long = 0L,
+        onEnded: () -> Unit
+    ) {
+        stopCleanQueue()
+        cleanSegmentDurationsMs = if (expectedDurationMs > 0L) listOf(expectedDurationMs) else emptyList()
+        isTracklistMode = true
+        notifyAvailableCommandsChanged()
+        radioPlaybackState = RadioState.PLAYING
+        nextEnabled = true
+        previousEnabled = true
+        exoPlayer.repeatMode = Player.REPEAT_MODE_OFF
+        setSwitchFadeGainImmediate(1.0f)
+        setStreamMuted(false)
+        exoPlayer.setMediaSource(mediaSource)
+
+        if (expectedDurationMs > 0L) {
+            onCleanQueuePrepared?.invoke(expectedDurationMs)
         }
 
         cleanTrackListener = object : Player.Listener {

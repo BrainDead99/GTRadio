@@ -14,6 +14,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.source.ClippingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.preference.PreferenceManager
@@ -42,7 +43,7 @@ class Gen1RawRadioStation(
     override var adsEnabled: Boolean = true,
     override var weatherChatterEnabled: Boolean = false,
     override var newsReportsEnabled: Boolean = false
-) : RadioStation {
+) : RadioStation, TracklistCapableStation {
 
     override var onMetadataChanged: ((MediaMetadata) -> Unit)? = null
     override var stationName: String = (mediaItem.mediaMetadata.title ?: stationInfo?.displayName ?: fileName).toString()
@@ -60,7 +61,9 @@ class Gen1RawRadioStation(
     private var seamlessPrepareJob: Job? = null
     private var activePollerJob: Job? = null
     private var activeMetadataJob: Job? = null
+    private var activeTracklistJob: Job? = null
     private val playGeneration = AtomicInteger(0)
+    private val tracklistGeneration = AtomicInteger(0)
 
     override val supportsSeamlessPrepare: Boolean get() = true
 
@@ -447,6 +450,108 @@ class Gen1RawRadioStation(
         seamlessPrepareJob = null
     }
 
+    override fun supportsTracklist(): Boolean {
+        if (!isXorAdf) return false
+        Gen1MetadataRepository.ensureLoaded(context)
+        return Gen1MetadataRepository.isVerifiedForTracklist(fileName, gameCode, context) &&
+            getCleanTracks().isNotEmpty()
+    }
+
+    override fun getCleanTracks(): List<TracklistTrack> {
+        if (!isXorAdf) return emptyList()
+        Gen1MetadataRepository.ensureLoaded(context)
+        val stationMaxYear = stationInfo?.maxYear ?: 1986
+        return Gen1MetadataRepository.getVerifiedSongCues(fileName, gameCode, context).map { cue ->
+            TracklistTrack(
+                id = "gen1_clip_${cue.startSec}_${cue.endSec}",
+                title = cue.title,
+                artist = cue.artist,
+                stationName = stationTitle,
+                maxYear = if (cue.year in 1950..2025) maxOf(stationMaxYear, cue.year) else stationMaxYear
+            )
+        }
+    }
+
+    override fun playCleanTrack(
+        trackId: String,
+        player: GTRadioPlayer,
+        onTrackFinished: () -> Unit,
+        onMetadataReady: (title: String, artist: String, album: String, maxYear: Int) -> Unit
+    ) {
+        stop()
+        val token = tracklistGeneration.incrementAndGet()
+        activeTracklistJob?.cancel()
+        activeTracklistJob = stationScope.launch(StationDispatchers.ioDispatcher) {
+            try {
+                Gen1MetadataRepository.ensureLoaded(context)
+                AlbumHintRepository.ensureLoaded(context)
+                val cue = Gen1MetadataRepository.getVerifiedSongCues(fileName, gameCode, context)
+                    .firstOrNull { "gen1_clip_${it.startSec}_${it.endSec}".equals(trackId, ignoreCase = true) }
+                if (cue == null || cue.endSec <= cue.startSec) {
+                    GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: Verified cue not found for '$trackId'")
+                    withContext(Dispatchers.Main.immediate) {
+                        if (token == tracklistGeneration.get()) {
+                            onTrackFinished()
+                        }
+                    }
+                    return@launch
+                }
+
+                val officialAlbum = AlbumHintRepository.findHint(context, cue.artist, cue.title)
+                    ?.officialAlbum
+                    ?.ifBlank { null }
+                    ?: cue.album.ifBlank { stationTitle }
+                val stationMaxYear = stationInfo?.maxYear ?: 1986
+                val effectiveMaxYear = if (cue.year in 1950..2025) maxOf(stationMaxYear, cue.year) else stationMaxYear
+
+                withContext(Dispatchers.Main.immediate) {
+                    if (token == tracklistGeneration.get()) {
+                        onMetadataReady(cue.title, cue.artist, officialAlbum, effectiveMaxYear)
+                    }
+                }
+
+                val baseSource = ProgressiveMediaSource.Factory(
+                    AdfXorDataSource.Factory(context, xorMask = 0x22),
+                    DefaultExtractorsFactory().setConstantBitrateSeekingEnabled(true)
+                ).createMediaSource(
+                    MediaItem.Builder()
+                        .setUri(sourceUri)
+                        .setMimeType(MimeTypes.AUDIO_MPEG)
+                        .build()
+                )
+                val clippedSource = ClippingMediaSource.Builder(baseSource)
+                    .setStartPositionUs(cue.startSec.toLong() * 1_000_000L)
+                    .setEndPositionUs(cue.endSec.toLong() * 1_000_000L)
+                    .build()
+                val durationMs = (cue.endSec - cue.startSec).coerceAtLeast(1) * 1000L
+
+                withContext(Dispatchers.Main.immediate) {
+                    if (token != tracklistGeneration.get()) return@withContext
+                    player.playCleanMediaSource(clippedSource, durationMs) {
+                        if (token == tracklistGeneration.get()) {
+                            onTrackFinished()
+                        }
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                GTRadioLogger.e("Gen1RawRadioStation[$stationTitle]: Error playing clean track '$trackId'", t)
+                withContext(Dispatchers.Main.immediate) {
+                    if (token == tracklistGeneration.get()) {
+                        onTrackFinished()
+                    }
+                }
+            }
+        }
+    }
+
+    override fun stopCleanTrackPlayback() {
+        tracklistGeneration.incrementAndGet()
+        activeTracklistJob?.cancel()
+        activeTracklistJob = null
+    }
+
     override fun prepareForSeamlessTakeOver(
         onReady: (commit: () -> Unit) -> Unit,
         onFailed: () -> Unit
@@ -473,6 +578,7 @@ class Gen1RawRadioStation(
                     onReady {
                         if (prepToken != playGeneration.get()) return@onReady
                         val commitToken = playGeneration.incrementAndGet()
+                        stopCleanTrackPlayback()
                         GTRadioLogger.log("Gen1RawRadioStation[$stationTitle]: seamless commit() (file=$fileName, isXorAdf=$isXorAdf, token=$commitToken)")
                         isStationActive = true
                         _playing = true
@@ -535,11 +641,13 @@ class Gen1RawRadioStation(
     }
 
     override fun release() {
+        stopCleanTrackPlayback()
         stop()
         stationScope.cancel()
     }
 
     override fun play() {
+        stopCleanTrackPlayback()
         seamlessPrepareJob?.cancel()
         seamlessPrepareJob = null
         val token = playGeneration.incrementAndGet()
