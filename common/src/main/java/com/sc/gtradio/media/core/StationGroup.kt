@@ -71,34 +71,311 @@ class StationGroup private constructor(
     internal val rawStreamUris = HashMap<String, Uri>()
     private val archiveCache = HashMap<String, Gen2StreamArchive>()
 
+    internal data class Rpf7DlcSourceSpec(
+        val looseFolderName: String,
+        val packNames: List<String>,
+        val rpfFileNames: List<String>,
+        val innerDirFilter: String,
+        val allowedEntryNames: Set<String>? = null,
+        val entryNamePrefixOnCollision: String? = null
+    )
+
     internal data class Rpf7DlcDescriptor(
         val stationKey: String,
         val orderIndex: Int,
-        val looseFolderName: String,
-        val packNames: List<String>,
-        val rpfFileName: String,
-        val innerDirFilter: String,
-        val allowedEntryNames: Set<String>? = null
+        val sources: List<Rpf7DlcSourceSpec>
     )
 
     private data class DetectedRpf7DlcStation(
         val descriptor: Rpf7DlcDescriptor,
-        val mode: String,
-        val sourceUri: Uri,
-        val looseAwcFiles: List<SimpleFileInfo>? = null
+        val resolvedSources: List<Rpf7ArchiveSource>
     )
 
     companion object {
+        private val IFRUIT_ALLOWED_ENTRIES = setOf(
+            "act_up.awc", "aliens.awc", "back_to_basics_floating_points_remix.awc", "bop.awc",
+            "cash_shit.awc", "crime_pays.awc", "dance_in_the_water.awc", "everything_she_wants.awc",
+            "greaze_mode.awc", "highest_in_the_room.awc", "hot_remix.awc", "hundred_k_on_a_coupe.awc",
+            "i_need.awc", "killin_dem.awc", "kiss_and_tell.awc", "kitchen_kings.awc",
+            "knock_your_block_off.awc", "money_in_the_bank.awc", "must_be.awc", "numb_numb_juice.awc",
+            "opotoyi.awc", "original_format.awc", "pattern_chanel.awc", "pop_star.awc",
+            "tbd.awc", "w.awc", "wings.awc", "with_the_thing.awc",
+            "generic_id_*", "takeover_id_*", "custom_djsolo_*", "djsolo_*", "takeover_djsolo_*",
+            "intro.awc", "time.awc"
+        )
+
+        private val KULT_MUSIC_ALLOWED_ENTRIES = setOf(
+            "age_of_consent.awc", "alien_crime_lord.awc", "baby_i_love_you_so.awc", "cycle.awc",
+            "deep.awc", "down_on_the_street.awc", "drab_measure.awc", "eisbar.awc",
+            "faceless.awc", "four_shadows.awc", "girls_and_boys.awc", "going_back_to_cali.awc",
+            "hard_to_explain.awc", "human_fly.awc", "its_yours.awc", "lft_me_lonely.awc",
+            "liebe_auf_den_ersten_blick.awc", "many_tears_ago.awc", "nightclubbing.awc", "on_the_level.awc",
+            "pool_song.awc", "raga_madhuvanti.awc", "rock_and_roll.awc", "shes_lost_control.awc",
+            "so_it_goes.awc", "tainted_love.awc", "take_down_the_house.awc", "the_adults_are_talking.awc",
+            "this_is_the_day.awc", "time_bomb.awc", "too_much_money.awc", "tv_casualty.awc",
+            "typical_girls.awc", "where_no_eagles_fly.awc",
+            "id_*", "djsolo_*", "kult_ad*"
+        )
+
+        private val MOTOMAMI_ALLOWED_ENTRIES = setOf(
+            "100_dissin.awc", "418.awc", "a_pale.awc", "algo_como_tu.awc", "bank_robber.awc",
+            "body_so_good.awc", "bounce_n_break.awc", "bunny_rider.awc", "calle_luna.awc",
+            "con_altura.awc", "contigo.awc", "dipra.awc", "dominicana.awc", "dos_locos.awc",
+            "duro.awc", "klk.awc", "la_fama.awc", "linda.awc", "machote.awc",
+            "mi_coranzoncito.awc", "mi_nombre.awc", "mystery_love.awc", "nubes.awc",
+            "rockstar_made.awc", "salgo_calle.awc", "snap_and_roll.awc", "stress.awc",
+            "tukuntazo.awc", "tumbando_fronte.awc", "vamos_disco.awc", "volando_voy.awc",
+            "where_heart_is.awc", "xulita.awc",
+            "moto_ident_*", "motomami_dj_solo_*",
+            "motomami_intro.awc", "motomami_general.awc"
+        )
+
+        private val WCC_EXPANSION_ALLOWED_ENTRIES = buildSet {
+            addAll(
+                listOf(
+                    "addictive.awc", "california_love_single.awc", "cant_c_me_radio.awc",
+                    "family_affair.awc", "hello.awc", "in_da_club.awc", "jayz_trouble.awc",
+                    "keep_their_heads_ringin.awc", "lil_ghetto_boy.awc", "nas_is_coming.awc",
+                    "next_episode.awc", "no_diggity.awc", "outta_control.awc",
+                    "papa_lil_soldier.awc", "shit_hits_the_fan.awc", "u_better_recognize.awc",
+                    "xxplosive.awc",
+                    "dj_mono_solo_launch_*", "dj_mono_solo_post_launch_*",
+                    "intro.awc", "dd_general.awc", "pl_general.awc"
+                )
+            )
+            for (i in 1..25) {
+                add(String.format(Locale.ROOT, "id_%02d.awc", i))
+            }
+        }
+
+        private val RLS_EXPANSION_ALLOWED_ENTRIES = setOf(
+            "a_vibe.awc", "big_fish.awc", "big_subwoofer.awc", "blue_cheese.awc",
+            "chrome_hearts.awc", "coochie.awc", "feed_dope.awc", "flex.awc",
+            "go_live.awc", "hoppin_out.awc", "kung_fu.awc", "lemonhead.awc",
+            "lockjaw.awc", "low_life.awc", "miami_vice.awc", "my_type.awc",
+            "pick_the_phone_up.awc", "plain_jane.awc", "ski.awc", "so_fancy.awc",
+            "stir_fry.awc", "the_box.awc", "what_a_life.awc", "wow_freestyle.awc",
+            "xl.awc", "zeze.awc",
+            "dj_mono_solo_rls_*",
+            "hiphop_new_intro.awc", "hiphop_new_dd_general.awc", "hiphop_new_pl_general.awc"
+        )
+
         internal val RPF7_DLC_REGISTRY = listOf(
             Rpf7DlcDescriptor(
                 stationKey = "radio_20_thelab.rpf",
                 orderIndex = 20,
-                looseFolderName = "dlc_thelab",
-                packNames = listOf("patchday3ng"),
-                rpfFileName = "dlc.rpf",
-                innerDirFilter = "x64/audio/sfx/dlc_thelab"
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_thelab",
+                        packNames = listOf("patchday3ng"),
+                        rpfFileNames = listOf("dlc.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_thelab",
+                        allowedEntryNames = setOf("lab_p1.awc", "lab_p2.awc")
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_21_dlc_xm17.rpf",
+                orderIndex = 21,
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_christmas2017",
+                        packNames = listOf("mpchristmas2017"),
+                        rpfFileNames = listOf("dlc.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_christmas2017",
+                        allowedEntryNames = setOf("radio_xm17_p1.awc", "radio_xm17_p2.awc", "radio_xm17_p3.awc")
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_22_dlc_battle_mix1_radio.rpf",
+                orderIndex = 22,
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_battle_music",
+                        packNames = listOf("mpbattle"),
+                        rpfFileNames = listOf("dlc.rpf", "dlc1.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_battle_music",
+                        allowedEntryNames = setOf(
+                            "battle_mix1_radio_01.awc", "battle_mix1_radio_02.awc", "battle_mix1_radio_03.awc",
+                            "battle_mix2_radio_01.awc", "battle_mix2_radio_02.awc", "battle_mix2_radio_03.awc",
+                            "battle_mix3_radio_01.awc", "battle_mix3_radio_02.awc", "battle_mix3_radio_03.awc",
+                            "battle_mix4_radio_01.awc", "battle_mix4_radio_02.awc", "battle_mix4_radio_03.awc"
+                        )
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_23_dlc_xm19_radio.rpf",
+                orderIndex = 23,
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_heist3",
+                        packNames = listOf("mpheist3"),
+                        rpfFileNames = listOf("dlc.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_heist3",
+                        allowedEntryNames = IFRUIT_ALLOWED_ENTRIES
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_27_dlc_prhei4.rpf",
+                orderIndex = 27,
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_hei4_music",
+                        packNames = listOf("mpheist4"),
+                        rpfFileNames = listOf("dlc1.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_hei4_music",
+                        allowedEntryNames = setOf(
+                            "hei4_still_slipping_p1.awc", "hei4_still_slipping_p2.awc",
+                            "hei4_still_slipping_p3.awc", "hei4_still_slipping_p4.awc"
+                        )
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_34_dlc_hei4_kult.rpf",
+                orderIndex = 34,
+                sources = listOf(
+                    // Priority 1: 48 kHz Codec 7 MP3 voice banks in dlc_hei4/
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_hei4",
+                        packNames = listOf("mpheist4"),
+                        rpfFileNames = listOf("dlc.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_hei4",
+                        allowedEntryNames = setOf("general.awc", "intro.awc", "time.awc")
+                    ),
+                    // Priority 2 & 3: songs, IDs, solos & horoscope ads in dlc_hei4_music/ (excluding duplicate intro.awc)
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_hei4_music",
+                        packNames = listOf("mpheist4"),
+                        rpfFileNames = listOf("dlc.rpf", "dlc1.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_hei4_music",
+                        allowedEntryNames = KULT_MUSIC_ALLOWED_ENTRIES
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_35_dlc_hei4_mlr.rpf",
+                orderIndex = 35,
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_hei4_music",
+                        packNames = listOf("mpheist4"),
+                        rpfFileNames = listOf("dlc.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_hei4_music",
+                        allowedEntryNames = setOf(
+                            "hei4_mlr_km_beach_p1.awc", "hei4_mlr_km_beach_p2.awc", "hei4_mlr_km_beach_p3.awc", "hei4_mlr_km_beach_p4.awc",
+                            "hei4_mlr_km_club_p1.awc", "hei4_mlr_km_club_p2.awc", "hei4_mlr_km_club_p3.awc", "hei4_mlr_km_club_p4.awc",
+                            "hei4_mlr_mm_p1.awc", "hei4_mlr_mm_p2.awc", "hei4_mlr_mm_p3.awc", "hei4_mlr_mm_p4.awc",
+                            "hei4_mlr_pt_p1.awc", "hei4_mlr_pt_p2.awc", "hei4_mlr_pt_p3.awc"
+                        )
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_36_audioplayer.rpf",
+                orderIndex = 36,
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_tuner_music",
+                        packNames = listOf("mptuner"),
+                        rpfFileNames = listOf("dlc.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_tuner_music",
+                        allowedEntryNames = setOf(
+                            "tuner_ap_mix1_p1.awc", "tuner_ap_mix1_p2.awc", "tuner_ap_mix1_p3.awc", "tuner_ap_mix1_p4.awc", "tuner_ap_mix1_p5.awc",
+                            "tuner_ap_mix2_p1.awc", "tuner_ap_mix2_p2.awc", "tuner_ap_mix2_p3.awc",
+                            "tuner_ap_mix3_p1.awc", "tuner_ap_mix3_p2.awc", "tuner_ap_mix3_p3.awc", "tuner_ap_mix3_p4.awc"
+                        )
+                    ),
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_security_music",
+                        packNames = listOf("mpsecurity"),
+                        rpfFileNames = listOf("dlc.rpf", "dlc1.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_security_music",
+                        allowedEntryNames = setOf(
+                            "ap_dre_black_privilege.awc", "ap_dre_diamond_mind.awc",
+                            "ap_dre_eta.awc", "ap_dre_fallin_up.awc",
+                            "ap_dre_gospel.awc", "ap_dre_the_scenic_route.awc",
+                            "nez_you_wanna.awc", "schoolboy_lets_get_it.awc"
+                        )
+                    )
+                )
+            ),
+            Rpf7DlcDescriptor(
+                stationKey = "radio_37_motomami.rpf",
+                orderIndex = 37,
+                sources = listOf(
+                    Rpf7DlcSourceSpec(
+                        looseFolderName = "dlc_security_music",
+                        packNames = listOf("mpsecurity"),
+                        rpfFileNames = listOf("dlc.rpf", "dlc1.rpf"),
+                        innerDirFilter = "x64/audio/sfx/dlc_security_music",
+                        allowedEntryNames = MOTOMAMI_ALLOWED_ENTRIES
+                    )
+                )
             )
         )
+
+        internal val RPF7_BASE_EXPANSIONS: Map<String, List<Rpf7DlcSourceSpec>> = mapOf(
+            "radio_14_dance_02.rpf" to listOf(
+                Rpf7DlcSourceSpec(
+                    looseFolderName = "dlc_hei4_music",
+                    packNames = listOf("mpheist4"),
+                    rpfFileNames = listOf("dlc.rpf"),
+                    innerDirFilter = "x64/audio/sfx/dlc_hei4_music",
+                    allowedEntryNames = setOf("flylo_island_update_part_1.awc", "flylo_island_update_part_2.awc")
+                )
+            ),
+            "radio_13_jazz.rpf" to listOf(
+                Rpf7DlcSourceSpec(
+                    looseFolderName = "dlc_hei4_music",
+                    packNames = listOf("mpheist4"),
+                    rpfFileNames = listOf("dlc1.rpf"),
+                    innerDirFilter = "x64/audio/sfx/dlc_hei4_music",
+                    allowedEntryNames = setOf(
+                        "wwfm_island_update_part_1.awc", "wwfm_island_update_part_2.awc",
+                        "wwfm_island_update_part_3.awc", "wwfm_island_update_part_4.awc",
+                        "wwfm_island_update_part_5.awc"
+                    )
+                )
+            ),
+            "radio_09_hiphop_old.rpf" to listOf(
+                Rpf7DlcSourceSpec(
+                    looseFolderName = "dlc_security_music",
+                    packNames = listOf("mpsecurity"),
+                    rpfFileNames = listOf("dlc.rpf", "dlc1.rpf"),
+                    innerDirFilter = "x64/audio/sfx/dlc_security_music",
+                    allowedEntryNames = WCC_EXPANSION_ALLOWED_ENTRIES,
+                    entryNamePrefixOnCollision = "dlc_sec_"
+                )
+            ),
+            "radio_03_hiphop_new.rpf" to listOf(
+                Rpf7DlcSourceSpec(
+                    looseFolderName = "dlc_security_music",
+                    packNames = listOf("mpsecurity"),
+                    rpfFileNames = listOf("dlc.rpf", "dlc1.rpf"),
+                    innerDirFilter = "x64/audio/sfx/dlc_security_music",
+                    allowedEntryNames = RLS_EXPANSION_ALLOWED_ENTRIES
+                )
+            )
+        )
+
+        private fun matchesAllowedPattern(nameLower: String, patterns: Set<String>?): Boolean {
+            if (patterns.isNullOrEmpty()) return true
+            for (raw in patterns) {
+                val p = raw.trim().lowercase(Locale.ROOT)
+                if (p.isEmpty()) continue
+                if (p.endsWith("*")) {
+                    val prefix = p.removeSuffix("*")
+                    if (prefix.isNotEmpty() && nameLower.startsWith(prefix)) return true
+                } else if (nameLower == p) {
+                    return true
+                }
+            }
+            return false
+        }
         private val DLC_CONTAINER_DIRS = setOf("dlcpacks", "dlc_raw")
         private val GEN2_STREAM_CODES = setOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG", "TK", "ADVERTS")
         private val SKIP_DIRS = setOf(
@@ -314,9 +591,18 @@ class StationGroup private constructor(
             if (lowerDirName in DLC_CONTAINER_DIRS || lowerDirName == "dlc_radio_19_user" || lowerDirName == "radio_19_user") {
                 return true
             }
-            return RPF7_DLC_REGISTRY.any { d ->
-                d.looseFolderName.equals(lowerDirName, ignoreCase = true) ||
-                    d.packNames.any { p -> p.equals(lowerDirName, ignoreCase = true) }
+            val matchesStation = RPF7_DLC_REGISTRY.any { d ->
+                d.sources.any { s ->
+                    s.looseFolderName.equals(lowerDirName, ignoreCase = true) ||
+                        s.packNames.any { p -> p.equals(lowerDirName, ignoreCase = true) }
+                }
+            }
+            if (matchesStation) return true
+            return RPF7_BASE_EXPANSIONS.values.any { specs ->
+                specs.any { s ->
+                    s.looseFolderName.equals(lowerDirName, ignoreCase = true) ||
+                        s.packNames.any { p -> p.equals(lowerDirName, ignoreCase = true) }
+                }
             }
         }
 
@@ -454,13 +740,25 @@ class StationGroup private constructor(
                     } else {
                         looseList?.firstOrNull()?.uri ?: resolvedDoc.uri
                     }
+                    val extraList = st.extraSources?.map { src ->
+                        Rpf7ArchiveSource(
+                            rpfUri = Uri.parse(src.rpfUri),
+                            innerDirFilter = src.innerDirFilter,
+                            allowedEntryNames = src.allowedEntryNames?.takeIf { it.isNotEmpty() }?.toHashSet(),
+                            looseAwcFiles = src.looseAwcFiles?.map {
+                                SimpleFileInfo(Uri.parse(it.uri), it.name, it.id, it.isDirectory)
+                            },
+                            entryNamePrefixOnCollision = src.entryNamePrefixOnCollision
+                        )
+                    } ?: emptyList()
                     val arch = Rpf7Archive(
                         context = context,
                         rpfName = rName,
                         sourceUri = sourceUri,
                         innerDirFilter = st.innerDirFilter,
                         allowedEntryNames = allowedSet,
-                        looseAwcFiles = looseList
+                        looseAwcFiles = looseList,
+                        extraSources = extraList
                     )
                     group.rpf7StationArchives[st.mediaId] = arch
                     group.rpf7StationArchives[st.name] = arch
@@ -858,13 +1156,97 @@ init {
         return matched
     }
 
-    private fun detectRpf7DlcStations(allFiles: Array<SimpleFileInfo>): List<DetectedRpf7DlcStation> {
+    private fun resolveDlcSourceSpec(
+        ownerKey: String,
+        spec: Rpf7DlcSourceSpec,
+        directDirs: Map<String, SimpleFileInfo>,
+        getChildren: (String, SimpleFileInfo) -> Array<SimpleFileInfo>
+    ): List<Rpf7ArchiveSource> {
+        // Option B (preferred): extracted loose .awc subfolder (e.g. dlc_thelab/*.awc)
+        val looseDir = directDirs[spec.looseFolderName.lowercase(Locale.ROOT)]
+        if (looseDir != null) {
+            val awcFiles = getChildren("loose:${looseDir.id}", looseDir).filter { f ->
+                !f.isDirectory &&
+                    f.name.lowercase(Locale.ROOT).endsWith(".awc") &&
+                    matchesAllowedPattern(f.name.lowercase(Locale.ROOT), spec.allowedEntryNames)
+            }
+            if (awcFiles.isNotEmpty()) {
+                GTRadioLogger.log("resolveDlcSourceSpec[$ownerKey]: Resolved via Option B loose folder '${looseDir.name}' (${awcFiles.size} .awc files)")
+                return listOf(
+                    Rpf7ArchiveSource(
+                        rpfUri = looseDir.uri,
+                        innerDirFilter = null,
+                        allowedEntryNames = spec.allowedEntryNames,
+                        looseAwcFiles = awcFiles,
+                        entryNamePrefixOnCollision = spec.entryNamePrefixOnCollision
+                    )
+                )
+            }
+        }
+
+        // Option C (fallback): raw <pack>/<rpfFile> or dlcpacks/<pack>/<rpfFile> or dlc_raw/<pack>/<rpfFile>
+        val resolved = ArrayList<Rpf7ArchiveSource>()
+        for (packName in spec.packNames) {
+            val packLower = packName.lowercase(Locale.ROOT)
+            val candidatePackDirs = ArrayList<Pair<String, SimpleFileInfo>>()
+            directDirs[packLower]?.let { candidatePackDirs.add(it.name to it) }
+            for (containerKey in DLC_CONTAINER_DIRS) {
+                val containerDir = directDirs[containerKey] ?: continue
+                val containerChildren = getChildren("container:${containerDir.id}", containerDir)
+                containerChildren.firstOrNull {
+                    it.isDirectory && (it.name.equals("dlc_radio_19_user", ignoreCase = true) || it.name.equals("radio_19_user", ignoreCase = true))
+                }?.let { ignoredSub ->
+                    GTRadioLogger.log("resolveDlcSourceSpec: Ignoring Self Radio folder '${containerDir.name}/${ignoredSub.name}' (excluded)")
+                }
+                val nestedPackDir = containerChildren.firstOrNull {
+                    it.isDirectory && it.name.equals(packLower, ignoreCase = true)
+                } ?: continue
+                candidatePackDirs.add("${containerDir.name}/${nestedPackDir.name}" to nestedPackDir)
+            }
+
+            for ((packPathDesc, packDir) in candidatePackDirs) {
+                val packFiles = getChildren("pack:${packDir.id}", packDir)
+                for (rpfFileName in spec.rpfFileNames) {
+                    val match = packFiles.firstOrNull {
+                        !it.isDirectory && it.name.equals(rpfFileName, ignoreCase = true)
+                    }
+                    if (match != null) {
+                        GTRadioLogger.log("resolveDlcSourceSpec[$ownerKey]: Resolved via Option C '$packPathDesc/${match.name}' (filter=${spec.innerDirFilter})")
+                        resolved.add(
+                            Rpf7ArchiveSource(
+                                rpfUri = match.uri,
+                                innerDirFilter = spec.innerDirFilter,
+                                allowedEntryNames = spec.allowedEntryNames,
+                                looseAwcFiles = null,
+                                entryNamePrefixOnCollision = spec.entryNamePrefixOnCollision
+                            )
+                        )
+                    }
+                }
+                if (resolved.isNotEmpty()) return resolved
+            }
+        }
+        return emptyList()
+    }
+
+    private fun buildRpf7DirIndex(
+        allFiles: Array<SimpleFileInfo>
+    ): Pair<HashMap<String, SimpleFileInfo>, (String, SimpleFileInfo) -> Array<SimpleFileInfo>> {
         val directDirs = HashMap<String, SimpleFileInfo>()
         for (f in allFiles) {
             if (f.isDirectory) {
                 directDirs[f.name.lowercase(Locale.ROOT)] = f
             }
         }
+        val dirChildrenCache = HashMap<String, Array<SimpleFileInfo>>()
+        val getChildren: (String, SimpleFileInfo) -> Array<SimpleFileInfo> = { cacheKey, dirInfo ->
+            dirChildrenCache.getOrPut(cacheKey) { listChildFilesForDoc(folderDoc, context, dirInfo) }
+        }
+        return directDirs to getChildren
+    }
+
+    private fun detectRpf7DlcStations(allFiles: Array<SimpleFileInfo>): List<DetectedRpf7DlcStation> {
+        val (directDirs, getChildren) = buildRpf7DirIndex(allFiles)
 
         directDirs.values.firstOrNull {
             val n = it.name.lowercase(Locale.ROOT)
@@ -873,87 +1255,40 @@ init {
             GTRadioLogger.log("detectRpf7DlcStations: Ignoring Self Radio folder '${ignoredDir.name}' (excluded)")
         }
 
-        val dirChildrenCache = HashMap<String, Array<SimpleFileInfo>>()
-        fun getChildren(cacheKey: String, dirInfo: SimpleFileInfo): Array<SimpleFileInfo> {
-            return dirChildrenCache.getOrPut(cacheKey) { listChildFilesForDoc(folderDoc, context, dirInfo) }
-        }
-
         val detected = ArrayList<DetectedRpf7DlcStation>()
         for (desc in RPF7_DLC_REGISTRY) {
-            // Option B (preferred): extracted loose .awc subfolder (e.g. dlc_thelab/*.awc)
-            val looseDir = directDirs[desc.looseFolderName.lowercase(Locale.ROOT)]
-            if (looseDir != null) {
-                val allowedLower = desc.allowedEntryNames?.map { it.lowercase(Locale.ROOT) }?.toHashSet()
-                val awcFiles = getChildren("loose:${looseDir.id}", looseDir).filter { f ->
-                    !f.isDirectory &&
-                        f.name.lowercase(Locale.ROOT).endsWith(".awc") &&
-                        (allowedLower == null || allowedLower.contains(f.name.lowercase(Locale.ROOT)))
-                }
-                if (awcFiles.isNotEmpty()) {
-                    GTRadioLogger.log("detectRpf7DlcStations: Detected ${desc.stationKey} via Option B loose folder '${looseDir.name}' (${awcFiles.size} .awc files)")
-                    detected.add(
-                        DetectedRpf7DlcStation(
-                            descriptor = desc,
-                            mode = "Option B",
-                            sourceUri = looseDir.uri,
-                            looseAwcFiles = awcFiles
-                        )
-                    )
-                    continue
-                }
+            val resolvedSources = ArrayList<Rpf7ArchiveSource>()
+            for (spec in desc.sources) {
+                resolvedSources.addAll(resolveDlcSourceSpec(desc.stationKey, spec, directDirs, getChildren))
             }
-
-            // Option C (fallback): raw <pack>/dlc.rpf or dlcpacks/<pack>/dlc.rpf or dlc_raw/<pack>/dlc.rpf
-            var resolvedRpf: SimpleFileInfo? = null
-            var resolvedPathDesc = ""
-            for (packName in desc.packNames) {
-                val packLower = packName.lowercase(Locale.ROOT)
-                val directPackDir = directDirs[packLower]
-                if (directPackDir != null) {
-                    val match = getChildren("pack:${directPackDir.id}", directPackDir).firstOrNull {
-                        !it.isDirectory && it.name.equals(desc.rpfFileName, ignoreCase = true)
-                    }
-                    if (match != null) {
-                        resolvedRpf = match
-                        resolvedPathDesc = "${directPackDir.name}/${match.name}"
-                        break
-                    }
-                }
-                for (containerKey in DLC_CONTAINER_DIRS) {
-                    val containerDir = directDirs[containerKey] ?: continue
-                    val containerChildren = getChildren("container:${containerDir.id}", containerDir)
-                    containerChildren.firstOrNull {
-                        it.isDirectory && (it.name.equals("dlc_radio_19_user", ignoreCase = true) || it.name.equals("radio_19_user", ignoreCase = true))
-                    }?.let { ignoredSub ->
-                        GTRadioLogger.log("detectRpf7DlcStations: Ignoring Self Radio folder '${containerDir.name}/${ignoredSub.name}' (excluded)")
-                    }
-                    val nestedPackDir = containerChildren.firstOrNull {
-                        it.isDirectory && it.name.equals(packLower, ignoreCase = true)
-                    } ?: continue
-                    val match = getChildren("pack:${nestedPackDir.id}", nestedPackDir).firstOrNull {
-                        !it.isDirectory && it.name.equals(desc.rpfFileName, ignoreCase = true)
-                    }
-                    if (match != null) {
-                        resolvedRpf = match
-                        resolvedPathDesc = "${containerDir.name}/${nestedPackDir.name}/${match.name}"
-                        break
-                    }
-                }
-                if (resolvedRpf != null) break
-            }
-
-            if (resolvedRpf != null) {
-                GTRadioLogger.log("detectRpf7DlcStations: Detected ${desc.stationKey} via Option C raw RPF '$resolvedPathDesc' (filter=${desc.innerDirFilter})")
-                detected.add(
-                    DetectedRpf7DlcStation(
-                        descriptor = desc,
-                        mode = "Option C",
-                        sourceUri = resolvedRpf.uri
-                    )
-                )
+            if (resolvedSources.isNotEmpty()) {
+                detected.add(DetectedRpf7DlcStation(descriptor = desc, resolvedSources = resolvedSources))
             }
         }
         return detected
+    }
+
+    private fun resolveRpf7BaseExpansions(
+        allFiles: Array<SimpleFileInfo>,
+        stationRpfFiles: List<SimpleFileInfo>
+    ): Map<String, List<Rpf7ArchiveSource>> {
+        if (stationRpfFiles.isEmpty()) return emptyMap()
+        val presentKeys = stationRpfFiles.map { it.name.lowercase(Locale.ROOT) }.toSet()
+        val relevant = RPF7_BASE_EXPANSIONS.filterKeys { it in presentKeys }
+        if (relevant.isEmpty()) return emptyMap()
+
+        val (directDirs, getChildren) = buildRpf7DirIndex(allFiles)
+        val result = HashMap<String, List<Rpf7ArchiveSource>>()
+        for ((stKey, specs) in relevant) {
+            val sources = ArrayList<Rpf7ArchiveSource>()
+            for (spec in specs) {
+                sources.addAll(resolveDlcSourceSpec(stKey, spec, directDirs, getChildren))
+            }
+            if (sources.isNotEmpty()) {
+                result[stKey] = sources
+            }
+        }
+        return result
     }
 
     private fun detectIsEnhanced(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>): Boolean {
@@ -1016,6 +1351,8 @@ init {
             }
         }
 
+        val baseExpansions = resolveRpf7BaseExpansions(allFiles, stationRpfFiles)
+
         data class PendingRpf7Station(val order: Int, val stKey: String, val arch: Rpf7Archive)
         val seenKeys = HashSet<String>()
         val candidates = ArrayList<PendingRpf7Station>(stationRpfFiles.size + dlcStations.size)
@@ -1024,29 +1361,35 @@ init {
             val stKey = stFile.name.lowercase(Locale.ROOT)
             if (!seenKeys.add(stKey)) continue
             val orderMatch = Regex("radio_(\\d+)").find(stKey)?.groupValues?.get(1)?.toIntOrNull()
-            candidates.add(PendingRpf7Station(orderMatch ?: 999, stKey, Rpf7Archive(context, stFile.name, stFile.uri)))
+            val extraSources = baseExpansions[stKey].orEmpty()
+            candidates.add(
+                PendingRpf7Station(
+                    order = orderMatch ?: 999,
+                    stKey = stKey,
+                    arch = Rpf7Archive(
+                        context = context,
+                        rpfName = stFile.name,
+                        sourceUri = stFile.uri,
+                        extraSources = extraSources
+                    )
+                )
+            )
         }
 
         for (dlc in dlcStations) {
             val stKey = dlc.descriptor.stationKey.lowercase(Locale.ROOT)
             if (!seenKeys.add(stKey)) continue
-            val arch = if (dlc.looseAwcFiles != null) {
-                Rpf7Archive(
-                    context = context,
-                    rpfName = dlc.descriptor.stationKey,
-                    sourceUri = dlc.sourceUri,
-                    allowedEntryNames = dlc.descriptor.allowedEntryNames,
-                    looseAwcFiles = dlc.looseAwcFiles
-                )
-            } else {
-                Rpf7Archive(
-                    context = context,
-                    rpfName = dlc.descriptor.stationKey,
-                    sourceUri = dlc.sourceUri,
-                    innerDirFilter = dlc.descriptor.innerDirFilter,
-                    allowedEntryNames = dlc.descriptor.allowedEntryNames
-                )
-            }
+            val first = dlc.resolvedSources.firstOrNull() ?: continue
+            val extra = dlc.resolvedSources.drop(1)
+            val arch = Rpf7Archive(
+                context = context,
+                rpfName = dlc.descriptor.stationKey,
+                sourceUri = first.rpfUri,
+                innerDirFilter = first.innerDirFilter,
+                allowedEntryNames = first.allowedEntryNames,
+                looseAwcFiles = first.looseAwcFiles,
+                extraSources = extra
+            )
             candidates.add(PendingRpf7Station(dlc.descriptor.orderIndex, stKey, arch))
         }
 
@@ -1538,6 +1881,7 @@ init {
             var innerFilter: String? = null
             var allowedNames: List<String>? = null
             var looseFiles: List<LibraryIndexCache.CachedSimpleFile>? = null
+            var extraSourcesList: List<LibraryIndexCache.CachedArchiveSource>? = null
             if (isRpf3Group) {
                 val a = rpf3StationArchives[st.mediaId]
                 fUri = a?.sourceUri?.toString() ?: ""
@@ -1556,6 +1900,22 @@ init {
                         name = it.name,
                         id = it.id,
                         isDirectory = it.isDirectory
+                    )
+                }
+                extraSourcesList = a?.extraSources?.takeIf { it.isNotEmpty() }?.map { src ->
+                    LibraryIndexCache.CachedArchiveSource(
+                        rpfUri = src.rpfUri.toString(),
+                        innerDirFilter = src.innerDirFilter,
+                        allowedEntryNames = src.allowedEntryNames?.sorted(),
+                        looseAwcFiles = src.looseAwcFiles?.map { f ->
+                            LibraryIndexCache.CachedSimpleFile(
+                                uri = f.uri.toString(),
+                                name = f.name,
+                                id = f.id,
+                                isDirectory = f.isDirectory
+                            )
+                        },
+                        entryNamePrefixOnCollision = src.entryNamePrefixOnCollision
                     )
                 }
             } else if (isGen1RawGroup) {
@@ -1579,7 +1939,8 @@ init {
                 extras = exMap,
                 innerDirFilter = innerFilter,
                 allowedEntryNames = allowedNames,
-                looseAwcFiles = looseFiles
+                looseAwcFiles = looseFiles,
+                extraSources = extraSourcesList
             )
         }
 

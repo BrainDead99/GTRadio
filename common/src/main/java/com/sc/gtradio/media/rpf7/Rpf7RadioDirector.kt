@@ -25,37 +25,49 @@ data class Rpf7StationConfig(
     val isContinuousMix: Boolean,
     val advertPool: Rpf7AdvertPool,
     val allowsNews: Boolean,
-    val allowsBackToBackAds: Boolean
+    val allowsBackToBackAds: Boolean,
+    val useIdentsInsteadOfAds: Boolean = false,
+    val useStationLocalAdvertsOnly: Boolean = false
 ) {
     companion object {
         fun resolve(rpfName: String, stationKey: String): Rpf7StationConfig {
             val key = stationKey.lowercase(Locale.ROOT)
             val rpf = rpfName.lowercase(Locale.ROOT)
 
-            val isTalk = key.contains("radio_05") || key.contains("radio_11") || key.contains("talk") ||
-                    rpf.contains("radio_05") || rpf.contains("radio_11") || rpf.contains("talk")
+            fun matches(token: String): Boolean = key.contains(token) || rpf.contains(token)
 
-            val isMix = key.contains("radio_07") || key.contains("radio_08") || key.contains("radio_13") || key.contains("radio_14") ||
-                    key.contains("radio_20") ||
-                    rpf.contains("radio_07") || rpf.contains("radio_08") || rpf.contains("radio_13") || rpf.contains("radio_14") ||
-                    rpf.contains("radio_20") ||
+            val isTalk = matches("radio_05") || matches("radio_11") || key.contains("talk") || rpf.contains("talk")
+
+            val isIfruit = matches("radio_23_dlc_xm19_radio") || key.contains("ifruit")
+            val isKult = matches("radio_34_dlc_hei4_kult") || key.contains("kult")
+            val isMotomami = matches("radio_37_motomami") || key.contains("motomami")
+
+            val isMix = matches("radio_07") || matches("radio_08") || matches("radio_13") || matches("radio_14") ||
+                    matches("radio_20_thelab") || matches("radio_21_dlc_xm17") ||
+                    matches("radio_22_dlc_battle_mix1_radio") || matches("radio_27_dlc_prhei4") ||
+                    matches("radio_35_dlc_hei4_mlr") || matches("radio_36_audioplayer") ||
                     key.contains("soulwax") || key.contains("eastlos") || key.contains("worldwide") || key.contains("flylo") ||
-                    key.contains("thelab")
+                    key.contains("thelab") || key.contains("blonded") || key.contains("underground") ||
+                    key.contains("still slipping") || key.contains("music locker") || key.contains("media player")
 
-            val isBlaineCounty = key.contains("radio_11") || rpf.contains("radio_11") || key.contains("11_talk_02")
-            val isRebelRadio = key.contains("radio_06") || rpf.contains("radio_06") || key.contains("country")
+            val isBlaineCounty = matches("radio_11") || key.contains("11_talk_02")
+            val isRebelRadio = matches("radio_06") || key.contains("country")
+
+            val useIdentsInsteadOfAds = isIfruit || isMotomami
+            val useStationLocalAdvertsOnly = isKult
 
             val advertPool = when {
-                isMix -> Rpf7AdvertPool.NONE
+                isMix || useIdentsInsteadOfAds || useStationLocalAdvertsOnly -> Rpf7AdvertPool.NONE
                 isRebelRadio || isBlaineCounty -> Rpf7AdvertPool.COUNTRY
                 else -> Rpf7AdvertPool.GENERAL
             }
 
-            val allowsNews = !isMix && !isBlaineCounty // Blaine County Radio has NO_NEWS flag in GTA V
+            // Blaine County Radio & all standalone DLC stations do not air Weazel News
+            val allowsNews = !isMix && !isBlaineCounty && !useIdentsInsteadOfAds && !useStationLocalAdvertsOnly
 
-            val isNoB2B = key.contains("radio_04") || rpf.contains("radio_04") || key.contains("punk") || // Channel X
-                    key.contains("radio_12") || rpf.contains("radio_12") || key.contains("reggae") || // Blue Ark
-                    key.contains("radio_18") || rpf.contains("radio_18") || key.contains("90s_rock") // Vinewood Boulevard
+            val isNoB2B = matches("radio_04") || key.contains("punk") || // Channel X
+                    matches("radio_12") || key.contains("reggae") || // Blue Ark
+                    matches("radio_18") || key.contains("90s_rock") // Vinewood Boulevard
 
             val allowsBackToBackAds = !isNoB2B
 
@@ -64,7 +76,9 @@ data class Rpf7StationConfig(
                 isContinuousMix = isMix,
                 advertPool = advertPool,
                 allowsNews = allowsNews,
-                allowsBackToBackAds = allowsBackToBackAds
+                allowsBackToBackAds = allowsBackToBackAds,
+                useIdentsInsteadOfAds = useIdentsInsteadOfAds,
+                useStationLocalAdvertsOnly = useStationLocalAdvertsOnly
             )
         }
     }
@@ -93,6 +107,7 @@ class Rpf7RadioDirector<TSong, TClip>(
 
     var morningDjList: List<TClip> = emptyList()
     var eveningDjList: List<TClip> = emptyList()
+    var nightDjList: List<TClip> = emptyList()
 
     private var activeTodBucket: TimeOfDayBucket? = null
 
@@ -128,7 +143,8 @@ class Rpf7RadioDirector<TSong, TClip>(
             activeTodBucket = currentBucket
             val list = when (currentBucket) {
                 TimeOfDayBucket.MORNING -> morningDjList
-                TimeOfDayBucket.EVENING, TimeOfDayBucket.NIGHT -> eveningDjList.ifEmpty { morningDjList }
+                TimeOfDayBucket.EVENING -> eveningDjList.ifEmpty { nightDjList.ifEmpty { morningDjList } }
+                TimeOfDayBucket.NIGHT -> nightDjList.ifEmpty { eveningDjList.ifEmpty { morningDjList } }
                 TimeOfDayBucket.AFTERNOON, TimeOfDayBucket.GENERAL -> emptyList() // Cleanly fall back to generalDjQueue without duplicating
             }
             timeOfDayDjQueue.reset(list)
@@ -137,6 +153,12 @@ class Rpf7RadioDirector<TSong, TClip>(
 
     fun canRunBreak(): Boolean {
         if (config.isContinuousMix) return false
+        if (config.useIdentsInsteadOfAds) {
+            return idQueue.isNotEmpty() || soloQueue.isNotEmpty()
+        }
+        if (config.useStationLocalAdvertsOnly) {
+            return adsEnabled && advertQueue.isNotEmpty()
+        }
         val canAd = adsEnabled && config.advertPool != Rpf7AdvertPool.NONE && advertQueue.isNotEmpty()
         val canNews = newsReportsEnabled && config.allowsNews && newsQueue.isNotEmpty()
         return canAd || canNews
@@ -144,8 +166,26 @@ class Rpf7RadioDirector<TSong, TClip>(
 
     private fun planBreakBlock(): Gen3BroadcastEvent.BreakBlockEvent<TClip> {
         val standalone = ArrayList<StandaloneBreakClip<TClip>>()
-        val canAd = adsEnabled && config.advertPool != Rpf7AdvertPool.NONE && advertQueue.isNotEmpty()
-        val canNews = newsReportsEnabled && config.allowsNews && newsQueue.isNotEmpty()
+
+        if (config.useIdentsInsteadOfAds) {
+            if (soloQueue.isNotEmpty() && (idQueue.isEmpty() || rng.nextInt(100) < 45)) {
+                standalone.add(StandaloneBreakClip(soloQueue.next(), RadioSegmentType.DJChatter, "BREAK_SOLO"))
+            }
+            if (idQueue.isNotEmpty()) {
+                standalone.add(StandaloneBreakClip(idQueue.next(), RadioSegmentType.Announcer, "RETURN_ID"))
+            }
+            return Gen3BroadcastEvent.BreakBlockEvent(
+                outroDryLeadIn = null,
+                outroLeadInRole = null,
+                standaloneClips = standalone
+            )
+        }
+
+        val canAd = adsEnabled &&
+            (config.useStationLocalAdvertsOnly || config.advertPool != Rpf7AdvertPool.NONE) &&
+            advertQueue.isNotEmpty()
+        val canNews = !config.useStationLocalAdvertsOnly &&
+            newsReportsEnabled && config.allowsNews && newsQueue.isNotEmpty()
 
         var outroLeadIn: TClip? = null
         var outroLeadInRole: String? = null

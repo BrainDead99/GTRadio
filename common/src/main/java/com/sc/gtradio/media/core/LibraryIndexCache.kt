@@ -22,7 +22,7 @@ import java.io.File
 object LibraryIndexCache {
 
     private const val CACHE_FILE_NAME = "library_index_cache.json"
-    const val CACHE_VERSION = 2
+    const val CACHE_VERSION = 3
 
     // ── Data classes ────────────────────────────────────────────────────
 
@@ -40,6 +40,14 @@ object LibraryIndexCache {
         val name: String,
         val id: String,
         val isDirectory: Boolean = false
+    )
+
+    data class CachedArchiveSource(
+        val rpfUri: String,
+        val innerDirFilter: String? = null,
+        val allowedEntryNames: List<String>? = null,
+        val looseAwcFiles: List<CachedSimpleFile>? = null,
+        val entryNamePrefixOnCollision: String? = null
     )
 
     data class CachedGroupDescriptor(
@@ -67,7 +75,8 @@ object LibraryIndexCache {
         val extras: Map<String, String> = emptyMap(),
         val innerDirFilter: String? = null,
         val allowedEntryNames: List<String>? = null,
-        val looseAwcFiles: List<CachedSimpleFile>? = null
+        val looseAwcFiles: List<CachedSimpleFile>? = null,
+        val extraSources: List<CachedArchiveSource>? = null
     )
 
     data class MediaItemGroupProxy(
@@ -355,6 +364,35 @@ object LibraryIndexCache {
             obj.put("looseAwcFiles", arr)
         }
 
+        if (!st.extraSources.isNullOrEmpty()) {
+            val arr = JSONArray()
+            for (src in st.extraSources) {
+                val sObj = JSONObject()
+                sObj.put("rpfUri", src.rpfUri)
+                sObj.put("innerDirFilter", src.innerDirFilter ?: JSONObject.NULL)
+                sObj.put("entryNamePrefixOnCollision", src.entryNamePrefixOnCollision ?: JSONObject.NULL)
+                if (!src.allowedEntryNames.isNullOrEmpty()) {
+                    val aArr = JSONArray()
+                    for (n in src.allowedEntryNames) aArr.put(n)
+                    sObj.put("allowedEntryNames", aArr)
+                }
+                if (!src.looseAwcFiles.isNullOrEmpty()) {
+                    val lArr = JSONArray()
+                    for (f in src.looseAwcFiles) {
+                        val fObj = JSONObject()
+                        fObj.put("uri", f.uri)
+                        fObj.put("name", f.name)
+                        fObj.put("id", f.id)
+                        fObj.put("isDirectory", f.isDirectory)
+                        lArr.put(fObj)
+                    }
+                    sObj.put("looseAwcFiles", lArr)
+                }
+                arr.put(sObj)
+            }
+            obj.put("extraSources", arr)
+        }
+
         val extrasMap = JSONObject()
         for ((k, v) in st.extras) {
             extrasMap.put(k, v)
@@ -443,17 +481,38 @@ object LibraryIndexCache {
         } else null
 
         val looseArray = json.optJSONArray("looseAwcFiles")
-        val looseAwcFiles = if (looseArray != null && looseArray.length() > 0) {
-            ArrayList<CachedSimpleFile>(looseArray.length()).apply {
-                for (i in 0 until looseArray.length()) {
-                    val fObj = looseArray.optJSONObject(i) ?: continue
-                    val u = fObj.optString("uri", "")
-                    val n = fObj.optString("name", "")
-                    val id = fObj.optString("id", "")
-                    val isDir = fObj.optBoolean("isDirectory", false)
-                    if (u.isNotEmpty() && n.isNotEmpty()) {
-                        add(CachedSimpleFile(uri = u, name = n, id = id, isDirectory = isDir))
-                    }
+        val looseAwcFiles = parseCachedSimpleFileList(looseArray)
+
+        val extraArray = json.optJSONArray("extraSources")
+        val extraSources = if (extraArray != null && extraArray.length() > 0) {
+            ArrayList<CachedArchiveSource>(extraArray.length()).apply {
+                for (i in 0 until extraArray.length()) {
+                    val sObj = extraArray.optJSONObject(i) ?: continue
+                    val rpfUri = sObj.optString("rpfUri", "")
+                    if (rpfUri.isEmpty()) continue
+                    val rawDir = sObj.opt("innerDirFilter")
+                    val innerDir = if (rawDir == null || rawDir == JSONObject.NULL) null else rawDir.toString()
+                    val rawPrefix = sObj.opt("entryNamePrefixOnCollision")
+                    val prefix = if (rawPrefix == null || rawPrefix == JSONObject.NULL) null else rawPrefix.toString()
+                    val sAllowedArr = sObj.optJSONArray("allowedEntryNames")
+                    val sAllowed = if (sAllowedArr != null && sAllowedArr.length() > 0) {
+                        ArrayList<String>(sAllowedArr.length()).apply {
+                            for (j in 0 until sAllowedArr.length()) {
+                                val v = sAllowedArr.optString(j)
+                                if (v.isNotEmpty()) add(v)
+                            }
+                        }
+                    } else null
+                    val sLoose = parseCachedSimpleFileList(sObj.optJSONArray("looseAwcFiles"))
+                    add(
+                        CachedArchiveSource(
+                            rpfUri = rpfUri,
+                            innerDirFilter = innerDir,
+                            allowedEntryNames = sAllowed,
+                            looseAwcFiles = sLoose,
+                            entryNamePrefixOnCollision = prefix
+                        )
+                    )
                 }
             }
         } else null
@@ -468,7 +527,24 @@ object LibraryIndexCache {
             extras = extras,
             innerDirFilter = innerDirFilter,
             allowedEntryNames = allowedEntryNames,
-            looseAwcFiles = looseAwcFiles
+            looseAwcFiles = looseAwcFiles,
+            extraSources = extraSources
         )
+    }
+
+    private fun parseCachedSimpleFileList(looseArray: JSONArray?): List<CachedSimpleFile>? {
+        if (looseArray == null || looseArray.length() <= 0) return null
+        val list = ArrayList<CachedSimpleFile>(looseArray.length())
+        for (i in 0 until looseArray.length()) {
+            val fObj = looseArray.optJSONObject(i) ?: continue
+            val u = fObj.optString("uri", "")
+            val n = fObj.optString("name", "")
+            val id = fObj.optString("id", "")
+            val isDir = fObj.optBoolean("isDirectory", false)
+            if (u.isNotEmpty() && n.isNotEmpty()) {
+                list.add(CachedSimpleFile(uri = u, name = n, id = id, isDirectory = isDir))
+            }
+        }
+        return list.takeIf { it.isNotEmpty() }
     }
 }

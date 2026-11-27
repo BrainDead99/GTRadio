@@ -104,6 +104,10 @@
     *;
 }
 
+-keep class com.sc.gtradio.media.rpf7.Rpf7ArchiveSource {
+    *;
+}
+
 -keep class com.sc.gtradio.media.GTRadioMusicService {
     *;
 }

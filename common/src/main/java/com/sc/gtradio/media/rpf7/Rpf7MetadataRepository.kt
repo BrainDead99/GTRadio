@@ -50,7 +50,15 @@ object Rpf7MetadataRepository {
         "radio_16_silverlake.rpf" to Rpf7StationInfo("radio_16_silverlake.rpf", "Radio Mirror Park", "Twin Shadow", isTalk = false, isContinuousMix = false),
         "radio_17_funk.rpf" to Rpf7StationInfo("radio_17_funk.rpf", "Space 103.2", "Bootsy Collins", isTalk = false, isContinuousMix = false),
         "radio_18_90s_rock.rpf" to Rpf7StationInfo("radio_18_90s_rock.rpf", "Vinewood Boulevard Radio", "Nate Williams & Stephen Pope", isTalk = false, isContinuousMix = false),
-        "radio_20_thelab.rpf" to Rpf7StationInfo("radio_20_thelab.rpf", "The Lab", "The Alchemist & Oh No", isTalk = false, isContinuousMix = true)
+        "radio_20_thelab.rpf" to Rpf7StationInfo("radio_20_thelab.rpf", "The Lab", "The Alchemist & Oh No", isTalk = false, isContinuousMix = true),
+        "radio_21_dlc_xm17.rpf" to Rpf7StationInfo("radio_21_dlc_xm17.rpf", "blonded Los Santos 97.8 FM", "Frank Ocean", isTalk = false, isContinuousMix = true),
+        "radio_22_dlc_battle_mix1_radio.rpf" to Rpf7StationInfo("radio_22_dlc_battle_mix1_radio.rpf", "Los Santos Underground Radio", "Solomun, Tale Of Us, Dixon & The Black Madonna", isTalk = false, isContinuousMix = true),
+        "radio_23_dlc_xm19_radio.rpf" to Rpf7StationInfo("radio_23_dlc_xm19_radio.rpf", "iFruit Radio", "Danny Brown & Skepta", isTalk = false, isContinuousMix = false),
+        "radio_27_dlc_prhei4.rpf" to Rpf7StationInfo("radio_27_dlc_prhei4.rpf", "Still Slipping Los Santos", "Joy Orbison", isTalk = false, isContinuousMix = true),
+        "radio_34_dlc_hei4_kult.rpf" to Rpf7StationInfo("radio_34_dlc_hei4_kult.rpf", "Kult FM 99.1", "Julian Casablancas", isTalk = false, isContinuousMix = false),
+        "radio_35_dlc_hei4_mlr.rpf" to Rpf7StationInfo("radio_35_dlc_hei4_mlr.rpf", "Music Locker Radio", "Moodymann, Keinemusik & Palms Trax", isTalk = false, isContinuousMix = true),
+        "radio_36_audioplayer.rpf" to Rpf7StationInfo("radio_36_audioplayer.rpf", "Media Player", "Media Player", isTalk = false, isContinuousMix = true),
+        "radio_37_motomami.rpf" to Rpf7StationInfo("radio_37_motomami.rpf", "MOTOMAMI Los Santos", "ROSALÍA & Arca", isTalk = false, isContinuousMix = false)
     )
 
     @Volatile
@@ -114,6 +122,9 @@ object Rpf7MetadataRepository {
         ensureLoaded(context)
         return trackIdMetaMapInternal[trackId]
     }
+
+    fun getTrackById(trackId: Int, context: Context? = null): Rpf7TrackMeta? =
+        getTrackByTrackId(trackId, context)
 
     fun getAllMusicSongs(context: Context? = null): List<Pair<String, String>> {
         ensureLoaded(context)

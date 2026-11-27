@@ -100,7 +100,9 @@ data class Rpf7ClipRef(
     override var adsEnabled: Boolean = adsEnabled
         set(value) {
             field = value
-            if (stationConfig.advertPool != Rpf7AdvertPool.NONE) director.adsEnabled = value
+            if (stationConfig.advertPool != Rpf7AdvertPool.NONE || stationConfig.useStationLocalAdvertsOnly) {
+                director.adsEnabled = value
+            }
         }
     override var weatherChatterEnabled: Boolean = weatherChatterEnabled
         set(value) {
@@ -115,6 +117,7 @@ data class Rpf7ClipRef(
 
     private val morningDjList = ArrayList<Rpf7ClipRef>()
     private val eveningDjList = ArrayList<Rpf7ClipRef>()
+    private val nightDjList = ArrayList<Rpf7ClipRef>()
 
     private val allSongItems = ArrayList<Rpf7SongItem>()
     private val stationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -296,17 +299,22 @@ data class Rpf7ClipRef(
         advertsArchive?.ensureIndexed()
         newsArchive?.ensureIndexed()
 
+        morningDjList.clear()
+        eveningDjList.clear()
+        nightDjList.clear()
+
         val ids = ArrayList<Rpf7ClipRef>()
         val solos = ArrayList<Rpf7ClipRef>()
         val generals = ArrayList<Rpf7ClipRef>()
         val toAds = ArrayList<Rpf7ClipRef>()
         val toNews = ArrayList<Rpf7ClipRef>()
+        val localAdvertEntries = ArrayList<Rpf7ClipRef>()
         val introMap = HashMap<String, MutableList<String>>()
         val songItems = ArrayList<Rpf7SongItem>()
 
         // 1. Build lookup tables for 29-bit Jenkins hashes in voice banks
         val timeHashMap = HashMap<Int, String>()
-        for (prefix in listOf("morning", "evening")) {
+        for (prefix in listOf("morning", "evening", "night")) {
             for (num in 1..25) {
                 val pad = String.format(Locale.ROOT, "%02d", num)
                 timeHashMap[Rpf7Crypto.jenkHashString("${prefix}_$pad") and 0x1FFFFFFF] = prefix
@@ -327,7 +335,7 @@ data class Rpf7ClipRef(
         val introHashMap = HashMap<Int, String>()
         for (entry in stationArchive.getFileEntries()) {
             val stem = entry.name.removeSuffix(".awc").lowercase(Locale.ROOT)
-            if (stem in setOf("time", "to", "intro", "general") || STATION_ID_REGEX.matches(stem) || stem.startsWith("mono_solo_")) continue
+            if (isNonSongStem(stem)) continue
             val lookupStem = RPF7_INTRO_ALIASES[stem] ?: stem
             for (num in 1..8) {
                 val pad = String.format(Locale.ROOT, "%02d", num)
@@ -338,45 +346,47 @@ data class Rpf7ClipRef(
             }
         }
 
-        // 2. Classify voice bank sub-tracks (time.awc, to.awc, intro.awc, general.awc)
+        // 2. Classify voice bank sub-tracks (time, to, intro, general, including DLC/expansion prefixed banks)
         for (sub in stationArchive.getBankSubTracks()) {
             val parent = sub.parentEntryName.lowercase(Locale.ROOT).removeSuffix(".awc")
             val h29 = sub.streamId and 0x1FFFFFFF
             val ref = Rpf7ClipRef(stationArchive, sub.subKey)
 
-            when (parent) {
-                "time" -> {
+            when {
+                parent == "time" || parent.endsWith("_time") -> {
                     when (timeHashMap[h29]) {
                         "morning" -> morningDjList.add(ref)
                         "evening" -> eveningDjList.add(ref)
+                        "night" -> nightDjList.add(ref)
                     }
                 }
-                "to" -> {
+                parent == "to" || parent.endsWith("_to") -> {
                     when (toHashMap[h29]) {
                         "to_ad" -> toAds.add(ref)
                         "to_news" -> toNews.add(ref)
                     }
                 }
-                "intro" -> {
+                parent == "intro" || parent.endsWith("_intro") -> {
                     val matchedSong = introHashMap[h29]
                     if (matchedSong != null) {
                         introMap.getOrPut(matchedSong) { ArrayList() }.add(sub.subKey)
                     }
                 }
-                "general" -> generals.add(ref)
+                parent == "general" || parent.endsWith("_general") -> generals.add(ref)
             }
         }
 
-        // 3. Classify top-level MultiChannel entries (using STATION_ID_REGEX to avoid false positives like id_rather_be_with_you)
+        // 3. Classify top-level MultiChannel entries (guarding id_rather_be_with_you against ID false positive)
         for (entry in stationArchive.getFileEntries()) {
             val nameLower = entry.name.lowercase(Locale.ROOT)
             val stem = nameLower.removeSuffix(".awc")
-            if (stem in setOf("time", "to", "intro", "general")) continue
+            if (isVoiceBankStem(stem) || isIgnoredSilenceStem(stem)) continue
 
             val ref = Rpf7ClipRef(stationArchive, entry.name)
             when {
-                STATION_ID_REGEX.matches(stem) -> ids.add(ref)
-                stem.startsWith("mono_solo_") -> solos.add(ref)
+                isStationIdStem(stem) -> ids.add(ref)
+                isDjSoloStem(stem) -> solos.add(ref)
+                isLocalAdvertStem(stem) -> localAdvertEntries.add(ref)
                 else -> {
                     val intros = introMap[stem] ?: emptyList()
                     songItems.add(Rpf7SongItem(stationArchive, entry.name, intros))
@@ -392,13 +402,16 @@ data class Rpf7ClipRef(
         director.songQueue.reset(songItems)
         director.morningDjList = morningDjList
         director.eveningDjList = eveningDjList
+        director.nightDjList = nightDjList
         allSongItems.clear()
         allSongItems.addAll(songItems)
         director.rebuildTimeOfDayQueueIfNeeded()
 
         // 4. Index Adverts and News with exact pool routing (excluding TV-only commercial stems)
         val allAdverts = ArrayList<Rpf7ClipRef>()
-        if (stationConfig.advertPool != Rpf7AdvertPool.NONE) {
+        if (stationConfig.useStationLocalAdvertsOnly) {
+            allAdverts.addAll(localAdvertEntries)
+        } else if (stationConfig.advertPool != Rpf7AdvertPool.NONE) {
             advertsArchive?.getFileEntries()?.forEach { entry ->
                 val stem = entry.name.lowercase(Locale.ROOT).removeSuffix(".awc")
                 if (Rpf7RadioDirector.isTvAdvertStem(stem)) return@forEach
@@ -425,7 +438,7 @@ data class Rpf7ClipRef(
         GTRadioLogger.log(
             "Rpf7RadioStation[$stationTitle]: Indexed ${songItems.size} songs/shows, " +
                     "${ids.size} IDs, ${solos.size} solos, ${generals.size} general DJ clips, " +
-                    "${morningDjList.size + eveningDjList.size} TOD clips, " +
+                    "${morningDjList.size + eveningDjList.size + nightDjList.size} TOD clips, " +
                     "${allAdverts.size} adverts, ${allNews.size} news"
         )
     }
@@ -477,6 +490,16 @@ data class Rpf7ClipRef(
         notifyMetadataChanged(buildStationMetadata(stationTitle, "", stationLogo))
     }
 
+    private fun resolveDiscreteTrackMeta(item: Rpf7SongItem): Rpf7TrackMeta {
+        val markers = item.archive.readTrackMarkers(item.trackName)
+        for (m in markers) {
+            if (m.trackId > 1 && m.trackId != 1687) {
+                Rpf7MetadataRepository.getTrackById(m.trackId, context)?.let { return it }
+            }
+        }
+        return Rpf7MetadataRepository.getTrackMeta(item.trackName, stationTitle, context)
+    }
+
     private fun applySongOrShowMetadata(item: Rpf7SongItem) {
         if (!isMetadataEnabled()) {
             setStationOnlyMetadata()
@@ -488,7 +511,7 @@ data class Rpf7ClipRef(
             return
         }
 
-        val meta = Rpf7MetadataRepository.getTrackMeta(item.trackName, stationTitle)
+        val meta = resolveDiscreteTrackMeta(item)
         val displayTitle = meta.title
         val displayArtist = meta.artist
         val isTalk = isTalkRadio || meta.isTalkShow
@@ -885,7 +908,7 @@ data class Rpf7ClipRef(
         }
         val outTail = if (index.codec == 7) arrayOfNulls<ByteArray?>(index.channels) else null
         var decodedPcm: ByteArray? = null
-        archive.openStreamPfd()?.use { pfd ->
+        archive.openStreamPfd(index.entryName)?.use { pfd ->
             FileInputStream(pfd.fileDescriptor).channel.use { ch ->
                 if (isStillValid()) {
                     decodedPcm = archive.decodeSingleBlockToPcmBytes(
@@ -1710,9 +1733,15 @@ data class Rpf7ClipRef(
     }
 
     private fun getSortedContinuousMixParts(): List<Rpf7SongItem> {
-        val mixTagged = allSongItems.filter { Rpf7MetadataRepository.getTrackMeta(it.trackName).isContinuousMix }
-        val pool = if (mixTagged.isNotEmpty()) mixTagged else allSongItems
-        return pool.sortedBy { it.trackName.lowercase(Locale.ROOT) }
+        val isMediaPlayer = stationKey.contains("radio_36_audioplayer", ignoreCase = true) ||
+            stationArchive.rpfName.contains("radio_36_audioplayer", ignoreCase = true)
+        val pool = if (isMediaPlayer) {
+            allSongItems
+        } else {
+            val mixTagged = allSongItems.filter { Rpf7MetadataRepository.getTrackMeta(it.trackName).isContinuousMix }
+            if (mixTagged.isNotEmpty()) mixTagged else allSongItems
+        }
+        return pool.sortedWith(MIX_PART_COMPARATOR)
     }
 
     private fun resolveContinuousMixPrepared(
@@ -2946,10 +2975,8 @@ data class Rpf7ClipRef(
         if (isTalk() || isMixStation()) return emptyList()
         return allSongItems.filter { item ->
             val stem = item.trackName.lowercase(Locale.ROOT).removeSuffix(".awc")
-            stem !in setOf("time", "to", "intro", "general") &&
-                !stem.startsWith("id_") &&
-                !stem.startsWith("mono_solo_") &&
-                !stem.contains("mix")
+            !isNonSongStem(stem) &&
+                !Rpf7MetadataRepository.getTrackMeta(item.trackName).isContinuousMix
         }
     }
 
@@ -2962,7 +2989,7 @@ data class Rpf7ClipRef(
     override fun getCleanTracks(): List<TracklistTrack> {
         val items = getDiscreteSongItems()
         return items.map { item ->
-            val meta = Rpf7MetadataRepository.getTrackMeta(item.trackName, stationTitle)
+            val meta = resolveDiscreteTrackMeta(item)
             val title = meta.title
             val artist = meta.artist
             TracklistTrack(
@@ -2984,7 +3011,7 @@ data class Rpf7ClipRef(
         val items = getDiscreteSongItems()
         val targetItem = items.find { it.trackName.equals(trackId, ignoreCase = true) } ?: return
         val token = cleanPlayGeneration.incrementAndGet()
-        val meta = Rpf7MetadataRepository.getTrackMeta(targetItem.trackName, stationTitle)
+        val meta = resolveDiscreteTrackMeta(targetItem)
         val title = meta.title
         val artist = meta.artist
 
@@ -3031,6 +3058,83 @@ data class Rpf7ClipRef(
 
     companion object {
         private val STATION_ID_REGEX = Regex("^id_\\d+.*")
+
+        private fun isVoiceBankStem(stem: String): Boolean =
+            stem == "time" || stem.endsWith("_time") ||
+                stem == "to" || stem.endsWith("_to") ||
+                stem == "intro" || stem.endsWith("_intro") ||
+                stem == "general" || stem.endsWith("_general")
+
+        private fun isStationIdStem(stem: String): Boolean =
+            STATION_ID_REGEX.matches(stem) ||
+                (stem.startsWith("id_") && stem != "id_rather_be_with_you") ||
+                stem.startsWith("generic_id_") ||
+                stem.startsWith("takeover_id_") ||
+                stem.startsWith("moto_ident_") ||
+                stem.startsWith("dlc_sec_id_")
+
+        private fun isDjSoloStem(stem: String): Boolean =
+            stem.startsWith("mono_solo_") ||
+                stem.startsWith("djsolo_") ||
+                stem.startsWith("custom_djsolo_") ||
+                stem.startsWith("takeover_djsolo_") ||
+                stem.startsWith("motomami_dj_solo_") ||
+                stem.startsWith("dj_mono_solo_")
+
+        private fun isLocalAdvertStem(stem: String): Boolean =
+            stem.startsWith("kult_ad")
+
+        private fun isIgnoredSilenceStem(stem: String): Boolean =
+            stem == "tuner_ap_nomix_silence"
+
+        private fun isNonSongStem(stem: String): Boolean =
+            isVoiceBankStem(stem) ||
+                isStationIdStem(stem) ||
+                isDjSoloStem(stem) ||
+                isLocalAdvertStem(stem) ||
+                isIgnoredSilenceStem(stem)
+
+        private fun mixSortTier(stem: String): Int = when {
+            stem.contains("island_update") -> 1
+            stem.startsWith("tuner_ap_mix") -> 0
+            stem.startsWith("ap_dre_") || stem.startsWith("nez_") || stem.startsWith("schoolboy_") -> 1
+            else -> 0
+        }
+
+        private fun compareNaturalNames(a: String, b: String): Int {
+            var i = 0
+            var j = 0
+            while (i < a.length && j < b.length) {
+                val ca = a[i]
+                val cb = b[j]
+                if (ca.isDigit() && cb.isDigit()) {
+                    var ia = i
+                    while (ia < a.length && a[ia].isDigit()) ia++
+                    var jb = j
+                    while (jb < b.length && b[jb].isDigit()) jb++
+                    val numA = a.substring(i, ia).trimStart('0')
+                    val numB = b.substring(j, jb).trimStart('0')
+                    if (numA.length != numB.length) return numA.length.compareTo(numB.length)
+                    val cmp = numA.compareTo(numB)
+                    if (cmp != 0) return cmp
+                    i = ia
+                    j = jb
+                } else {
+                    if (ca != cb) return ca.compareTo(cb)
+                    i++
+                    j++
+                }
+            }
+            return a.length.compareTo(b.length)
+        }
+
+        private val MIX_PART_COMPARATOR = Comparator<Rpf7SongItem> { a, b ->
+            val sa = a.trackName.lowercase(Locale.ROOT).removeSuffix(".awc")
+            val sb = b.trackName.lowercase(Locale.ROOT).removeSuffix(".awc")
+            val tierCmp = mixSortTier(sa).compareTo(mixSortTier(sb))
+            if (tierCmp != 0) tierCmp else compareNaturalNames(sa, sb)
+        }
+
         private val RPF7_INTRO_ALIASES = mapOf(
             "heart_beat" to "heartbeat",
             "tell_to_my_heart" to "tell_it_to_my_heart"

@@ -103,6 +103,18 @@ data class Rpf7BankSubTrack(
 )
 
 /**
+ * Additional source descriptor for composing an [Rpf7Archive] across multiple `.rpf` packs
+ * and/or loose `.awc` folders without disk extraction.
+ */
+data class Rpf7ArchiveSource(
+    val rpfUri: Uri,
+    val innerDirFilter: String? = null,
+    val allowedEntryNames: Set<String>? = null,
+    val looseAwcFiles: List<SimpleFileInfo>? = null,
+    val entryNamePrefixOnCollision: String? = null
+)
+
+/**
  * Reader and on-demand audio decoder for GTA V Legacy PC RPF7 archives containing AWC audio.
  * Supports:
  * - Lazy indexing via FileChannel through SAF contentResolver
@@ -119,16 +131,54 @@ class Rpf7Archive(
     val sourceUri: Uri,
     val innerDirFilter: String? = null,
     val allowedEntryNames: Set<String>? = null,
-    val looseAwcFiles: List<SimpleFileInfo>? = null
+    val looseAwcFiles: List<SimpleFileInfo>? = null,
+    val extraSources: List<Rpf7ArchiveSource> = emptyList()
 ) {
 
+    private class EntryNameMatcher(rawPatterns: Set<String>?) {
+        private val exactNames: Set<String>
+        private val prefixes: List<String>
+        val isUnrestricted: Boolean
+
+        init {
+            if (rawPatterns.isNullOrEmpty()) {
+                exactNames = emptySet()
+                prefixes = emptyList()
+                isUnrestricted = true
+            } else {
+                val exact = HashSet<String>()
+                val pref = ArrayList<String>()
+                for (raw in rawPatterns) {
+                    val clean = raw.trim().lowercase(Locale.ROOT)
+                    if (clean.isEmpty()) continue
+                    if (clean.endsWith("*")) {
+                        val p = clean.removeSuffix("*")
+                        if (p.isNotEmpty()) pref.add(p)
+                    } else {
+                        exact.add(clean)
+                    }
+                }
+                exactNames = exact
+                prefixes = pref
+                isUnrestricted = exact.isEmpty() && pref.isEmpty()
+            }
+        }
+
+        fun matches(nameLower: String): Boolean {
+            if (isUnrestricted) return true
+            if (exactNames.contains(nameLower)) return true
+            for (p in prefixes) {
+                if (nameLower.startsWith(p)) return true
+            }
+            return false
+        }
+    }
+
     private val entries = LinkedHashMap<String, Rpf7Entry>()
-    private val looseAwcUris = ConcurrentHashMap<String, Uri>()
-    private val normalizedDirFilter: String? = innerDirFilter
-        ?.replace('\\', '/')
-        ?.trim('/')
-        ?.lowercase(Locale.ROOT)
-        ?.takeIf { it.isNotEmpty() }
+    private val indexedEntryNamesLower = HashSet<String>()
+    private val entryBackingUris = ConcurrentHashMap<String, Uri>()
+    private val entryDirFilters = ConcurrentHashMap<String, String>()
+    private val normalizedDirFilter: String? = normalizeDirFilter(innerDirFilter)
     private val normalizedAllowedNames: Set<String>? = allowedEntryNames
         ?.map { it.trim().lowercase(Locale.ROOT) }
         ?.filter { it.isNotEmpty() }
@@ -143,7 +193,13 @@ class Rpf7Archive(
         val filterPart = normalizedDirFilter?.replace('/', '_')
             ?: if (!looseAwcFiles.isNullOrEmpty()) "loose" else "root"
         val safeFilter = filterPart.replace(Regex("[^A-Za-z0-9_]"), "_").lowercase(Locale.ROOT)
-        val tagHash = Integer.toHexString((sourceUri.toString() + "|" + filterPart).hashCode())
+        val allowPart = normalizedAllowedNames?.sorted()?.joinToString(",") ?: ""
+        val extraPart = extraSources.joinToString(";") { src ->
+            "${src.rpfUri}|${src.innerDirFilter.orEmpty()}|${src.entryNamePrefixOnCollision.orEmpty()}"
+        }
+        val tagHash = Integer.toHexString(
+            "$rpfName|$sourceUri|$filterPart|$allowPart|$extraPart".hashCode()
+        )
         "${safeFilter}_$tagHash"
     }
     val archiveStreamId: String = "rpf7_${nextArchiveId.incrementAndGet()}_" +
@@ -152,19 +208,45 @@ class Rpf7Archive(
     @Volatile private var indexed = false
     val isIndexed: Boolean get() = indexed
 
+    private fun normalizeDirFilter(raw: String?): String? = raw
+        ?.replace('\\', '/')
+        ?.trim('/')
+        ?.lowercase(Locale.ROOT)
+        ?.takeIf { it.isNotEmpty() }
+
+    private fun registerEntryBackingUri(entryName: String, uri: Uri, dirFilter: String?) {
+        val lower = entryName.lowercase(Locale.ROOT)
+        val stem = entryName.removeSuffix(".awc")
+        val stemLower = lower.removeSuffix(".awc")
+        entryBackingUris[entryName] = uri
+        entryBackingUris[lower] = uri
+        entryBackingUris[stem] = uri
+        entryBackingUris[stemLower] = uri
+        if (!dirFilter.isNullOrEmpty()) {
+            entryDirFilters[entryName] = dirFilter
+            entryDirFilters[lower] = dirFilter
+        }
+    }
+
     private fun resolveEntryUri(entryName: String?): Uri {
-        if (looseAwcUris.isEmpty() || entryName.isNullOrBlank()) return sourceUri
-        val cleanName = if (entryName.endsWith(".awc", ignoreCase = true)) entryName else "$entryName.awc"
-        return looseAwcUris[entryName]
-            ?: looseAwcUris[cleanName]
-            ?: looseAwcUris[cleanName.lowercase(Locale.ROOT)]
-            ?: looseAwcUris[entryName.lowercase(Locale.ROOT)]
+        if (entryBackingUris.isEmpty() || entryName.isNullOrBlank()) return sourceUri
+        val trimmed = entryName.trim()
+        val cleanName = if (trimmed.endsWith(".awc", ignoreCase = true)) trimmed else "$trimmed.awc"
+        return entryBackingUris[trimmed]
+            ?: entryBackingUris[cleanName]
+            ?: entryBackingUris[cleanName.lowercase(Locale.ROOT)]
+            ?: entryBackingUris[trimmed.lowercase(Locale.ROOT)]
             ?: sourceUri
     }
 
     private fun cacheUriHashFor(entryName: String?): String {
         val resolved = resolveEntryUri(entryName)
-        val key = normalizedDirFilter?.let { "$resolved|$it" } ?: resolved.toString()
+        val dirFilter = if (!entryName.isNullOrBlank()) {
+            entryDirFilters[entryName] ?: entryDirFilters[entryName.lowercase(Locale.ROOT)] ?: normalizedDirFilter
+        } else {
+            normalizedDirFilter
+        }
+        val key = dirFilter?.let { "$resolved|$it" } ?: resolved.toString()
         return Integer.toHexString(key.hashCode())
     }
 
@@ -343,6 +425,23 @@ class Rpf7Archive(
     // Indexing
     // ------------------------------------------------------------------------
 
+    private fun clearIndexedState() {
+        entries.clear()
+        indexedEntryNamesLower.clear()
+        entryBackingUris.clear()
+        entryDirFilters.clear()
+        bankSubTracks.clear()
+    }
+
+    private fun resolveInsertEntryName(rawName: String, prefixOnCollision: String?): String? {
+        val lower = rawName.lowercase(Locale.ROOT)
+        if (!indexedEntryNamesLower.contains(lower)) return rawName
+        if (prefixOnCollision.isNullOrEmpty()) return null
+        val prefixed = "$prefixOnCollision$rawName"
+        if (indexedEntryNamesLower.contains(prefixed.lowercase(Locale.ROOT))) return null
+        return prefixed
+    }
+
     @Synchronized
     fun ensureIndexed() {
         if (indexed) return
@@ -354,44 +453,91 @@ class Rpf7Archive(
         }
 
         try {
-            entries.clear()
-            looseAwcUris.clear()
-            bankSubTracks.clear()
-            var ok = false
-            if (!looseAwcFiles.isNullOrEmpty()) {
-                ok = indexLooseAwcFiles(looseAwcFiles, keys)
-            } else {
-                context.contentResolver.openFileDescriptor(sourceUri, "r")?.use { pfd ->
-                    FileInputStream(pfd.fileDescriptor).channel.use { channel ->
-                        ok = indexRpf(channel, keys)
+            clearIndexedState()
+            var ok = indexSingleSource(
+                backingUri = sourceUri,
+                dirFilter = normalizedDirFilter,
+                allowedNames = normalizedAllowedNames,
+                looseFiles = looseAwcFiles,
+                entryNamePrefixOnCollision = null,
+                keys = keys
+            )
+            if (ok) {
+                for (extra in extraSources) {
+                    val extraOk = indexSingleSource(
+                        backingUri = extra.rpfUri,
+                        dirFilter = normalizeDirFilter(extra.innerDirFilter),
+                        allowedNames = extra.allowedEntryNames,
+                        looseFiles = extra.looseAwcFiles,
+                        entryNamePrefixOnCollision = extra.entryNamePrefixOnCollision,
+                        keys = keys
+                    )
+                    if (!extraOk) {
+                        ok = false
+                        break
                     }
                 }
             }
-            if (ok) {
+            if (ok && (entries.isNotEmpty() || bankSubTracks.isNotEmpty())) {
                 indexed = true
-                GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks")
+                GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexed ${entries.size} entries and ${bankSubTracks.size} bank sub-tracks (sources=${1 + extraSources.size})")
             } else {
-                entries.clear()
-                looseAwcUris.clear()
-                bankSubTracks.clear()
+                clearIndexedState()
                 GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexing incomplete; deferred for retry")
             }
         } catch (e: Exception) {
-            entries.clear()
-            looseAwcUris.clear()
-            bankSubTracks.clear()
+            clearIndexedState()
             GTRadioLogger.log("Rpf7Archive[$rpfName]: Indexing failed", e)
         }
     }
 
-    private fun indexLooseAwcFiles(files: List<SimpleFileInfo>, keys: Rpf7KeySet): Boolean {
+    private fun indexSingleSource(
+        backingUri: Uri,
+        dirFilter: String?,
+        allowedNames: Set<String>?,
+        looseFiles: List<SimpleFileInfo>?,
+        entryNamePrefixOnCollision: String?,
+        keys: Rpf7KeySet
+    ): Boolean {
+        val matcher = EntryNameMatcher(allowedNames)
+        if (!looseFiles.isNullOrEmpty()) {
+            return indexLooseAwcFiles(
+                files = looseFiles,
+                matcher = matcher,
+                entryNamePrefixOnCollision = entryNamePrefixOnCollision,
+                keys = keys
+            )
+        }
+        var opened = false
+        context.contentResolver.openFileDescriptor(backingUri, "r")?.use { pfd ->
+            FileInputStream(pfd.fileDescriptor).channel.use { channel ->
+                opened = indexRpf(
+                    channel = channel,
+                    backingUri = backingUri,
+                    dirFilter = dirFilter,
+                    matcher = matcher,
+                    entryNamePrefixOnCollision = entryNamePrefixOnCollision,
+                    keys = keys
+                )
+            }
+        }
+        return opened
+    }
+
+    private fun indexLooseAwcFiles(
+        files: List<SimpleFileInfo>,
+        matcher: EntryNameMatcher,
+        entryNamePrefixOnCollision: String?,
+        keys: Rpf7KeySet
+    ): Boolean {
+        var matchedAny = false
         for (f in files) {
             if (f.isDirectory) continue
             val nameLower = f.name.lowercase(Locale.ROOT)
             if (!nameLower.endsWith(".awc")) continue
-            if (normalizedAllowedNames != null && !normalizedAllowedNames.contains(nameLower)) continue
-            looseAwcUris[f.name] = f.uri
-            looseAwcUris[nameLower] = f.uri
+            if (!matcher.matches(nameLower)) continue
+            matchedAny = true
+            val finalName = resolveInsertEntryName(f.name, entryNamePrefixOnCollision) ?: continue
             try {
                 context.contentResolver.openFileDescriptor(f.uri, "r")?.use { pfd ->
                     FileInputStream(pfd.fileDescriptor).channel.use { channel ->
@@ -399,7 +545,9 @@ class Rpf7Archive(
                         if (size >= 16L) {
                             indexAwcEntry(
                                 channel = channel,
-                                entryName = f.name,
+                                entryName = finalName,
+                                backingUri = f.uri,
+                                dirFilter = null,
                                 rpfOffset = 0L,
                                 rpfSize = size,
                                 isEncrypted = false,
@@ -413,7 +561,7 @@ class Rpf7Archive(
                 GTRadioLogger.log("Rpf7Archive[$rpfName]: Failed indexing loose AWC ${f.name}", e)
             }
         }
-        return entries.isNotEmpty() || bankSubTracks.isNotEmpty()
+        return matchedAny || entries.isNotEmpty() || bankSubTracks.isNotEmpty()
     }
 
     private fun readNullTermName(decNames: ByteArray, offset: Int): String {
@@ -425,19 +573,26 @@ class Rpf7Archive(
         return String(decNames, offset, nEnd - offset, Charsets.ISO_8859_1)
     }
 
-    private fun shouldDescendDir(dirRelPathLower: String): Boolean {
-        val filter = normalizedDirFilter ?: return true
+    private fun shouldDescendDir(dirRelPathLower: String, dirFilter: String?): Boolean {
+        val filter = dirFilter ?: return true
         return dirRelPathLower == filter ||
             filter.startsWith("$dirRelPathLower/") ||
             dirRelPathLower.startsWith("$filter/")
     }
 
-    private fun doesFileDirMatchFilter(dirRelPathLower: String): Boolean {
-        val filter = normalizedDirFilter ?: return true
+    private fun doesFileDirMatchFilter(dirRelPathLower: String, dirFilter: String?): Boolean {
+        val filter = dirFilter ?: return true
         return dirRelPathLower == filter || dirRelPathLower.startsWith("$filter/")
     }
 
-    private fun indexRpf(channel: FileChannel, keys: Rpf7KeySet): Boolean {
+    private fun indexRpf(
+        channel: FileChannel,
+        backingUri: Uri,
+        dirFilter: String?,
+        matcher: EntryNameMatcher,
+        entryNamePrefixOnCollision: String?,
+        keys: Rpf7KeySet
+    ): Boolean {
         val fileSize = channel.size()
         if (fileSize < 16) return false
 
@@ -501,14 +656,25 @@ class Rpf7Archive(
             val name = readNullTermName(decNames, nameOff)
             val nameLower = name.lowercase(Locale.ROOT)
             if (!nameLower.endsWith(".awc")) return
-            if (normalizedAllowedNames != null && !normalizedAllowedNames.contains(nameLower)) return
-            if (normalizedDirFilter != null && (isCompressed || isEncrypted)) {
+            if (!matcher.matches(nameLower)) return
+            if (dirFilter != null && (isCompressed || isEncrypted)) {
                 GTRadioLogger.log("Rpf7Archive[$rpfName]: Skipping unsupported compressed/outer-encrypted DLC AWC $name (comp=$isCompressed, enc=$encType)")
                 return
             }
+            val finalName = resolveInsertEntryName(name, entryNamePrefixOnCollision) ?: return
 
             try {
-                indexAwcEntry(channel, name, fOffset, actualSize, isEncrypted, isCompressed, keys)
+                indexAwcEntry(
+                    channel = channel,
+                    entryName = finalName,
+                    backingUri = backingUri,
+                    dirFilter = dirFilter,
+                    rpfOffset = fOffset,
+                    rpfSize = actualSize,
+                    isEncrypted = isEncrypted,
+                    isCompressed = isCompressed,
+                    keys = keys
+                )
             } catch (e: Exception) {
                 GTRadioLogger.log("Rpf7Archive[$rpfName]: Failed indexing AWC $name", e)
             }
@@ -536,17 +702,17 @@ class Rpf7Archive(
                     if (x == 0x7FFFFF00) {
                         val subName = readNullTermName(decNames, y and 0xFFFF).lowercase(Locale.ROOT)
                         val childPathLower = if (dirPathLower.isEmpty()) subName else "$dirPathLower/$subName"
-                        if (shouldDescendDir(childPathLower)) {
+                        if (shouldDescendDir(childPathLower, dirFilter)) {
                             stack.addLast(cIdx to childPathLower)
                         }
                     } else if ((x and 0x80000000.toInt()) == 0) {
-                        if (doesFileDirMatchFilter(dirPathLower)) {
+                        if (doesFileDirMatchFilter(dirPathLower, dirFilter)) {
                             indexBinaryFileEntry(cBase)
                         }
                     }
                 }
             }
-        } else if (normalizedDirFilter == null) {
+        } else if (dirFilter == null) {
             for (i in 0 until entryCount) {
                 val base = i * 16
                 val x = readIntLe(decEntries, base + 4)
@@ -565,6 +731,8 @@ class Rpf7Archive(
     private fun indexAwcEntry(
         channel: FileChannel,
         entryName: String,
+        backingUri: Uri,
+        dirFilter: String?,
         rpfOffset: Long,
         rpfSize: Long,
         isEncrypted: Boolean,
@@ -697,6 +865,8 @@ class Rpf7Archive(
                 codec = chCodec
             )
             entries[entryName] = entry
+            indexedEntryNamesLower.add(entryName.lowercase(Locale.ROOT))
+            registerEntryBackingUri(entryName, backingUri, dirFilter)
         } else {
             // Single-channel voice bank (e.g. general.awc, intro.awc, to.awc)
             var bankCodec = 4
@@ -761,6 +931,8 @@ class Rpf7Archive(
                 codec = bankCodec
             )
             entries[entryName] = parentEntry
+            indexedEntryNamesLower.add(entryName.lowercase(Locale.ROOT))
+            registerEntryBackingUri(entryName, backingUri, dirFilter)
         }
     }
 
@@ -833,12 +1005,13 @@ class Rpf7Archive(
     fun getBlockForSample(entryName: String, sampleOffset: Long): Int {
         if (sampleOffset <= 0L) return 0
         ensureIndexed()
-        val cleanName = if (entryName.endsWith(".awc")) entryName else "$entryName.awc"
-        if (!seekTableCache.containsKey(cleanName)) {
-            readTrackMarkers(cleanName)
+        val entry = getEntry(entryName)
+        val cacheKey = (entry?.name ?: if (entryName.endsWith(".awc", ignoreCase = true)) entryName else "$entryName.awc")
+            .lowercase(Locale.ROOT)
+        if (!seekTableCache.containsKey(cacheKey)) {
+            readTrackMarkers(cacheKey)
         }
-        val seekTbl = seekTableCache[cleanName]
-        val entry = getEntry(cleanName)
+        val seekTbl = seekTableCache[cacheKey]
         val numBlocks = entry?.numBlocks ?: 1
         if (seekTbl != null && seekTbl.isNotEmpty()) {
             var blk = 0
@@ -864,16 +1037,17 @@ class Rpf7Archive(
     fun getChunkStartSample(entryName: String, startBlock: Int): Long {
         if (startBlock <= 0) return 0L
         ensureIndexed()
-        val cleanName = if (entryName.endsWith(".awc")) entryName else "$entryName.awc"
-        if (!seekTableCache.containsKey(cleanName)) {
-            readTrackMarkers(cleanName)
+        val entry = getEntry(entryName)
+        val cacheKey = (entry?.name ?: if (entryName.endsWith(".awc", ignoreCase = true)) entryName else "$entryName.awc")
+            .lowercase(Locale.ROOT)
+        if (!seekTableCache.containsKey(cacheKey)) {
+            readTrackMarkers(cacheKey)
         }
-        val seekTbl = seekTableCache[cleanName]
+        val seekTbl = seekTableCache[cacheKey]
         if (seekTbl != null && startBlock in seekTbl.indices) {
             return seekTbl[startBlock]
         }
-        val entry = getEntry(cleanName) ?: return 0L
-        if (entry.numBlocks > 0 && entry.totalSamples > 0) {
+        if (entry != null && entry.numBlocks > 0 && entry.totalSamples > 0) {
             return (startBlock.toLong() * entry.totalSamples.toLong()) / entry.numBlocks.toLong()
         }
         return 0L
@@ -881,10 +1055,11 @@ class Rpf7Archive(
 
     fun readTrackMarkers(awcEntryName: String): List<Rpf7TrackMarker> {
         ensureIndexed()
-        val cleanName = if (awcEntryName.endsWith(".awc")) awcEntryName else "$awcEntryName.awc"
-        trackMarkersCache[cleanName]?.let { return it }
-
+        val cleanName = if (awcEntryName.endsWith(".awc", ignoreCase = true)) awcEntryName else "$awcEntryName.awc"
         val entry = getEntry(cleanName) ?: return emptyList()
+        val cacheKey = entry.name.lowercase(Locale.ROOT)
+        trackMarkersCache[cacheKey]?.let { return it }
+
         val markers = ArrayList<Rpf7TrackMarker>()
 
         try {
@@ -933,7 +1108,7 @@ class Rpf7Archive(
                             val cSize = ((rawChunk ushr 28) and 0x0FFFFFFFL).toInt()
                             val cOffset = (rawChunk and 0x0FFFFFFFL).toInt()
 
-                            if (cType == 0xA3 && !seekTableCache.containsKey(cleanName) && cSize >= 4) {
+                            if (cType == 0xA3 && !seekTableCache.containsKey(cacheKey) && cSize >= 4) {
                                 val sBuf = ByteBuffer.allocate(cSize).order(ByteOrder.LITTLE_ENDIAN)
                                 channel.position(entry.offset + cOffset)
                                 if (channel.read(sBuf) >= cSize) {
@@ -943,7 +1118,7 @@ class Rpf7Archive(
                                     for (i in 0 until count) {
                                         tbl[i] = sBuf.int.toLong() and 0xFFFFFFFFL
                                     }
-                                    seekTableCache[cleanName] = tbl
+                                    seekTableCache[cacheKey] = tbl
                                 }
                             } else if (cType == 0xBD && cSize >= 16) {
                                 val mBuf = ByteBuffer.allocate(cSize).order(ByteOrder.LITTLE_ENDIAN)
@@ -955,7 +1130,7 @@ class Rpf7Archive(
                                     var djIntroEnd = -1L
                                     var djOutroStart = -1L
                                     var djOutroEnd = -1L
-                                    val sampleRate = getEntrySampleRate(cleanName).toLong().coerceAtLeast(1L)
+                                    val sampleRate = getEntrySampleRate(entry.name).toLong().coerceAtLeast(1L)
                                     for (r in 0 until numRecs) {
                                         val nameHash = mBuf.int
                                         val rawVal = mBuf.int
@@ -978,7 +1153,7 @@ class Rpf7Archive(
                                         }
                                     }
                                     if (djIntroStart >= 0L || djIntroEnd > 0L || djOutroStart > 0L || djOutroEnd > 0L) {
-                                        djMarkerCache[cleanName] = DjMarkerWindow(djIntroStart, djIntroEnd, djOutroStart, djOutroEnd)
+                                        djMarkerCache[cacheKey] = DjMarkerWindow(djIntroStart, djIntroEnd, djOutroStart, djOutroEnd)
                                     }
                                 }
                             }
@@ -997,16 +1172,19 @@ class Rpf7Archive(
                 deduped.add(m)
             }
         }
-        trackMarkersCache[cleanName] = deduped
+        trackMarkersCache[cacheKey] = deduped
         return deduped
     }
 
     fun readDjMarkers(awcEntryName: String): DjMarkerWindow? {
-        val cleanName = awcEntryName.lowercase()
-        djMarkerCache[cleanName]?.let { return if (it === NO_DJ_MARKERS) null else it }
-        readTrackMarkers(cleanName)
-        val cached = djMarkerCache[cleanName] ?: NO_DJ_MARKERS
-        djMarkerCache[cleanName] = cached
+        ensureIndexed()
+        val cleanName = if (awcEntryName.endsWith(".awc", ignoreCase = true)) awcEntryName else "$awcEntryName.awc"
+        val entry = getEntry(cleanName) ?: return null
+        val cacheKey = entry.name.lowercase(Locale.ROOT)
+        djMarkerCache[cacheKey]?.let { return if (it === NO_DJ_MARKERS) null else it }
+        readTrackMarkers(entry.name)
+        val cached = djMarkerCache[cacheKey] ?: NO_DJ_MARKERS
+        djMarkerCache[cacheKey] = cached
         return if (cached === NO_DJ_MARKERS) null else cached
     }
 
@@ -1066,10 +1244,11 @@ class Rpf7Archive(
             return null
         }
 
-        if (!seekTableCache.containsKey(entry.name)) {
+        val cacheKey = entry.name.lowercase(Locale.ROOT)
+        if (!seekTableCache.containsKey(cacheKey)) {
             readTrackMarkers(entry.name)
         }
-        val rawSeek = seekTableCache[entry.name]
+        val rawSeek = seekTableCache[cacheKey]
         val seekTable = if (rawSeek != null && rawSeek.size == numBlocks && isMonotonicSeekTable(rawSeek, totalSamples)) {
             rawSeek.copyOf().also { tbl ->
                 for (i in tbl.indices) {
