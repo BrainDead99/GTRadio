@@ -36,8 +36,11 @@ data class Rpf7StationConfig(
                     rpf.contains("radio_05") || rpf.contains("radio_11") || rpf.contains("talk")
 
             val isMix = key.contains("radio_07") || key.contains("radio_08") || key.contains("radio_13") || key.contains("radio_14") ||
+                    key.contains("radio_20") ||
                     rpf.contains("radio_07") || rpf.contains("radio_08") || rpf.contains("radio_13") || rpf.contains("radio_14") ||
-                    key.contains("soulwax") || key.contains("eastlos") || key.contains("worldwide") || key.contains("flylo")
+                    rpf.contains("radio_20") ||
+                    key.contains("soulwax") || key.contains("eastlos") || key.contains("worldwide") || key.contains("flylo") ||
+                    key.contains("thelab")
 
             val isBlaineCounty = key.contains("radio_11") || rpf.contains("radio_11") || key.contains("11_talk_02")
             val isRebelRadio = key.contains("radio_06") || rpf.contains("radio_06") || key.contains("country")

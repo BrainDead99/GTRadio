@@ -63,6 +63,7 @@ class StationGroup private constructor(
     internal val rpf7StationKeys = HashMap<String, String>()
     internal var rpf7AdvertsArchive: Rpf7Archive? = null
     internal var rpf7NewsArchive: Rpf7Archive? = null
+    internal var cachedFolderFingerprint: String = ""
     var mediaId: String = ""
     var isValid: Boolean = true
     var isGen2RawGroup: Boolean = false
@@ -70,7 +71,35 @@ class StationGroup private constructor(
     internal val rawStreamUris = HashMap<String, Uri>()
     private val archiveCache = HashMap<String, Gen2StreamArchive>()
 
+    internal data class Rpf7DlcDescriptor(
+        val stationKey: String,
+        val orderIndex: Int,
+        val looseFolderName: String,
+        val packNames: List<String>,
+        val rpfFileName: String,
+        val innerDirFilter: String,
+        val allowedEntryNames: Set<String>? = null
+    )
+
+    private data class DetectedRpf7DlcStation(
+        val descriptor: Rpf7DlcDescriptor,
+        val mode: String,
+        val sourceUri: Uri,
+        val looseAwcFiles: List<SimpleFileInfo>? = null
+    )
+
     companion object {
+        internal val RPF7_DLC_REGISTRY = listOf(
+            Rpf7DlcDescriptor(
+                stationKey = "radio_20_thelab.rpf",
+                orderIndex = 20,
+                looseFolderName = "dlc_thelab",
+                packNames = listOf("patchday3ng"),
+                rpfFileName = "dlc.rpf",
+                innerDirFilter = "x64/audio/sfx/dlc_thelab"
+            )
+        )
+        private val DLC_CONTAINER_DIRS = setOf("dlcpacks", "dlc_raw")
         private val GEN2_STREAM_CODES = setOf("CH", "CO", "CR", "DS", "HC", "MH", "MR", "NJ", "RE", "RG", "TK", "ADVERTS")
         private val SKIP_DIRS = setOf(
             "SFX", "CONFIG", "ANIM", "TEXT", "MODELS", "DATA", "MOVIES",
@@ -227,6 +256,114 @@ class StationGroup private constructor(
             }
         }
 
+        internal fun listChildFilesForDoc(
+            rootTreeDoc: DocumentFile,
+            context: Context,
+            dirInfo: SimpleFileInfo
+        ): Array<SimpleFileInfo> {
+            if (!dirInfo.isDirectory) return emptyArray()
+            if (dirInfo.uri.scheme == "file") {
+                return runCatching {
+                    val file = java.io.File(dirInfo.uri.path ?: return emptyArray())
+                    val children = file.listFiles() ?: return emptyArray()
+                    children.map { f ->
+                        SimpleFileInfo(Uri.fromFile(f), f.name, f.absolutePath, f.isDirectory)
+                    }.toTypedArray()
+                }.getOrElse { emptyArray() }
+            }
+            return runCatching {
+                val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(
+                    rootTreeDoc.uri,
+                    dirInfo.id
+                )
+                val results = ArrayList<SimpleFileInfo>()
+                context.contentResolver.query(
+                    childrenUri,
+                    arrayOf(
+                        android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        android.provider.DocumentsContract.Document.COLUMN_MIME_TYPE
+                    ),
+                    null,
+                    null,
+                    null
+                )?.use { c ->
+                    while (c.moveToNext()) {
+                        val docId = c.getString(0) ?: continue
+                        val name = c.getString(1) ?: continue
+                        val mime = c.getString(2)
+                        val docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(
+                            rootTreeDoc.uri,
+                            docId
+                        )
+                        results.add(
+                            SimpleFileInfo(
+                                docUri,
+                                name,
+                                docId,
+                                mime == android.provider.DocumentsContract.Document.MIME_TYPE_DIR
+                            )
+                        )
+                    }
+                }
+                results.toTypedArray()
+            }.getOrElse { emptyArray() }
+        }
+
+        private fun shouldInspectFingerprintSubdir(lowerDirName: String): Boolean {
+            if (lowerDirName in DLC_CONTAINER_DIRS || lowerDirName == "dlc_radio_19_user" || lowerDirName == "radio_19_user") {
+                return true
+            }
+            return RPF7_DLC_REGISTRY.any { d ->
+                d.looseFolderName.equals(lowerDirName, ignoreCase = true) ||
+                    d.packNames.any { p -> p.equals(lowerDirName, ignoreCase = true) }
+            }
+        }
+
+        fun computeFolderFingerprintForUri(context: Context, folderUriStr: String): String? {
+            val uri = runCatching { Uri.parse(folderUriStr) }.getOrNull() ?: return null
+            val doc = if (uri.scheme == "file") {
+                uri.path?.let { DocumentFile.fromFile(java.io.File(it)) }
+            } else {
+                DocumentFile.fromTreeUri(context, uri)
+            } ?: return null
+            return computeFolderFingerprint(doc, context)
+        }
+
+        fun computeFolderFingerprint(
+            folderDoc: DocumentFile,
+            context: Context,
+            directFiles: Array<SimpleFileInfo>? = null
+        ): String? {
+            return runCatching {
+                val direct = directFiles ?: folderDoc.listSimpleFiles(context)
+                if (direct.isEmpty() && !folderDoc.isDirectory) return@runCatching null
+                val sb = StringBuilder()
+                val sortedDirect = direct.sortedBy { it.name.lowercase(Locale.ROOT) }
+                for (f in sortedDirect) {
+                    val lower = f.name.lowercase(Locale.ROOT)
+                    sb.append(lower).append(':').append(if (f.isDirectory) 'D' else 'F')
+                    if (f.isDirectory && shouldInspectFingerprintSubdir(lower)) {
+                        val sub = listChildFilesForDoc(folderDoc, context, f)
+                        val subTokens = sub.map { s ->
+                            val sLower = s.name.lowercase(Locale.ROOT)
+                            if (s.isDirectory && lower in DLC_CONTAINER_DIRS) {
+                                val packChildren = listChildFilesForDoc(folderDoc, context, s)
+                                    .map { "${it.name.lowercase(Locale.ROOT)}:${if (it.isDirectory) 'D' else 'F'}" }
+                                    .sorted()
+                                "$sLower:D[${packChildren.joinToString(",")}]"
+                            } else {
+                                "$sLower:${if (s.isDirectory) 'D' else 'F'}"
+                            }
+                        }.sorted()
+                        sb.append('[').append(subTokens.joinToString(",")).append(']')
+                    }
+                    sb.append('|')
+                }
+                sb.toString()
+            }.getOrNull()
+        }
+
         fun fromCachedDescriptor(desc: LibraryIndexCache.CachedGroupDescriptor, context: Context): StationGroup {
             val doc = if (desc.folderUri.isNotBlank()) {
                 try {
@@ -239,6 +376,7 @@ class StationGroup private constructor(
             group.groupName = desc.groupName
             group.mediaId = desc.groupId
             group.isValid = true
+            group.cachedFolderFingerprint = desc.folderFingerprint
 
             group.isGen1RawGroup = (desc.formatType == "GEN1_RAW")
             group.gen1GameCode = desc.gameCode
@@ -305,9 +443,25 @@ class StationGroup private constructor(
                     group.rpf3StationArchives[st.name] = arch
                     group.rpf3StationKeys[st.mediaId] = st.archiveKey.ifBlank { rName.lowercase() }
                     group.rpf3StationKeys[st.name] = st.archiveKey.ifBlank { rName.lowercase() }
-                } else if (group.isRpf7Group && st.fileUri.isNotBlank()) {
+                } else if (group.isRpf7Group && (st.fileUri.isNotBlank() || !st.looseAwcFiles.isNullOrEmpty())) {
                     val rName = st.rpfName.ifBlank { st.archiveKey }
-                    val arch = Rpf7Archive(context, rName, Uri.parse(st.fileUri))
+                    val allowedSet = st.allowedEntryNames?.takeIf { it.isNotEmpty() }?.toHashSet()
+                    val looseList = st.looseAwcFiles?.map {
+                        SimpleFileInfo(Uri.parse(it.uri), it.name, it.id, it.isDirectory)
+                    }
+                    val sourceUri = if (st.fileUri.isNotBlank()) {
+                        Uri.parse(st.fileUri)
+                    } else {
+                        looseList?.firstOrNull()?.uri ?: resolvedDoc.uri
+                    }
+                    val arch = Rpf7Archive(
+                        context = context,
+                        rpfName = rName,
+                        sourceUri = sourceUri,
+                        innerDirFilter = st.innerDirFilter,
+                        allowedEntryNames = allowedSet,
+                        looseAwcFiles = looseList
+                    )
                     group.rpf7StationArchives[st.mediaId] = arch
                     group.rpf7StationArchives[st.name] = arch
                     group.rpf7StationKeys[st.mediaId] = st.archiveKey.ifBlank { rName.lowercase() }
@@ -343,10 +497,12 @@ init {
                 emptyArray()
             }
             val detectedRpf7Files = detectRpf7Rpfs(rpfScanFiles)
-            val detectedRpfFiles = if (detectedRpf7Files.isEmpty()) detectRpf3Rpfs(rpfScanFiles) else emptyList()
-            val detectedGen1Pair = if (detectedRpf7Files.isEmpty() && detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
-            if (detectedRpf7Files.isNotEmpty()) {
-                setupRpf7Group(rpfScanFiles, detectedRpf7Files)
+            val detectedRpf7Dlc = detectRpf7DlcStations(rpfScanFiles)
+            val hasRpf7 = detectedRpf7Files.isNotEmpty() || detectedRpf7Dlc.isNotEmpty()
+            val detectedRpfFiles = if (!hasRpf7) detectRpf3Rpfs(rpfScanFiles) else emptyList()
+            val detectedGen1Pair = if (!hasRpf7 && detectedRpfFiles.isEmpty()) detectGen1RawFiles(rpfScanFiles) else null
+            if (hasRpf7) {
+                setupRpf7Group(rpfScanFiles, detectedRpf7Files, detectedRpf7Dlc)
             } else if (detectedRpfFiles.isNotEmpty()) {
                 setupRpf3Group(rpfScanFiles, detectedRpfFiles)
             } else if (detectedGen1Pair != null) {
@@ -702,6 +858,104 @@ init {
         return matched
     }
 
+    private fun detectRpf7DlcStations(allFiles: Array<SimpleFileInfo>): List<DetectedRpf7DlcStation> {
+        val directDirs = HashMap<String, SimpleFileInfo>()
+        for (f in allFiles) {
+            if (f.isDirectory) {
+                directDirs[f.name.lowercase(Locale.ROOT)] = f
+            }
+        }
+
+        directDirs.values.firstOrNull {
+            val n = it.name.lowercase(Locale.ROOT)
+            n == "dlc_radio_19_user" || n == "radio_19_user"
+        }?.let { ignoredDir ->
+            GTRadioLogger.log("detectRpf7DlcStations: Ignoring Self Radio folder '${ignoredDir.name}' (excluded)")
+        }
+
+        val dirChildrenCache = HashMap<String, Array<SimpleFileInfo>>()
+        fun getChildren(cacheKey: String, dirInfo: SimpleFileInfo): Array<SimpleFileInfo> {
+            return dirChildrenCache.getOrPut(cacheKey) { listChildFilesForDoc(folderDoc, context, dirInfo) }
+        }
+
+        val detected = ArrayList<DetectedRpf7DlcStation>()
+        for (desc in RPF7_DLC_REGISTRY) {
+            // Option B (preferred): extracted loose .awc subfolder (e.g. dlc_thelab/*.awc)
+            val looseDir = directDirs[desc.looseFolderName.lowercase(Locale.ROOT)]
+            if (looseDir != null) {
+                val allowedLower = desc.allowedEntryNames?.map { it.lowercase(Locale.ROOT) }?.toHashSet()
+                val awcFiles = getChildren("loose:${looseDir.id}", looseDir).filter { f ->
+                    !f.isDirectory &&
+                        f.name.lowercase(Locale.ROOT).endsWith(".awc") &&
+                        (allowedLower == null || allowedLower.contains(f.name.lowercase(Locale.ROOT)))
+                }
+                if (awcFiles.isNotEmpty()) {
+                    GTRadioLogger.log("detectRpf7DlcStations: Detected ${desc.stationKey} via Option B loose folder '${looseDir.name}' (${awcFiles.size} .awc files)")
+                    detected.add(
+                        DetectedRpf7DlcStation(
+                            descriptor = desc,
+                            mode = "Option B",
+                            sourceUri = looseDir.uri,
+                            looseAwcFiles = awcFiles
+                        )
+                    )
+                    continue
+                }
+            }
+
+            // Option C (fallback): raw <pack>/dlc.rpf or dlcpacks/<pack>/dlc.rpf or dlc_raw/<pack>/dlc.rpf
+            var resolvedRpf: SimpleFileInfo? = null
+            var resolvedPathDesc = ""
+            for (packName in desc.packNames) {
+                val packLower = packName.lowercase(Locale.ROOT)
+                val directPackDir = directDirs[packLower]
+                if (directPackDir != null) {
+                    val match = getChildren("pack:${directPackDir.id}", directPackDir).firstOrNull {
+                        !it.isDirectory && it.name.equals(desc.rpfFileName, ignoreCase = true)
+                    }
+                    if (match != null) {
+                        resolvedRpf = match
+                        resolvedPathDesc = "${directPackDir.name}/${match.name}"
+                        break
+                    }
+                }
+                for (containerKey in DLC_CONTAINER_DIRS) {
+                    val containerDir = directDirs[containerKey] ?: continue
+                    val containerChildren = getChildren("container:${containerDir.id}", containerDir)
+                    containerChildren.firstOrNull {
+                        it.isDirectory && (it.name.equals("dlc_radio_19_user", ignoreCase = true) || it.name.equals("radio_19_user", ignoreCase = true))
+                    }?.let { ignoredSub ->
+                        GTRadioLogger.log("detectRpf7DlcStations: Ignoring Self Radio folder '${containerDir.name}/${ignoredSub.name}' (excluded)")
+                    }
+                    val nestedPackDir = containerChildren.firstOrNull {
+                        it.isDirectory && it.name.equals(packLower, ignoreCase = true)
+                    } ?: continue
+                    val match = getChildren("pack:${nestedPackDir.id}", nestedPackDir).firstOrNull {
+                        !it.isDirectory && it.name.equals(desc.rpfFileName, ignoreCase = true)
+                    }
+                    if (match != null) {
+                        resolvedRpf = match
+                        resolvedPathDesc = "${containerDir.name}/${nestedPackDir.name}/${match.name}"
+                        break
+                    }
+                }
+                if (resolvedRpf != null) break
+            }
+
+            if (resolvedRpf != null) {
+                GTRadioLogger.log("detectRpf7DlcStations: Detected ${desc.stationKey} via Option C raw RPF '$resolvedPathDesc' (filter=${desc.innerDirFilter})")
+                detected.add(
+                    DetectedRpf7DlcStation(
+                        descriptor = desc,
+                        mode = "Option C",
+                        sourceUri = resolvedRpf.uri
+                    )
+                )
+            }
+        }
+        return detected
+    }
+
     private fun detectIsEnhanced(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>): Boolean {
         val folderName = folderDoc.name?.lowercase(Locale.ROOT) ?: ""
         if (folderName.contains("enhanced") || folderName.contains("gen9")) return true
@@ -730,9 +984,14 @@ init {
         return false
     }
 
-    private fun setupRpf7Group(allFiles: Array<SimpleFileInfo>, stationRpfFiles: List<SimpleFileInfo>) {
+    private fun setupRpf7Group(
+        allFiles: Array<SimpleFileInfo>,
+        stationRpfFiles: List<SimpleFileInfo>,
+        dlcStations: List<DetectedRpf7DlcStation> = emptyList()
+    ) {
         isRpf7Group = true
         generation = 3
+        cachedFolderFingerprint = computeFolderFingerprint(folderDoc, context, allFiles) ?: ""
         val isEnhanced = detectIsEnhanced(allFiles, stationRpfFiles)
         groupName = if (isEnhanced) "GTA V Enhanced (PC)" else "GTA V (PC)"
         val idPrefix = if (isEnhanced) "gtav_enh_" else "gtav_"
@@ -757,20 +1016,49 @@ init {
             }
         }
 
-        // Sort in official station order (RADIO_01 through RADIO_18)
-        val sortedStationFiles = stationRpfFiles.sortedBy { stFile ->
-            val lower = stFile.name.lowercase()
-            val orderMatch = Regex("radio_(\\d+)").find(lower)?.groupValues?.get(1)?.toIntOrNull()
-            orderMatch ?: 999
+        data class PendingRpf7Station(val order: Int, val stKey: String, val arch: Rpf7Archive)
+        val seenKeys = HashSet<String>()
+        val candidates = ArrayList<PendingRpf7Station>(stationRpfFiles.size + dlcStations.size)
+
+        for (stFile in stationRpfFiles) {
+            val stKey = stFile.name.lowercase(Locale.ROOT)
+            if (!seenKeys.add(stKey)) continue
+            val orderMatch = Regex("radio_(\\d+)").find(stKey)?.groupValues?.get(1)?.toIntOrNull()
+            candidates.add(PendingRpf7Station(orderMatch ?: 999, stKey, Rpf7Archive(context, stFile.name, stFile.uri)))
         }
 
-        for (stFile in sortedStationFiles) {
-            val stKey = stFile.name.lowercase()
-            val info = Rpf7MetadataRepository.getStationInfo(stKey)
-            val stDisplayName = info?.stationName ?: stFile.name
-            val stMediaId = "$idPrefix${UUID.randomUUID()}"
+        for (dlc in dlcStations) {
+            val stKey = dlc.descriptor.stationKey.lowercase(Locale.ROOT)
+            if (!seenKeys.add(stKey)) continue
+            val arch = if (dlc.looseAwcFiles != null) {
+                Rpf7Archive(
+                    context = context,
+                    rpfName = dlc.descriptor.stationKey,
+                    sourceUri = dlc.sourceUri,
+                    allowedEntryNames = dlc.descriptor.allowedEntryNames,
+                    looseAwcFiles = dlc.looseAwcFiles
+                )
+            } else {
+                Rpf7Archive(
+                    context = context,
+                    rpfName = dlc.descriptor.stationKey,
+                    sourceUri = dlc.sourceUri,
+                    innerDirFilter = dlc.descriptor.innerDirFilter,
+                    allowedEntryNames = dlc.descriptor.allowedEntryNames
+                )
+            }
+            candidates.add(PendingRpf7Station(dlc.descriptor.orderIndex, stKey, arch))
+        }
 
-            val arch = Rpf7Archive(context, stFile.name, stFile.uri)
+        // Sort in official station order (RADIO_01 through RADIO_18, then DLC 20+)
+        val sortedCandidates = candidates.sortedWith(compareBy({ it.order }, { it.stKey }))
+
+        for (cand in sortedCandidates) {
+            val stKey = cand.stKey
+            val arch = cand.arch
+            val info = Rpf7MetadataRepository.getStationInfo(stKey)
+            val stDisplayName = info?.stationName ?: arch.rpfName
+            val stMediaId = "$idPrefix${UUID.randomUUID()}"
 
             val iconUri = themePack?.let { DynamicThemeManager.resolveStationIconUri(it.stationIconUris, stDisplayName) }
 
@@ -1247,6 +1535,9 @@ init {
             var fUri = ""
             var archKey = ""
             var rpf = ""
+            var innerFilter: String? = null
+            var allowedNames: List<String>? = null
+            var looseFiles: List<LibraryIndexCache.CachedSimpleFile>? = null
             if (isRpf3Group) {
                 val a = rpf3StationArchives[st.mediaId]
                 fUri = a?.sourceUri?.toString() ?: ""
@@ -1257,6 +1548,16 @@ init {
                 fUri = a?.sourceUri?.toString() ?: ""
                 rpf = a?.rpfName ?: ""
                 archKey = rpf7StationKeys[st.mediaId] ?: ""
+                innerFilter = a?.innerDirFilter
+                allowedNames = a?.allowedEntryNames?.sorted()
+                looseFiles = a?.looseAwcFiles?.map {
+                    LibraryIndexCache.CachedSimpleFile(
+                        uri = it.uri.toString(),
+                        name = it.name,
+                        id = it.id,
+                        isDirectory = it.isDirectory
+                    )
+                }
             } else if (isGen1RawGroup) {
                 val sfi = gen1StationFiles[st.mediaId]
                 fUri = sfi?.uri?.toString() ?: ""
@@ -1275,7 +1576,10 @@ init {
                 archiveKey = archKey,
                 rpfName = rpf,
                 iconUri = meta.artworkUri?.toString(),
-                extras = exMap
+                extras = exMap,
+                innerDirFilter = innerFilter,
+                allowedEntryNames = allowedNames,
+                looseAwcFiles = looseFiles
             )
         }
 
@@ -1290,7 +1594,8 @@ init {
             rawStreamUris = rawStreamUris.mapValues { it.value.toString() },
             sharedUris = shared,
             logoUri = if (::mediaItem.isInitialized) mediaItem.mediaMetadata.artworkUri?.toString() else null,
-            stations = cachedStations
+            stations = cachedStations,
+            folderFingerprint = cachedFolderFingerprint
         )
     }
 }

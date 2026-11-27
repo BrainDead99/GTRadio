@@ -49,7 +49,8 @@ object Rpf7MetadataRepository {
         "radio_15_motown.rpf" to Rpf7StationInfo("radio_15_motown.rpf", "The Lowdown 91.1", "Pam Grier", isTalk = false, isContinuousMix = false),
         "radio_16_silverlake.rpf" to Rpf7StationInfo("radio_16_silverlake.rpf", "Radio Mirror Park", "Twin Shadow", isTalk = false, isContinuousMix = false),
         "radio_17_funk.rpf" to Rpf7StationInfo("radio_17_funk.rpf", "Space 103.2", "Bootsy Collins", isTalk = false, isContinuousMix = false),
-        "radio_18_90s_rock.rpf" to Rpf7StationInfo("radio_18_90s_rock.rpf", "Vinewood Boulevard Radio", "Nate Williams & Stephen Pope", isTalk = false, isContinuousMix = false)
+        "radio_18_90s_rock.rpf" to Rpf7StationInfo("radio_18_90s_rock.rpf", "Vinewood Boulevard Radio", "Nate Williams & Stephen Pope", isTalk = false, isContinuousMix = false),
+        "radio_20_thelab.rpf" to Rpf7StationInfo("radio_20_thelab.rpf", "The Lab", "The Alchemist & Oh No", isTalk = false, isContinuousMix = true)
     )
 
     @Volatile

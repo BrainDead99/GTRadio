@@ -22,7 +22,7 @@ import java.io.File
 object LibraryIndexCache {
 
     private const val CACHE_FILE_NAME = "library_index_cache.json"
-    const val CACHE_VERSION = 1
+    const val CACHE_VERSION = 2
 
     // ── Data classes ────────────────────────────────────────────────────
 
@@ -33,6 +33,13 @@ object LibraryIndexCache {
         val themeDirUri: String?,
         val keyFingerprint: String,
         val groups: List<CachedGroupDescriptor>
+    )
+
+    data class CachedSimpleFile(
+        val uri: String,
+        val name: String,
+        val id: String,
+        val isDirectory: Boolean = false
     )
 
     data class CachedGroupDescriptor(
@@ -46,7 +53,8 @@ object LibraryIndexCache {
         val rawStreamUris: Map<String, String> = emptyMap(),
         val sharedUris: Map<String, String> = emptyMap(),
         val logoUri: String? = null,
-        val stations: List<CachedStationDescriptor>
+        val stations: List<CachedStationDescriptor>,
+        val folderFingerprint: String = ""
     )
 
     data class CachedStationDescriptor(
@@ -56,7 +64,10 @@ object LibraryIndexCache {
         val archiveKey: String = "",
         val rpfName: String = "",
         val iconUri: String? = null,
-        val extras: Map<String, String> = emptyMap()
+        val extras: Map<String, String> = emptyMap(),
+        val innerDirFilter: String? = null,
+        val allowedEntryNames: List<String>? = null,
+        val looseAwcFiles: List<CachedSimpleFile>? = null
     )
 
     data class MediaItemGroupProxy(
@@ -83,7 +94,7 @@ object LibraryIndexCache {
      * unreadable, or when [CACHE_VERSION], [currentRootUri] or key fingerprint
      * do not match the stored values.
      */
-    fun loadCache(context: Context, currentRootUri: String): CachedLibraryIndex? {
+    fun loadCache(context: Context, currentRootUri: String, validateFolders: Boolean = true): CachedLibraryIndex? {
         val file = cacheFile(context)
         if (!file.exists()) {
             return null
@@ -115,6 +126,18 @@ object LibraryIndexCache {
             val groups = ArrayList<CachedGroupDescriptor>(groupsArray.length())
             for (i in 0 until groupsArray.length()) {
                 groups.add(parseGroupDescriptor(groupsArray.getJSONObject(i)))
+            }
+
+            if (validateFolders) {
+                for (g in groups) {
+                    if (g.folderFingerprint.isNotEmpty() && g.folderUri.isNotBlank()) {
+                        val currentGroupFp = StationGroup.computeFolderFingerprintForUri(context, g.folderUri)
+                        if (currentGroupFp != null && currentGroupFp != g.folderFingerprint) {
+                            GTRadioLogger.log("[SCAN] LibraryIndexCache: cache miss – folder contents changed for '${g.groupName}'")
+                            return null
+                        }
+                    }
+                }
             }
 
             val rawTheme = json.opt("themeDirUri")
@@ -281,6 +304,7 @@ object LibraryIndexCache {
         obj.put("gameCode", desc.gameCode)
         obj.put("rawContainerType", desc.rawContainerType ?: JSONObject.NULL)
         obj.put("logoUri", desc.logoUri ?: JSONObject.NULL)
+        obj.put("folderFingerprint", desc.folderFingerprint)
 
         val rawStreamsObj = JSONObject()
         for ((k, v) in desc.rawStreamUris) {
@@ -310,6 +334,26 @@ object LibraryIndexCache {
         obj.put("archiveKey", st.archiveKey)
         obj.put("rpfName", st.rpfName)
         obj.put("iconUri", st.iconUri ?: JSONObject.NULL)
+        obj.put("innerDirFilter", st.innerDirFilter ?: JSONObject.NULL)
+
+        if (!st.allowedEntryNames.isNullOrEmpty()) {
+            val arr = JSONArray()
+            for (n in st.allowedEntryNames) arr.put(n)
+            obj.put("allowedEntryNames", arr)
+        }
+
+        if (!st.looseAwcFiles.isNullOrEmpty()) {
+            val arr = JSONArray()
+            for (f in st.looseAwcFiles) {
+                val fObj = JSONObject()
+                fObj.put("uri", f.uri)
+                fObj.put("name", f.name)
+                fObj.put("id", f.id)
+                fObj.put("isDirectory", f.isDirectory)
+                arr.put(fObj)
+            }
+            obj.put("looseAwcFiles", arr)
+        }
 
         val extrasMap = JSONObject()
         for ((k, v) in st.extras) {
@@ -365,7 +409,8 @@ object LibraryIndexCache {
             rawStreamUris = rawStreams,
             sharedUris = sharedUris,
             logoUri = logoUri,
-            stations = stations
+            stations = stations,
+            folderFingerprint = json.optString("folderFingerprint", "")
         )
     }
 
@@ -384,6 +429,35 @@ object LibraryIndexCache {
         }
         val rawIcon = json.opt("iconUri")
         val iconUri: String? = if (rawIcon == null || rawIcon == JSONObject.NULL) null else rawIcon.toString()
+        val rawInnerDir = json.opt("innerDirFilter")
+        val innerDirFilter: String? = if (rawInnerDir == null || rawInnerDir == JSONObject.NULL) null else rawInnerDir.toString()
+
+        val allowedArray = json.optJSONArray("allowedEntryNames")
+        val allowedEntryNames = if (allowedArray != null && allowedArray.length() > 0) {
+            ArrayList<String>(allowedArray.length()).apply {
+                for (i in 0 until allowedArray.length()) {
+                    val s = allowedArray.optString(i)
+                    if (s.isNotEmpty()) add(s)
+                }
+            }
+        } else null
+
+        val looseArray = json.optJSONArray("looseAwcFiles")
+        val looseAwcFiles = if (looseArray != null && looseArray.length() > 0) {
+            ArrayList<CachedSimpleFile>(looseArray.length()).apply {
+                for (i in 0 until looseArray.length()) {
+                    val fObj = looseArray.optJSONObject(i) ?: continue
+                    val u = fObj.optString("uri", "")
+                    val n = fObj.optString("name", "")
+                    val id = fObj.optString("id", "")
+                    val isDir = fObj.optBoolean("isDirectory", false)
+                    if (u.isNotEmpty() && n.isNotEmpty()) {
+                        add(CachedSimpleFile(uri = u, name = n, id = id, isDirectory = isDir))
+                    }
+                }
+            }
+        } else null
+
         return CachedStationDescriptor(
             mediaId = json.getString("mediaId"),
             name = json.getString("name"),
@@ -391,7 +465,10 @@ object LibraryIndexCache {
             archiveKey = json.optString("archiveKey", ""),
             rpfName = json.optString("rpfName", ""),
             iconUri = iconUri,
-            extras = extras
+            extras = extras,
+            innerDirFilter = innerDirFilter,
+            allowedEntryNames = allowedEntryNames,
+            looseAwcFiles = looseAwcFiles
         )
     }
 }

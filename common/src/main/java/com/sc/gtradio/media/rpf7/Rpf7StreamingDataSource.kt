@@ -179,9 +179,9 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
     }
 
     @Throws(IOException::class)
-    private fun ensureChannelOpen(archive: Rpf7Archive): FileChannel {
+    private fun ensureChannelOpen(archive: Rpf7Archive, entryName: String? = null): FileChannel {
         fileChannel?.let { return it }
-        val pfd = archive.openStreamPfd()
+        val pfd = archive.openStreamPfd(entryName)
             ?: throw IOException("Failed opening SAF file descriptor for RPF7 stream: $currentUri")
         val fis = try {
             FileInputStream(pfd.fileDescriptor)
@@ -203,7 +203,7 @@ class Rpf7StreamingDataSource : BaseDataSource(/* isNetwork = */ false) {
         val key = Gen3StreamBlockCache.buildKey(SCHEME, archive.archiveStreamId, index.entryName, blockIdx)
         Gen3StreamBlockCache.get(key)?.let { return it }
 
-        val ch = ensureChannelOpen(archive)
+        val ch = ensureChannelOpen(archive, index.entryName)
         val prevWarmup = if (index.codec == 7 && blockIdx > 0) {
             val prevKey = Gen3StreamBlockCache.buildKey(SCHEME, archive.archiveStreamId, index.entryName, blockIdx - 1)
             Gen3StreamBlockCache.get(prevKey)?.tailWarmupByChannel

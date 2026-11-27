@@ -2861,14 +2861,18 @@ data class Rpf7ClipRef(
         }
 
         if (resolvedTrackId == lastDisplayedMixTrackId) return
-        lastDisplayedMixTrackId = resolvedTrackId
 
-        GTRadioLogger.logVerbose("TRACKID") {
-            "Rpf7RadioStation[$stationTitle]: TRACKID transition -> $resolvedTrackId at sample $currentSample (${currentSample / activeMixSampleRate.toDouble()}s)"
+        val meta = if (resolvedTrackId > 1 && resolvedTrackId != 1687) {
+            Rpf7MetadataRepository.getTrackByTrackId(resolvedTrackId, context)
+        } else {
+            null
         }
 
-        val meta = if (resolvedTrackId > 0) Rpf7MetadataRepository.getTrackByTrackId(resolvedTrackId) else null
         if (meta != null) {
+            lastDisplayedMixTrackId = resolvedTrackId
+            GTRadioLogger.logVerbose("TRACKID") {
+                "Rpf7RadioStation[$stationTitle]: TRACKID transition -> $resolvedTrackId at sample $currentSample (${currentSample / activeMixSampleRate.toDouble()}s)"
+            }
             val displayTitle = meta.title
             val displayArtist = meta.artist
             var art: Bitmap? = stationLogo
@@ -2913,13 +2917,12 @@ data class Rpf7ClipRef(
                     cleanAlbum = eraAlbum
                 )
             )
-        } else if (lastDisplayedMixTrackId <= 0) {
-            // First track marker hasn't been hit yet; show initial mix title cleanly without losing poller
-            val trackMeta = currentSongItem?.let { Rpf7MetadataRepository.getTrackMeta(it.trackName, stationTitle) }
-            val dTitle = trackMeta?.title ?: stationTitle
-            val dArtist = trackMeta?.artist ?: ""
-            val sub = if (dArtist.isNotBlank() && dArtist != stationTitle) "$dArtist • $stationTitle" else stationTitle
-            notifyMetadataChanged(buildStationMetadata(dTitle, sub, stationLogo, isSongOrShow = true, cleanArtist = dArtist))
+        } else if (lastDisplayedMixTrackId != -1) {
+            GTRadioLogger.logVerbose("TRACKID") {
+                "Rpf7RadioStation[$stationTitle]: TRACKID break reset (tid=$resolvedTrackId) at sample $currentSample (${currentSample / activeMixSampleRate.toDouble()}s)"
+            }
+            lastDisplayedMixTrackId = -1
+            setStationOnlyMetadata()
         }
     }
 
